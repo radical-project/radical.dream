@@ -22,8 +22,8 @@ if not ACCESS_KEY_ID:
 if not ACCESS_KEY_SECRET:
     raise ValueError("AWS_ACCESS_KEY_SECRET env variable not set")
 
-
-def list_buckets():
+# This should be a class that inherits from the main proxy API (proxy.py)
+def list_s3_buckets():
     """
     This function list the avilabe buckets within
     a given account
@@ -61,7 +61,7 @@ def delete_s3_bucket(bucket):
         raise('Not a valid bucket')
 
 
-def upload_file(file_path):
+def upload_to_s3_bucket(file_path, bucket):
     """
     :param file_path: Path to the coverage file to upload.
     """
@@ -82,10 +82,10 @@ def upload_file(file_path):
 
     object_name = "%s.%s" % (file_name, now)
 
-    container = driver.get_container(container_name=BUCKET_NAME)
+    container = driver.get_container(container_name=bucket)
     obj = container.upload_object(file_path=file_path, object_name=object_name)
 
-    print(("Object uploaded to: %s/%s" % (BUCKET_NAME, object_name)))
+    print(("Object uploaded to: %s/%s" % (bucket.name, object_name)))
     print(obj)
 
 
