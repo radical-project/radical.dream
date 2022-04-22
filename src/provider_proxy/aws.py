@@ -23,6 +23,15 @@ if not ACCESS_KEY_SECRET:
     raise ValueError("AWS_ACCESS_KEY_SECRET env variable not set")
 
 # This should be a class that inherits from the main proxy API (proxy.py)
+
+'''
+class aws(proxy):
+    def __init__(self):
+        pass
+
+'''
+
+
 def list_s3_buckets():
     """
     This function list the avilabe buckets within
