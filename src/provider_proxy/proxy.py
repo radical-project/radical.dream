@@ -1,5 +1,7 @@
 import os
+import json
 import boto3
+
 from botocore.exceptions import NoCredentialsError
 from botocore.exceptions import InvalidConfigError
 
@@ -17,51 +19,67 @@ class proxy(object):
         3- Check: https://docs.aws.amazon.com/general/latest/gr/aws-access-keys-best-practices.html
     """
 
-    def __init__(self, provider):
+    def __init__(self):
 
-        if provider in AWS, AZURE, GCLOUD:
-            self.provider = provider
-        else:
-            raise Exception('cloud provider not supported')
+        self.loaded_providers    = []
+        self._loaded_credentials  = {}
     
-    def verify_credentials(self):
+    def login(self, providers: list):
+
+        for provider in providers:
+            if provider in  [AWS, AZURE, GCLOUD]:
+                self._verify_credentials(provider)
+                self.loaded_providers.append(provider)
+                print('login to {0} succeed'.format(provider))
+            else:
+                print('{0} provider not supported'.format(provider))
+
+    
+    def _verify_credentials(self, provider):
         '''
         check if the provided credentials are valid.
         '''
-
-        if self.provider == AWS:
+        print('verifying {0} loaded credentials'.format(provider))
+        if provider == AWS:
             try:
-                k_id, k_sec, reg = load_credentials(self.provider)
-                aws_client = boto3.client('sts')
-                aws_client.get_caller_identity(k_id, k_sec, reg)
-                return True
+                # get AWS credentials
+                aws_creds = self._load_credentials(provider)
+                aws_client = boto3.client('sts', **aws_creds)
+                aws_client.get_caller_identity()
 
             except NoCredentialsError:
-                print(f'{self.provider},--- no credentials --')
+                print(f'{provider},--- no credentials --')
             except InvalidConfigError:
-                print(f'{self.provider},--- invalid config --')
+                print(f'{provider},--- invalid config --')
             except Exception as e:
-                print(f'{self.provider}{e},--- exception --')
-        
-        if self.provider == AZURE:
+                raise
+
+        if provider == AZURE:
             raise NotImplementedError
-        if self.provider == GCLOUD:
+        if provider == GCLOUD:
             raise NotImplementedError
 
-    def load_credentials(self, provider):
+    def _load_credentials(self, provider):
         """
         provider : AWS, Azure, Google Cloud
         fetch_tye: config_file, env_vars
         """
+        print('loading {0} credentials'.format(provider))
         if provider == AWS:
             try:
                 ACCESS_KEY_ID     = os.environ['ACCESS_KEY_ID']
                 ACCESS_KEY_SECRET = os.environ['ACCESS_KEY_SECRET']
                 REGION            = os.environ['AWS_REGION']
-                return ACCESS_KEY_ID, ACCESS_KEY_SECRET, REGION
+                
+                aws_creds = {'aws_access_key_id'     : ACCESS_KEY_ID,
+                             'aws_secret_access_key' : ACCESS_KEY_SECRET,
+                             'region_name'           : REGION}
+
+                self._loaded_credentials[provider] = aws_creds
+                return aws_creds
             except KeyError:
                 raise
-        
+
         if provider == AZURE:
             try:
                 AZ_TENANT_ID   = os.environ['az_tenant_id']
@@ -69,11 +87,13 @@ class proxy(object):
                 AZ_APP_ID      = os.environ['az_app_id']
                 AZ_APP_SEC_KEY = os.environ['az_app_sec']
                 
-                return AZ_TENANT_ID, AZ_SUB_ID, AZ_APP_ID, AZ_APP_SEC_KEY
+                return (AZ_TENANT_ID, AZ_SUB_ID, AZ_APP_ID, AZ_APP_SEC_KEY)
             except KeyError:
                 raise
-        
+
         if provider == GCLOUD:
              raise NotImplementedError
+
+    
         
         
