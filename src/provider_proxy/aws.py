@@ -9,7 +9,7 @@ import os
 import sys
 import time
 
-from proxy import proxy
+from src.provider_proxy.proxy import proxy
 
 from libcloud.storage.types import Provider
 from libcloud.storage.providers import get_driver

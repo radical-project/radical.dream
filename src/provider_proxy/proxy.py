@@ -64,6 +64,9 @@ class proxy(object):
         provider : AWS, Azure, Google Cloud
         fetch_tye: config_file, env_vars
         """
+        if provider in self._loaded_credentials:
+            return self._loaded_credentials[provider]
+
         print('loading {0} credentials'.format(provider))
         if provider == AWS:
             try:
@@ -74,7 +77,6 @@ class proxy(object):
                 aws_creds = {'aws_access_key_id'     : ACCESS_KEY_ID,
                              'aws_secret_access_key' : ACCESS_KEY_SECRET,
                              'region_name'           : REGION}
-
                 self._loaded_credentials[provider] = aws_creds
                 return aws_creds
             except KeyError:

@@ -4,7 +4,7 @@ import boto3
 import docker
 import base64
 
-from ..provider_proxy.proxy import proxy
+from src.provider_proxy import proxy
 """
 ~~~~~~~~~~~~~~~~
 
@@ -25,98 +25,64 @@ ECS_SERVICE = 'py-docker-aws-example-project-service'
 LOCAL_REPOSITORY = 'py-docker-aws-example-project:latest'
 
 
-class CaasAWS(object):
-    def __init__(self, proxy_mgr: proxy):
-        if proxy:
-            if isinstance(proxy_mgr, proxy):
+class AWS_ECR(object):
+    def __init__(self):
+        pass
 
-def deploy_to_aws():
-    """Build Docker image, push to AWS and update ECS service.
-    
-    :rtype: None
-    """
+    def _deploy_contianer_to_aws(self, cred, container_path):
+        """Build Docker image, push to AWS and update ECS service.
+        
+        :rtype: None
+        """
 
-    # get AWS credentials
-    aws_credentials = read_aws_credentials()
-    access_key_id = aws_credentials['access_key_id']
-    secret_access_key = aws_credentials['secret_access_key']
-    aws_region = aws_credentials['region']
+        # get AWS credentials
+        access_key_id     = cred['aws_access_key_id']
+        secret_access_key = cred['aws_secret_access_key']
+        aws_region        = cred['region_name']
 
-    # build Docker image
-    docker_client = docker.from_env()
-    image, build_log = docker_client.images.build(
-        path='.', tag=LOCAL_REPOSITORY, rm=True)
+        # build Docker image
+        docker_client = docker.from_env()
+        image, build_log = docker_client.images.build(
+            path='.', tag=LOCAL_REPOSITORY, rm=True)
 
-    # get AWS ECR login token
-    ecr_client = boto3.client(
-        'ecr', aws_access_key_id=access_key_id, 
-        aws_secret_access_key=secret_access_key, region_name=aws_region)
+        # get AWS ECR login token
+        ecr_client = boto3.client(
+            'ecr', aws_access_key_id=access_key_id, 
+            aws_secret_access_key=secret_access_key, region_name=aws_region)
 
-    ecr_credentials = (
-        ecr_client
-        .get_authorization_token()
-        ['authorizationData'][0])
+        ecr_credentials = (
+            ecr_client
+            .get_authorization_token()
+            ['authorizationData'][0])
 
-    ecr_username = 'AWS'
+        ecr_username = 'AWS'
 
-    ecr_password = (
-        base64.b64decode(ecr_credentials['authorizationToken'])
-        .replace(b'AWS:', b'')
-        .decode('utf-8'))
+        ecr_password = (
+            base64.b64decode(ecr_credentials['authorizationToken'])
+            .replace(b'AWS:', b'')
+            .decode('utf-8'))
 
-    ecr_url = ecr_credentials['proxyEndpoint']
+        ecr_url = ecr_credentials['proxyEndpoint']
 
-    # get Docker to login/authenticate with ECR
-    docker_client.login(
-        username=ecr_username, password=ecr_password, registry=ecr_url)
+        # get Docker to login/authenticate with ECR
+        docker_client.login(
+            username=ecr_username, password=ecr_password, registry=ecr_url)
 
-    # tag image for AWS ECR
-    ecr_repo_name = '{}/{}'.format(
-        ecr_url.replace('https://', ''), LOCAL_REPOSITORY)
+        # tag image for AWS ECR
+        ecr_repo_name = '{}/{}'.format(
+            ecr_url.replace('https://', ''), LOCAL_REPOSITORY)
 
-    image.tag(ecr_repo_name, tag='latest')
+        image.tag(ecr_repo_name, tag='latest')
 
-    # push image to AWS ECR
-    push_log = docker_client.images.push(ecr_repo_name, tag='latest')
+        # push image to AWS ECR
+        push_log = docker_client.images.push(ecr_repo_name, tag='latest')
 
-    # force new deployment of ECS service
-    ecs_client = boto3.client(
-        'ecs', aws_access_key_id=access_key_id,
-        aws_secret_access_key=secret_access_key, region_name=aws_region)
+        # force new deployment of ECS service
+        ecs_client = boto3.client(
+            'ecs', aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key, region_name=aws_region)
 
-    ecs_client.update_service(
-        cluster=ECS_CLUSTER, service=ECS_SERVICE, forceNewDeployment=True)
+        ecs_client.update_service(
+            cluster=ECS_CLUSTER, service=ECS_SERVICE, forceNewDeployment=True)
 
-    return None
-
-
-def read_aws_credentials(filename='.aws_credentials.json'):
-    """Read AWS credentials from file.
-    
-    :param filename: Credentials filename, defaults to '.aws_credentials.json'
-    :param filename: str, optional
-    :return: Dictionary of AWS credentials.
-    :rtype: Dict[str, str]
-    """
-
-    try:
-        with open(filename) as json_data:
-            credentials = json.load(json_data)
-
-        for variable in ('access_key_id', 'secret_access_key', 'region'):
-            if variable not in credentials.keys():
-                msg = '"{}" cannot be found in {}'.format(variable, filename)
-                raise KeyError(msg)
-                                
-    except FileNotFoundError:
-        try:
-            credentials = {
-                'access_key_id': os.environ['AWS_ACCESS_KEY_ID'],
-                'secret_access_key': os.environ['AWS_SECRET_ACCESS_KEY'],
-                'region': os.environ['AWS_REGION']
-            }
-        except KeyError:
-            msg = 'no AWS credentials found in file or environment variables'
-            raise RuntimeError(msg)
-
-    return credentials
+        return None

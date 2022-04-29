@@ -1,10 +1,14 @@
-from ..provider_proxy.proxy import proxy
+from src.provider_proxy import proxy
+from src.service_proxy.caas_manager.aws_ecr import AWS_ECR
 
-class CaasManager(object):
-    def __init__(self, proxy_mgr: proxy):
+AWS    = 'aws'
+AZURE  = 'azure'
+GCLOUD = 'google'
+
+class CaasManager(AWS_ECR):
+    def __init__(self, proxy_mgr):
         if proxy:
-            if isinstance(proxy_mgr, proxy):
-                pass
+            self._proxy = proxy_mgr
 
     def get_container_cost(self):
         """
@@ -20,14 +24,21 @@ class CaasManager(object):
         """
         raise NotImplementedError
     
-    def async_execute_container(self, container_path):
+    def async_execute_container(self, provider, container_path):
         """
         execute contianer and do not wait for it
         """
-        raise NotImplementedError
-    
+        if provider == AWS:
+            cred = self._proxy._load_credentials('aws')
+            self._deploy_contianer_to_aws(cred, container_path)
+        
+        if provider == AZURE:
+            raise NotImplementedError
+        
+        if provider == GCLOUD:
+            raise NotImplementedError 
 
-    def sync_execute_container(self, container_path):
+    def sync_execute_container(self, provider, container_path):
         """
         execute contianer and wait for it
         """
