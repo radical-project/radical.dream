@@ -24,9 +24,11 @@ class CaasManager(AWS_ECR):
         """
         raise NotImplementedError
     
-    def async_execute_container(self, provider, container_path):
+    def async_execute_container(self, provider, container_path=None):
         """
         execute contianer and do not wait for it
+        Ideally when container_path is provided it means 
+        we need to upload it to aws and use it.
         """
         if provider == AWS:
             cred = self._proxy._load_credentials('aws')
