@@ -1,14 +1,23 @@
 from src.provider_proxy import proxy
-from src.service_proxy.caas_manager.aws_ecr import AWS_ECR
+from src.service_proxy.caas_manager.aws_caas import AwsCaas
 
 AWS    = 'aws'
 AZURE  = 'azure'
 GCLOUD = 'google'
 
-class CaasManager(AWS_ECR):
+class CaasManager(AwsCaas):
     def __init__(self, proxy_mgr):
         if proxy:
             self._proxy = proxy_mgr
+        
+        for provider in self._proxy.loaded_providers:
+            if provider == AWS:
+                AwsCaas.__init__(self)
+            if provider == AZURE:
+                raise NotImplementedError
+            if provider == GCLOUD:
+                raise NotImplementedError
+            
 
     def get_container_cost(self):
         """

@@ -21,7 +21,7 @@ class proxy(object):
 
     def __init__(self):
 
-        self.loaded_providers    = []
+        self.loaded_providers     = []
         self._loaded_credentials  = {}
     
     def login(self, providers: list):

@@ -20,7 +20,7 @@ existence and that Docker is running on the host machine.
 """
 
 
-class AWS_ECR(object):
+class AwsCaas(object):
     def __init__(self):
         self._ecs_client = None
         self._ec2_client = None
@@ -33,43 +33,50 @@ class AWS_ECR(object):
         """
         Build Docker image, push to AWS and update ECS service.
         """
-        self._ecs_client = self._create_ec2_client(cred)
-        self._ec2_client = self._create_ecs_client(cred)
+        self._ecs_client = self._create_ecs_client(cred)
+        self._ec2_client = self._create_ec2_client(cred)
 
         # Create a cluster first (this should be done once)
-        response = self._ecs_client.create_cluster(clusterName=self._cluster_name)
+        self._ecs_client.create_cluster(clusterName=self._cluster_name)
 
         # create an instance
-        instance = self.run_instances()
+        self.start_new_cluster()
 
         # create a task and register it
-        self._task_name  = self.create_and_register_task_def(1, 400)
+        self.create_and_register_task_def(1, 400)
 
         # create the service
-        create_ecs_service(self._cluster_name, self._service_name, self._task_name)
-
+        self.create_ecs_service()
 
 
     def _create_ec2_client(self, cred):
         # Let's use Amazon EC2
         
-        ec2_client = boto3.client('ec2', cred['aws_access_key_id'],
-                                         cred['aws_secret_access_key'],
-                                         region_name=cred['region_name'])
+        ec2_client = boto3.client('ec2', aws_access_key_id     = cred['aws_access_key_id'],
+                                         aws_secret_access_key = cred['aws_secret_access_key'],
+                                         region_name           = cred['region_name'])
+        
+        print('EC2 client created')
 
         return ec2_client
     
 
     def _create_ecs_client(self, cred):
         # Let's use Amazon ECS
-        ecs_client = boto3.client('ecs', cred['aws_access_key_id'],
-                                         cred['aws_secret_access_key'],
-                                         region_name=cred['region_name'])
+        ecs_client = boto3.client('ecs', aws_access_key_id     = cred['aws_access_key_id'],
+                                         aws_secret_access_key = cred['aws_secret_access_key'],
+                                         region_name           = cred['region_name'])
+        print('ECS client created')
         return ecs_client
     
     
     def create_ecs_service(self):
-
+        """
+        Create service with exactly 1 desired instance of the task
+        Info: Amazon ECS allows you to run and maintain a specified number
+        (the "desired count") of instances of a task definition
+        simultaneously in an ECS cluster.
+        """
         response = self._ecs_client.create_service(cluster=self._cluster_name,
                                                    serviceName=self._service_name,
                                                    taskDefinition=self._task_name,
@@ -77,6 +84,7 @@ class AWS_ECR(object):
                                                    clientToken='request_identifier_string',
                                                    deploymentConfiguration={'maximumPercent': 200,
                                                                             'minimumHealthyPercent': 50})
+        pprint.pprint(response)
         
         return response
 
@@ -86,28 +94,43 @@ class AWS_ECR(object):
         """
         create a container defination
         """
-        definitions = dict(family="ecs_task",
+
+        # FIXME: This a registering with minimal definition,
+        #        user should specifiy how much per task (cpu/mem) 
+        definitions = dict(family="hello_world",
                            containerDefinitions=[{"name"     : "hello_world",
                                                   "image"    : "hello-world:latest",
                                                   "cpu"      : 1,
-                                                  "memory"   : 400
-                                                  "essential": True,}],)
+                                                  "memory"   : 400,
+                                                  "essential": True,}])
 
         self._ecs_client.register_task_definition(**definitions)
 
-        task_name = "hello_world_{0}".format(uuid.uuid4())
+        # FIXME: this should be a uniqe name that the user provides
+        #        with the unique uuid
+        self._task_name = "hello_world"
+        
+        print('task {0} submitted'.format(self._task_name))
 
-        return task_name
-    
+        return self._task_name
+
+
     def list_tasks(self, task_name):
         response = self._ecs_client.list_task_definitions(familyPrefix=self.task_name,
                                                           status='ACTIVE')
         return response
 
     
-    def start_new_instance(self):
+    def start_new_cluster(self):
         # Use the official ECS image
         """
+        By default, your container instance launches into your default cluster.
+        If you want to launch into your own cluster instead of the default,
+        choose the Advanced Details list and paste the following script
+        into the User data field, replacing your_cluster_name with the name of your cluster.
+        !/bin/bash
+        echo ECS_CLUSTER=your_cluster_name >> /etc/ecs/ecs.config
+
         ImageId: An AMI ID is required to launch an instance and must be
                  specified here or in a launch template.
 
@@ -123,7 +146,7 @@ class AWS_ECR(object):
         response = self._ec2_client.run_instances(ImageId="ami-8f7687e2",
                                                   MinCount=1, MaxCount=1,
                                                   InstanceType="t2.micro",
-                                                  UserData= cmd))
+                                                  UserData= cmd)
         pprint.pprint(response)
         
         return response
@@ -144,7 +167,7 @@ class AWS_ECR(object):
             print("Service not found/not active")
         
         # List all task definitions and revisions
-        tasks = list_tasks(self._task_name)
+        tasks = self.list_tasks(self._task_name)
 
         # De-Register all task definitions
         for task_definition in tasks["taskDefinitionArns"]:
