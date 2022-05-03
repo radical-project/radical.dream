@@ -22,6 +22,21 @@ existence and that Docker is running on the host machine.
 
 class AwsCaas(object):
     def __init__(self):
+        """
+        The components of AWS ECS form the following hierarchy:
+
+        1-Cluster: A cluster is a logical grouping of tasks or services
+
+        2-Task Definition: The task definition is a text file, in JSON 
+                            format, that describes one or more containers,
+                            up to a maximum of ten, that form your application.
+                            It can be thought of as a blueprint for your application.
+
+        3-Service: allows you to run and maintain a specified number of instances of
+                   a task definition simultaneously in an AWS ECS cluster
+
+        4-Task: is the instantiation of a task definition within a cluster
+        """
         self._ecs_client = None
         self._ec2_client = None
 
@@ -29,45 +44,119 @@ class AwsCaas(object):
         self._service_name = "service_hello_world"
         self._task_name    = None
 
-    def _deploy_contianer_to_aws(self, cred, container_path):
+    def run_aws_container(self, cred, container_path):
         """
         Build Docker image, push to AWS and update ECS service.
         """
+        # The user will provide the mem and cpu once they do that
+        # a fucntion [here] should calculate the cost
+        #
+        #
+        # cost = self._calculate_container_cost(time, cpu, mem)
+        #
+        # FIXME: ask the user if they want to continue to the 
+        #        execution based on the cost
+
+        # 1-Create Clients
         self._ecs_client = self._create_ecs_client(cred)
         self._ec2_client = self._create_ec2_client(cred)
+        self._iam_client = self._create_iam_client(cred)
 
-        # Create a cluster first (this should be done once)
-        self._ecs_client.create_cluster(clusterName=self._cluster_name)
+        # 2-Create a cluster (this should be done once)
+        cluster = self.build_new_cluster(self._cluster_name)
 
-        # create an instance
-        self.start_new_cluster()
+        # 3-Create Container definition
+        container_def = self.create_container_def()
 
-        # create a task and register it
-        self.create_and_register_task_def(1, 400)
+        # 4-Create a task definition
+        task_name, task_def_arn = self.create_task_def(container_def)
+        
+        # 5-create a service (this should be done once)
+        _ = self.create_ecs_service()
 
-        # create the service
-        self.create_ecs_service()
+        # 6-create ec2 instance
+        self.create_ec2_instance(cluster)
+
+        # 7-Start the task
+        _ = self.run_task(task_def_arn, cluster)
+
+
+    
+    def _calculate_container_cost(self, time, cpu, mem):
+        raise NotImplementedError
 
 
     def _create_ec2_client(self, cred):
-        # Let's use Amazon EC2
-        
         ec2_client = boto3.client('ec2', aws_access_key_id     = cred['aws_access_key_id'],
-                                         aws_secret_access_key = cred['aws_secret_access_key'],
-                                         region_name           = cred['region_name'])
+                                           aws_secret_access_key = cred['aws_secret_access_key'],
+                                           region_name           = cred['region_name'])
         
-        print('EC2 client created')
+        print('ec2 client created')
 
         return ec2_client
     
 
     def _create_ecs_client(self, cred):
-        # Let's use Amazon ECS
         ecs_client = boto3.client('ecs', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
-        print('ECS client created')
+        print('ecs client created')
         return ecs_client
+    
+
+    def _create_iam_client(self, cred):
+        iam_client = boto3.client('iam', aws_access_key_id     = cred['aws_access_key_id'],
+                                         aws_secret_access_key = cred['aws_secret_access_key'],
+                                         region_name           = cred['region_name'])
+        
+        print('iam client created')
+        return iam_client
+    
+
+    def create_container_def(self, name ='hello_world_container',
+                                                 cpu=1, memory=1,
+                                                 image='ubuntu'):
+        con_def = {'name'        : name,
+                   'cpu'         : cpu,
+                   'memory'      : memory,
+                   'portMappings': [],
+                   'essential'   : True,
+                   'environment' : [],
+                   'mountPoints' : [],
+                   'volumesFrom' : [],
+                   'image'       : image,
+                   'command'     : ['/bin/echo', 'hello world']}
+
+        return con_def
+    
+
+    def create_task_def(self, container_def):
+        """
+        create a container defination
+        """
+        # FIXME: This a registering with minimal definition,
+        #        user should specifiy how much per task (cpu/mem) 
+        task_def = {'family' :  'hello_world',
+                    'volumes': [],
+                    'cpu'    : '256',
+                    'memory' : '512',
+                    'containerDefinitions'   : [container_def],
+                    'executionRoleArn'       : 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole',
+                    'networkMode'            : 'awsvpc',
+                    'requiresCompatibilities': ['FARGATE']}
+        
+        reg_task     = self._ecs_client.register_task_definition(**task_def)
+        
+        task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
+
+        # FIXME: this should be a uniqe name that this class assigns
+        #        with the unique uuid
+        self._task_name = "hello_world"
+        
+        print('task {0} is registered'.format(self._task_name))
+
+        return self._task_name, task_def_arn
+        
     
     
     def create_ecs_service(self):
@@ -77,52 +166,124 @@ class AwsCaas(object):
         (the "desired count") of instances of a task definition
         simultaneously in an ECS cluster.
         """
-        response = self._ecs_client.create_service(cluster=self._cluster_name,
-                                                   serviceName=self._service_name,
-                                                   taskDefinition=self._task_name,
-                                                   desiredCount=1,
-                                                   clientToken='request_identifier_string',
+
+        # Check if the service already exist and use it
+        running_services = self._ecs_client.list_services(cluster = self._cluster_name)
+
+        for service in running_services['serviceArns']:
+            if self._service_name in service:
+                print('service {0} already exist on cluster {1}'.format(self._service_name, self._cluster_name))
+
+                return service
+        
+        print('no exisitng service found, creating.....')
+        response = self._ecs_client.create_service(cluster    = self._cluster_name,
+                                                   serviceName= self._service_name,
+                                                   taskDefinition = self._task_name,
+                                                   launchType     = 'FARGATE',
+                                                   desiredCount   = 1,
+                                                   networkConfiguration = {'awsvpcConfiguration': {
+                                                                          'subnets': ['subnet-094da8d73899da51c',],
+                                                                          'assignPublicIp': 'ENABLED',
+                                                                          'securityGroups': ["sg-0702f37d21c55da64"]}},
+                                                   #clientToken='request_identifier_string',
                                                    deploymentConfiguration={'maximumPercent': 200,
                                                                             'minimumHealthyPercent': 50})
-        pprint.pprint(response)
+        
+
+        
+        print('service {0} created'.format(self._service_name))
+        return response
+
+
+
+    def start_task(self, task_def, cluster_name):
+        """
+        Starts a new task from the specified task definition on the
+        specified container instance or instances. StartTask uses/assumes
+        that you have your own scheduler to place tasks manually on specific
+        container instances.
+        """
+
+        containers   = self._ecs_client.list_container_instances(cluster=cluster_name)
+        container_id = containers["containerInstanceArns"][0].split("/")[-1]
+
+        response = self._ecs_client.start_task(taskDefinition=task_def,
+                                               overrides={},
+                                               containerInstances=[container_id],
+                                               startedBy="foo",)
+    
+
+    def run_task(self, task_def, cluster_name):
+        """
+        Starts a new task using the specified task definition. In this
+        mode AWS scheduler will handle the task placement.
+
+        cluster: The short name or full Amazon Resource Name
+        (ARN) of the cluster to run your task on. If you do
+        not specify a cluster, the default cluster is assumed.
+        """
+        kwargs = {}
+        kwargs['count']           = 1
+        kwargs['cluster']         = cluster_name
+        kwargs['launchType']      = 'FARGATE'
+        kwargs['overrides']       = {}
+        kwargs['taskDefinition']  = task_def
+        kwargs['platformVersion'] = 'LATEST'
+        kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
+                                                                  'subnet-094da8d73899da51c',],
+                                           'assignPublicIp'    : 'ENABLED',
+                                           'securityGroups'    : ["sg-0702f37d21c55da64"]}}
+
+        response = self._ecs_client.run_task(**kwargs)
+
+        if response['failures']:
+            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
+                                       for failure in response['failures']]))
+        else:
+            print('running task {0}'.format(task_def))
         
         return response
 
 
-    def create_and_register_task_def(self, cpu, memory):
-        import uuid 
+
+    def kill_task(self, cluster_name, task_id, reason):
         """
-        create a container defination
+        we identify 3 reasons to stop task:
+        1- USER_CANCELED : user requested to kill the task
+        2- SYS_CANCELED  : the system requested to kill the task
+        3- COST_CANCELED : Task must be kill due to exceeding cost limit (set by user)
         """
-
-        # FIXME: This a registering with minimal definition,
-        #        user should specifiy how much per task (cpu/mem) 
-        definitions = dict(family="hello_world",
-                           containerDefinitions=[{"name"     : "hello_world",
-                                                  "image"    : "hello-world:latest",
-                                                  "cpu"      : 1,
-                                                  "memory"   : 400,
-                                                  "essential": True,}])
-
-        self._ecs_client.register_task_definition(**definitions)
-
-        # FIXME: this should be a uniqe name that the user provides
-        #        with the unique uuid
-        self._task_name = "hello_world"
         
-        print('task {0} submitted'.format(self._task_name))
+        response = self._ecs_client.stop_task(cluster = cluster_name,
+                                              task    = task_id,
+                                              reason  = reason)
+        
+        return response
 
-        return self._task_name
 
 
     def list_tasks(self, task_name):
-        response = self._ecs_client.list_task_definitions(familyPrefix=self.task_name,
+        response = self._ecs_client.list_task_definitions(familyPrefix=task_name,
                                                           status='ACTIVE')
         return response
-
     
-    def start_new_cluster(self):
-        # Use the official ECS image
+
+    def build_new_cluster(self, cluster_name):
+
+        clusters = self._ecs_client.list_clusters()
+
+        if cluster_name in clusters['clusterArns'][0]:
+            print('cluster {0} already exist'.format(cluster_name))
+            return cluster_name
+        
+        print("no existing cluster found, creating....")
+        self._ecs_client.create_cluster(clusterName=cluster_name)
+
+        return cluster_name
+
+
+    def create_ec2_instance(self, cluster_name):
         """
         By default, your container instance launches into your default cluster.
         If you want to launch into your own cluster instead of the default,
@@ -140,21 +301,56 @@ class AwsCaas(object):
         MinCount: The minimum number of instances to launch.
         MaxCount: The maximum number of instances to launch.
 
-        UserData: accept any linux commnad (acts a bootstraper for the instance)
+        UserData: accept any linux commnad (acts as a bootstraper for the instance)
         """
-        cmd = "#!/bin/bash \n echo ECS_CLUSTER=" + self._cluster_name + " >> /etc/ecs/ecs.config"
+        #cmd = ''
+        instance_id = None
+        # if cluster_name is provided then we run the new one else use the default
+        #if cluster_name:
+        
+        
+        # check if we have an already running instance
+        reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
+                                                                     "Values": ["running"]},]).get("Reservations")
+        
+        # if we have a running instance(s) return the first one 
+        if reservations:
+            print("found running instances:")
+            for reservation in reservations:
+                for instance in reservation["Instances"]:
+                    instance_id   = instance["InstanceId"]
+                    instance_type = instance["InstanceType"]
+                    print(instance_id)
+            
+            return instance_id
+        
+        print("no existing instance found")
+
+        command  = "#!/bin/bash \n echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config".format(cluster_name)
         response = self._ec2_client.run_instances(ImageId="ami-8f7687e2",
                                                   MinCount=1, MaxCount=1,
-                                                  InstanceType="t2.micro",
-                                                  UserData= cmd)
-        pprint.pprint(response)
-        
-        return response
+                                                  InstanceType="t1.micro",
+                                                  IamInstanceProfile={"Arn" : 'arn:aws:iam::626113121967:instance-profile/ecsInstanceRole'},
+                                                  UserData= command)
+
+        instance    = response["Instances"][0]
+        instance_id = response["Instances"][0]["InstanceId"]
+
+        while instance['State'] != 'running':
+            import time
+            print ('...instance is %s' % instance['State'])
+            time.sleep(10)
+            #instance.load()
+
+        print("instance {0} created".format(instance_id))
+
+        return instance_id
 
     
-    def shutdown(self):
+    def _shutdown(self):
         #Shut everything down and delete task/service/instance/cluster
         try:
+            print("Shutting down.....")
             # Set desired service count to 0 (obligatory to delete)
             response = self._ecs_client.update_service(cluster=self._cluster_name,
                                                        service=self._service_name,
@@ -189,8 +385,8 @@ class AwsCaas(object):
                     InstanceIds=[ec2_instance["ec2InstanceId"],])
 
         # Finally delete the cluster
-        response = ecs_client.delete_cluster(cluster=cluster_name)
-        pprint.pprint(response)
+        response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
+        #pprint.pprint(response)
 
 
 

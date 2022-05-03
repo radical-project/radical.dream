@@ -33,7 +33,7 @@ class CaasManager(AwsCaas):
         """
         raise NotImplementedError
     
-    def async_execute_container(self, provider, container_path=None):
+    def async_execute_container(self, provider, cpu, memory, container_path=None):
         """
         execute contianer and do not wait for it
         Ideally when container_path is provided it means 
@@ -41,7 +41,7 @@ class CaasManager(AwsCaas):
         """
         if provider == AWS:
             cred = self._proxy._load_credentials('aws')
-            self._deploy_contianer_to_aws(cred, container_path)
+            self.run_aws_container(cred, container_path)
         
         if provider == AZURE:
             raise NotImplementedError
