@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import boto3
 import pprint
 import base64
@@ -18,6 +19,7 @@ image to host the service.
 For now, it is assumed that the AWS infrastructure is already in
 existence and that Docker is running on the host machine.
 """
+__author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 WAIT_TIME = 2
 
@@ -242,7 +244,6 @@ class AwsCaas(object):
                                            'securityGroups'    : ["sg-0702f37d21c55da64"]}}
 
         response = self._ecs_client.run_task(**kwargs)
-        #print(response)
 
         if response['failures']:
             raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
@@ -282,7 +283,6 @@ class AwsCaas(object):
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
-        import time
         while True:
             statuses = self._get_task_statuses(task_ids, cluster)
             if all([status == 'STOPPED' for status in statuses]):
@@ -351,11 +351,8 @@ class AwsCaas(object):
 
         UserData: accept any linux commnad (acts as a bootstraper for the instance)
         """
-        #cmd = ''
+        cmd = ''
         instance_id = None
-        # if cluster_name is provided then we run the new one else use the default
-        #if cluster_name:
-        
         
         # check if we have an already running instance
         reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
@@ -384,15 +381,21 @@ class AwsCaas(object):
         instance    = response["Instances"][0]
         instance_id = response["Instances"][0]["InstanceId"]
 
-        while instance['State'] != 'running':
-            import time
-            print ('...instance is %s' % instance['State'])
-            time.sleep(10)
-            #instance.load()
-
         print("instance {0} created".format(instance_id))
 
         return instance_id
+    
+
+    def _wait_instances(self, cluster, instance_id):
+
+        instances = self._ecs_client.list_container_instances(cluster = cluster,
+                                                              status  = 'ACTIVE' or 'DRAINING')
+        while True:
+            if not instances['containerInstanceArns']:
+                print('all container instances are drained/stopped')
+                break
+            time.sleep(WAIT_TIME)
+            print('EC2 instances status for instance {0}: draining'.format(instance_id))
 
     
     def _shutdown(self):
@@ -433,11 +436,11 @@ class AwsCaas(object):
                 ec2_termination_resp = self._ec2_client.terminate_instances(
                     DryRun=False,
                     InstanceIds=[ec2_instance["ec2InstanceId"],])
-            
-            
+
+                # wait for every container instance to be inactive
+                self._wait_instances(self._cluster_name, ec2_instance["ec2InstanceId"])
 
         # Finally delete the cluster
         print("deleting cluster {0}".format(self._cluster_name))
         response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
-        #pprint.pprint(response)
 
