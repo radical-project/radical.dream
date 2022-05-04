@@ -19,6 +19,7 @@ For now, it is assumed that the AWS infrastructure is already in
 existence and that Docker is running on the host machine.
 """
 
+WAIT_TIME = 2
 
 class AwsCaas(object):
     def __init__(self):
@@ -43,6 +44,8 @@ class AwsCaas(object):
         self._cluster_name = "BotoCluster"
         self._service_name = "service_hello_world"
         self._task_name    = None
+
+        self._task_ids     = []
 
     def run_aws_container(self, cred, container_path):
         """
@@ -78,7 +81,10 @@ class AwsCaas(object):
         self.create_ec2_instance(cluster)
 
         # 7-Start the task
-        _ = self.run_task(task_def_arn, cluster)
+        tasks = self.run_task(task_def_arn, cluster)
+
+        # 8-Wait on task completion
+        self._wait_tasks(tasks, cluster)
 
 
     
@@ -236,6 +242,7 @@ class AwsCaas(object):
                                            'securityGroups'    : ["sg-0702f37d21c55da64"]}}
 
         response = self._ecs_client.run_task(**kwargs)
+        #print(response)
 
         if response['failures']:
             raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
@@ -243,8 +250,49 @@ class AwsCaas(object):
         else:
             print('running task {0}'.format(task_def))
         
-        return response
+        self._task_ids.append(response)
+        
+        task_ids = [t['taskArn'] for t in response['tasks']]
+        
+        return task_ids
 
+    def _get_task_statuses(self, task_ids, cluster):
+        """
+        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
+        Retrieve task statuses from ECS API
+
+        Returns list of {RUNNING|PENDING|STOPPED} for each id in task_ids
+        """
+        response = self._ecs_client.describe_tasks(tasks=task_ids, cluster=cluster)
+
+        # Error checking
+        if response['failures'] != []:
+            raise Exception('There were some failures:\n{0}'.format(
+                response['failures']))
+        status_code = response['ResponseMetadata']['HTTPStatusCode']
+        if status_code != 200:
+            msg = 'Task status request received status code {0}:\n{1}'
+            raise Exception(msg.format(status_code, response))
+
+        return [t['lastStatus'] for t in response['tasks']]
+    
+
+    def _wait_tasks(self, task_ids, cluster):
+        """
+        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
+        Wait for task status until STOPPED
+        """
+        import time
+        while True:
+            statuses = self._get_task_statuses(task_ids, cluster)
+            if all([status == 'STOPPED' for status in statuses]):
+                print('ECS tasks {0} STOPPED'.format(','.join(task_ids)))
+                break
+            time.sleep(WAIT_TIME)
+            print('ECS task status for tasks {0}: {1}'.format(task_ids, statuses))
+        
+        # shutdown and delete everything
+        self._shutdown()
 
 
     def kill_task(self, cluster_name, task_id, reason):
@@ -358,7 +406,7 @@ class AwsCaas(object):
             # Delete service
             response = self._ecs_client.delete_service(cluster=self._cluster_name,
                                                        service=self._service_name)
-            pprint.pprint(response)
+            #pprint.pprint(response)
         except:
             print("Service not found/not active")
         
@@ -368,9 +416,10 @@ class AwsCaas(object):
         # De-Register all task definitions
         for task_definition in tasks["taskDefinitionArns"]:
             # De-register task definition(s)
+            print("deregistering task {0}".format(task_definition))
             deregister_response = self._ecs_client.deregister_task_definition(
                 taskDefinition=task_definition)
-            pprint.pprint(deregister_response)
+            #pprint.pprint(deregister_response)
         
         # Terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
@@ -380,24 +429,15 @@ class AwsCaas(object):
             containerInstances=instances["containerInstanceArns"])
 
             for ec2_instance in container_instance_resp["containerInstances"]:
-                ec2_termination_resp = ec2_client.terminate_instances(
+                print("terminating instance {0}".format(ec2_instance))
+                ec2_termination_resp = self._ec2_client.terminate_instances(
                     DryRun=False,
                     InstanceIds=[ec2_instance["ec2InstanceId"],])
+            
+            
 
         # Finally delete the cluster
+        print("deleting cluster {0}".format(self._cluster_name))
         response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
         #pprint.pprint(response)
 
-
-
-
-
-    
-    
-
-
-    
-
-
-
-        
