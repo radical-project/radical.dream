@@ -80,7 +80,7 @@ class AwsCaas(object):
         _ = self.create_ecs_service()
 
         # 6-create ec2 instance
-        self.create_ec2_instance(cluster)
+        #self.create_ec2_instance(cluster)
 
         # 7-Start the task
         tasks = self.run_task(task_def_arn, cluster)
@@ -185,8 +185,8 @@ class AwsCaas(object):
                 return service
         
         print('no exisitng service found, creating.....')
-        response = self._ecs_client.create_service(cluster    = self._cluster_name,
-                                                   serviceName= self._service_name,
+        response = self._ecs_client.create_service(cluster        = self._cluster_name,
+                                                   serviceName    = self._service_name,
                                                    taskDefinition = self._task_name,
                                                    launchType     = 'FARGATE',
                                                    desiredCount   = 1,
@@ -321,9 +321,10 @@ class AwsCaas(object):
 
         clusters = self._ecs_client.list_clusters()
 
-        if cluster_name in clusters['clusterArns'][0]:
-            print('cluster {0} already exist'.format(cluster_name))
-            return cluster_name
+        if clusters['clusterArns']:
+            if cluster_name in clusters['clusterArns'][0]:
+                print('cluster {0} already exist'.format(cluster_name))
+                return cluster_name
         
         print("no existing cluster found, creating....")
         self._ecs_client.create_cluster(clusterName=cluster_name)
@@ -388,8 +389,13 @@ class AwsCaas(object):
 
     def _wait_instances(self, cluster, instance_id):
 
+        # check for any container instance within the given cluster
         instances = self._ecs_client.list_container_instances(cluster = cluster,
-                                                              status  = 'ACTIVE' or 'DRAINING')
+                                                              status  = 'ACTIVE' or 
+                                                                        'DRAINING' or
+                                                                        'REGISTERING'or
+                                                                        'DEREGISTERING' or
+                                                                        'REGISTRATION_FAILED')
         while True:
             if not instances['containerInstanceArns']:
                 print('all container instances are drained/stopped')
@@ -423,7 +429,7 @@ class AwsCaas(object):
             deregister_response = self._ecs_client.deregister_task_definition(
                 taskDefinition=task_definition)
             #pprint.pprint(deregister_response)
-        
+
         # Terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
         if instances["containerInstanceArns"]:
