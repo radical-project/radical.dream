@@ -41,19 +41,22 @@ class AwsCaas(AwsCost):
         4-Task: is the instantiation of a task definition within a cluster
         """
         _cred = cred
-        # 1-Create Clients
-        self._ecs_client = self._create_ecs_client(_cred)
-        self._ec2_client = self._create_ec2_client(_cred)
-        self._iam_client = self._create_iam_client(_cred)
-        self._prc_client = self._create_prc_client(_cred)
+        self._ecs_client    = self._create_ecs_client(_cred)
+        self._ec2_client    = self._create_ec2_client(_cred)
+        self._iam_client    = self._create_iam_client(_cred)
+        self._prc_client    = self._create_prc_client(_cred)
+        self._dydb_resource = self._create_dydb_resource(_cred)
 
         self._cluster_name = "BotoCluster"
         self._service_name = "service_hello_world"
         self._task_name    = None
-
         self._task_ids     = []
 
-        super().__init__(self._prc_client)
+        self._region_name  =  cred['region_name']
+
+        super().__init__(self._prc_client, self._dydb_resource,
+                         self._cluster_name, self._service_name, 
+                                              self._region_name)
 
     def run_aws_container(self, container_path):
         """
@@ -98,9 +101,16 @@ class AwsCaas(AwsCost):
         self._wait_tasks(tasks, cluster)
 
 
-    
     def _calculate_container_cost(self, time, cpu, mem):
         raise NotImplementedError
+    
+    def _create_dydb_resource(self, cred):
+        dydb_client = boto3.resource('dynamodb', aws_access_key_id     = cred['aws_access_key_id'],
+                                                 aws_secret_access_key = cred['aws_secret_access_key'],
+                                                 region_name           = cred['region_name'])
+        print('dynamodb resource created')
+
+        return dydb_client
     
 
     def _create_prc_client(self, cred):
@@ -348,6 +358,17 @@ class AwsCaas(AwsCost):
         self._ecs_client.create_cluster(clusterName=cluster_name)
 
         return cluster_name
+    
+    def get_ecs_cluster_arn(self, cluster_name):
+        """ Given the ECS cluster name, get the ECS ClusterARN.
+        """
+        response = self._ecs_client.describe_clusters(clusters=[cluster])
+
+        print("ECS Cluster Details: %s", response)
+        if len(response['clusters']) == 1:
+            return (response['clusters'][0]['clusterArn'])
+        else:
+            return ''
 
 
     def create_ec2_instance(self, cluster_name):

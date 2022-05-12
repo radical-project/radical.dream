@@ -1,4 +1,7 @@
 import ast
+import datetime
+from dateutil.tz import *
+from boto3.dynamodb.conditions import Key, Attr
 """
 AwsCost object contains the current pricings of the AWS cloud services.
 AWSCost offers the capabilities to obtain the cost of:
@@ -9,7 +12,12 @@ https://github.com/aws-samples/amazon-ecs-chargeback/blob/master/ecs-chargeback
 """
 
 # cpu to memory weight
-CTMW   = 0.5
+CTMW    = 0.5
+HOURLY  = 'hour'
+DAILY   = 'day'
+MONTHLY = 'month'
+YEARLY  = 'year'
+
 _PRICINGS = {}
 _REGRIONS = {
             "us-east-2"         : "US East (Ohio)",
@@ -39,11 +47,18 @@ class AwsCost:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, prc_client, ecs_client = None, ec2_client = None):
+    def __init__(self, prc_client, dydb_resource, cluster_name,
+                       service_name, region_name, ecs_client=None,
+                                                  ec2_client=None):
         
-        self._prc_client = prc_client
-        self._ecs_client = ecs_client
-        self._ec2_client = ec2_client
+        self._prc_client    = prc_client
+        self._dydb_resource = dydb_resource
+        self._ecs_client    = ecs_client
+        self._ec2_client    = ec2_client
+
+        self._cluster_name = cluster_name
+        self._service_name = service_name
+        self._region_name  = region_name
 
 
     # --------------------------------------------------------------------------
@@ -263,8 +278,8 @@ class AwsCost:
 
         # Split EC2 cost bewtween memory and weights
         ec2_cpu2mem = ec2_cpu2mem_weights(_PRICINGS[pricing_key]['memory'], _PRICINGS[pricing_key]['cpu'])
-        cpu_charges = ( (float(cpu)) / 1024.0 / _PRICINGS[pricing_key]['cpu']) * ( float(_PRICINGS[pricing_key]['cost']) * ec2_cpu2mem ) * (runTime/60.0/60.0)
-        mem_charges = ( (float(memory)) / 1024.0 / _PRICINGS[pricing_key]['memory'] ) * ( float(_PRICINGS[pricing_key]['cost']) * (1.0 - ec2_cpu2mem) ) * (runTime/60.0/60.0)
+        cpu_charges = ((float(cpu)) / 1024.0 / _PRICINGS[pricing_key]['cpu']) * ( float(_PRICINGS[pricing_key]['cost']) * ec2_cpu2mem ) * (runTime/60.0/60.0)
+        mem_charges = ((float(memory)) / 1024.0 / _PRICINGS[pricing_key]['memory'] ) * ( float(_PRICINGS[pricing_key]['cost']) * (1.0 - ec2_cpu2mem) ) * (runTime/60.0/60.0)
 
         print('In cost_of_ec2task: mem_charges=%f, cpu_charges=%f',  mem_charges, cpu_charges)
         return(mem_charges, cpu_charges)
@@ -298,25 +313,40 @@ class AwsCost:
 
     # --------------------------------------------------------------------------
     #
+    def fetch_table(self, table, region, cluster, service):
+        """
+        Scan the DynamoDB table to get all tasks in a service.
+        Input - region, ECS ClusterARN and ECS ServiceName
+        """
+        try:
+            resp = table.scan(FilterExpression=Attr('group').eq('service') &
+                            Attr('groupName').eq(service) &
+                            Attr('region').eq(region) &
+                            Attr('clusterArn').eq(cluster))
+        except ResourceNotFoundException:
+            
+        return (resp)
+
+
+    # --------------------------------------------------------------------------
+    #
     def get_cost_report(self, period):
 
         """
         """
         now = datetime.datetime.now(tz=tzutc())
 
-        dynamodb = boto3.resource("dynamodb", region_name=region)
-        table = dynamodb.Table("ECSTaskStatus")
-
-        tasks = get(table, region, cluster, service)
+        table = self._dydb_resource.Table("ECSTaskStatus")
+        tasks = self.fetch_table(table, self._region_name, self._cluster_name, self._service_name)
 
         if metered_results:
-            (meter_start, meter_end) = get_datetime_start_end(now, cli_args.month, cli_args.days, cli_args.hours)
+            (meter_start, meter_end) = get_datetime_start_end(now, MONTHLY, DAILY, HOURLY)
             (fg_cpu, fg_mem, ec2_mem, ec2_cpu) = cost_of_service(tasks, meter_start, meter_end, now)
         else: 
             (fg_cpu, fg_mem, ec2_mem, ec2_cpu) = cost_of_service(tasks, 0, 0, now)
 
 
-        logging.debug("Main: fg_cpu=%f, fg_mem=%f, ec2_mem=%f, ec2_cpu=%f", fg_cpu, fg_mem, ec2_mem, ec2_cpu)
+        print("Main: fg_cpu=%f, fg_mem=%f, ec2_mem=%f, ec2_cpu=%f", fg_cpu, fg_mem, ec2_mem, ec2_cpu)
 
         print("#####################################################################")
         print("#")
@@ -325,10 +355,11 @@ class AwsCost:
         print("#")
 
         if metered_results:
-            if cli_args.month:
-                print("# Cost calculated for month %s" % (cli_args.month) )
+            if period == MONTHLY:
+                print("# Cost calculated for month %s" % (MONTHLY) )
             else:
-                print("# Cost calculated for last %s %s" % (cli_args.days if cli_args.days else cli_args.hours, "days" if cli_args.days else "hours") )
+                print("# Cost calculated for last %s %s" % (DAILY if period == DAILY else HOURLY,
+                                                            DAILY if period == DAILY else HOURLY))
 
         print("#")
 
