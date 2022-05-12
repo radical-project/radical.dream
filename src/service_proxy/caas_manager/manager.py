@@ -12,7 +12,8 @@ class CaasManager(AwsCaas):
         
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
-                AwsCaas.__init__(self)
+                cred = self._proxy._load_credentials('aws')
+                AwsCaas.__init__(self, cred)
             if provider == AZURE:
                 raise NotImplementedError
             if provider == GCLOUD:
@@ -40,8 +41,7 @@ class CaasManager(AwsCaas):
         we need to upload it to aws and use it.
         """
         if provider == AWS:
-            cred = self._proxy._load_credentials('aws')
-            self.run_aws_container(cred, container_path)
+            self.run_aws_container(container_path)
         
         if provider == AZURE:
             raise NotImplementedError

@@ -5,7 +5,7 @@ import boto3
 import pprint
 import base64
 
-from src.service_proxy.cost_manager import 
+from src.service_proxy.cost_manager.aws_cost import AwsCost
 """
 ~~~~~~~~~~~~~~~~
 
@@ -23,8 +23,8 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 WAIT_TIME = 2
 
-class AwsCaas(object):
-    def __init__(self):
+class AwsCaas(AwsCost):
+    def __init__(self, cred):
         """
         The components of AWS ECS form the following hierarchy:
 
@@ -40,8 +40,12 @@ class AwsCaas(object):
 
         4-Task: is the instantiation of a task definition within a cluster
         """
-        self._ecs_client = None
-        self._ec2_client = None
+        _cred = cred
+        # 1-Create Clients
+        self._ecs_client = self._create_ecs_client(_cred)
+        self._ec2_client = self._create_ec2_client(_cred)
+        self._iam_client = self._create_iam_client(_cred)
+        self._prc_client = self._create_prc_client(_cred)
 
         self._cluster_name = "BotoCluster"
         self._service_name = "service_hello_world"
@@ -49,7 +53,9 @@ class AwsCaas(object):
 
         self._task_ids     = []
 
-    def run_aws_container(self, cred, container_path):
+        super().__init__(self._prc_client)
+
+    def run_aws_container(self, container_path):
         """
         Build Docker image, push to AWS and update ECS service.
         """
@@ -66,12 +72,6 @@ class AwsCaas(object):
         #
         # FIXME: ask the user if they want to continue to the 
         #        execution based on the cost
-
-        # 1-Create Clients
-        self._ecs_client = self._create_ecs_client(cred)
-        self._ec2_client = self._create_ec2_client(cred)
-        self._iam_client = self._create_iam_client(cred)
-        self._prc_client = self._create_prc_client(cred)
 
         # 2-Create a cluster (this should be done once)
         cluster = self.build_new_cluster(self._cluster_name)
