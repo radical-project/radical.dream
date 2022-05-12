@@ -5,7 +5,7 @@ import boto3
 import pprint
 import base64
 
-from src.provider_proxy import proxy
+from src.service_proxy.cost_manager import 
 """
 ~~~~~~~~~~~~~~~~
 
@@ -53,11 +53,16 @@ class AwsCaas(object):
         """
         Build Docker image, push to AWS and update ECS service.
         """
-        # The user will provide the mem and cpu once they do that
+        # The user will provide the task , mem and cpu once they do that
         # a fucntion [here] should calculate the cost
         #
-        #
-        # cost = self._calculate_container_cost(time, cpu, mem)
+        # 1-check the avilable budget
+        #    avilabel_budget = self.get_user_budget()
+        # 2- calculate the cost of executing this container
+        #    cost = self._calculate_container_cost(time, cpu, mem)
+        # 3- ask the user if he/she wants to continue or not:
+        #    value = input("Executing container will cost {0} out of your budget {1} press enter to continue:\n")
+        #    print(f'You entered {value}')
         #
         # FIXME: ask the user if they want to continue to the 
         #        execution based on the cost
@@ -66,6 +71,7 @@ class AwsCaas(object):
         self._ecs_client = self._create_ecs_client(cred)
         self._ec2_client = self._create_ec2_client(cred)
         self._iam_client = self._create_iam_client(cred)
+        self._prc_client = self._create_prc_client(cred)
 
         # 2-Create a cluster (this should be done once)
         cluster = self.build_new_cluster(self._cluster_name)
@@ -79,7 +85,10 @@ class AwsCaas(object):
         # 5-create a service (this should be done once)
         _ = self.create_ecs_service()
 
-        # 6-create ec2 instance
+        # 6-create ec2 instance or
+        # this requires to link the EC2 instance with ECS
+        # so far it is failing, alternatively we are using
+        # FARGATE
         #self.create_ec2_instance(cluster)
 
         # 7-Start the task
@@ -92,7 +101,16 @@ class AwsCaas(object):
     
     def _calculate_container_cost(self, time, cpu, mem):
         raise NotImplementedError
+    
 
+    def _create_prc_client(self, cred):
+        prc_client = boto3.client('pricing', aws_access_key_id     = cred['aws_access_key_id'],
+                                             aws_secret_access_key = cred['aws_secret_access_key'],
+                                             region_name           = cred['region_name'])
+        
+        print('pricing client created')
+
+        return prc_client
 
     def _create_ec2_client(self, cred):
         ec2_client = boto3.client('ec2', aws_access_key_id     = cred['aws_access_key_id'],
