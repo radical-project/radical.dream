@@ -23,7 +23,12 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 WAIT_TIME = 2
 
-class AwsCaas(AwsCost):
+# --------------------------------------------------------------------------
+#
+class AwsCaas():
+
+    # --------------------------------------------------------------------------
+    #
     def __init__(self, cred):
         """
         The components of AWS ECS form the following hierarchy:
@@ -40,7 +45,10 @@ class AwsCaas(AwsCost):
 
         4-Task: is the instantiation of a task definition within a cluster
         """
-        _cred = cred
+        # FIXME: Do we really need to hide aws cost?
+        _cred      = cred
+        __aws_cost = None
+
         self._ecs_client    = self._create_ecs_client(_cred)
         self._ec2_client    = self._create_ec2_client(_cred)
         self._iam_client    = self._create_iam_client(_cred)
@@ -54,10 +62,16 @@ class AwsCaas(AwsCost):
 
         self._region_name  =  cred['region_name']
 
-        super().__init__(self._prc_client, self._dydb_resource,
-                         self._cluster_name, self._service_name, 
-                                              self._region_name)
+        # FIXME: If budget mode is enabled by the user then we
+        #        can init the cost class otherwise we do not 
+        #        need to do that.
+        self.cost = AwsCost(self._prc_client, self._dydb_resource,
+                           self._cluster_name, self._service_name, 
+                                                self._region_name)
 
+
+    # --------------------------------------------------------------------------
+    #
     def run_aws_container(self, container_path):
         """
         Build Docker image, push to AWS and update ECS service.
@@ -101,9 +115,8 @@ class AwsCaas(AwsCost):
         self._wait_tasks(tasks, cluster)
 
 
-    def _calculate_container_cost(self, time, cpu, mem):
-        raise NotImplementedError
-    
+    # --------------------------------------------------------------------------
+    #
     def _create_dydb_resource(self, cred):
         dydb_client = boto3.resource('dynamodb', aws_access_key_id     = cred['aws_access_key_id'],
                                                  aws_secret_access_key = cred['aws_secret_access_key'],
@@ -111,8 +124,10 @@ class AwsCaas(AwsCost):
         print('dynamodb resource created')
 
         return dydb_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_prc_client(self, cred):
         prc_client = boto3.client('pricing', aws_access_key_id     = cred['aws_access_key_id'],
                                              aws_secret_access_key = cred['aws_secret_access_key'],
@@ -122,6 +137,9 @@ class AwsCaas(AwsCost):
 
         return prc_client
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_ec2_client(self, cred):
         ec2_client = boto3.client('ec2', aws_access_key_id     = cred['aws_access_key_id'],
                                            aws_secret_access_key = cred['aws_secret_access_key'],
@@ -130,16 +148,20 @@ class AwsCaas(AwsCost):
         print('ec2 client created')
 
         return ec2_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_ecs_client(self, cred):
         ecs_client = boto3.client('ecs', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
         print('ecs client created')
         return ecs_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_iam_client(self, cred):
         iam_client = boto3.client('iam', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
@@ -147,8 +169,10 @@ class AwsCaas(AwsCost):
         
         print('iam client created')
         return iam_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def create_container_def(self, name ='hello_world_container',
                                                  cpu=1, memory=1,
                                                  image='ubuntu'):
@@ -164,14 +188,16 @@ class AwsCaas(AwsCost):
                    'command'     : ['/bin/echo', 'hello world']}
 
         return con_def
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def create_task_def(self, container_def):
         """
         create a container defination
         """
         # FIXME: This a registering with minimal definition,
-        #        user should specifiy how much per task (cpu/mem) 
+        #        user should specifiy how much per task (cpu/mem)
         task_def = {'family' :  'hello_world',
                     'volumes': [],
                     'cpu'    : '256',
@@ -192,9 +218,10 @@ class AwsCaas(AwsCost):
         print('task {0} is registered'.format(self._task_name))
 
         return self._task_name, task_def_arn
-        
+
     
-    
+    # --------------------------------------------------------------------------
+    #
     def create_ecs_service(self):
         """
         Create service with exactly 1 desired instance of the task
@@ -232,7 +259,8 @@ class AwsCaas(AwsCost):
         return response
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def start_task(self, task_def, cluster_name):
         """
         Starts a new task from the specified task definition on the
@@ -248,8 +276,10 @@ class AwsCaas(AwsCost):
                                                overrides={},
                                                containerInstances=[container_id],
                                                startedBy="foo",)
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def run_task(self, task_def, cluster_name):
         """
         Starts a new task using the specified task definition. In this
@@ -285,6 +315,9 @@ class AwsCaas(AwsCost):
         
         return task_ids
 
+
+    # --------------------------------------------------------------------------
+    #
     def _get_task_statuses(self, task_ids, cluster):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
@@ -304,8 +337,10 @@ class AwsCaas(AwsCost):
             raise Exception(msg.format(status_code, response))
 
         return [t['lastStatus'] for t in response['tasks']]
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _wait_tasks(self, task_ids, cluster):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
@@ -319,38 +354,50 @@ class AwsCaas(AwsCost):
             time.sleep(WAIT_TIME)
             print('ECS task status for tasks {0}: {1}'.format(task_ids, statuses))
         
-        # shutdown and delete everything
-        self._shutdown()
+        #self._shutdown()
 
 
+    # --------------------------------------------------------------------------
+    #
     def kill_task(self, cluster_name, task_id, reason):
         """
         we identify 3 reasons to stop task:
         1- USER_CANCELED : user requested to kill the task
         2- SYS_CANCELED  : the system requested to kill the task
-        3- COST_CANCELED : Task must be kill due to exceeding cost limit (set by user)
+        3- COST_CANCELED : Task must be kill due to exceeding cost
+                           limit (set by user)
         """
-        
+
         response = self._ecs_client.stop_task(cluster = cluster_name,
                                               task    = task_id,
                                               reason  = reason)
-        
+
         return response
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def list_tasks(self, task_name):
         response = self._ecs_client.list_task_definitions(familyPrefix=task_name,
                                                           status='ACTIVE')
         return response
-    
 
-    def build_new_cluster(self, cluster_name):
 
+    # --------------------------------------------------------------------------
+    #
+    def list_cluster(self):
         clusters = self._ecs_client.list_clusters()
+        return clusters['clusterArns']
 
-        if clusters['clusterArns']:
-            if cluster_name in clusters['clusterArns'][0]:
+
+    # --------------------------------------------------------------------------
+    #
+    def create_cluster(self, cluster_name):
+
+        clusters = self.list_cluster()
+
+        if clusters:
+            if cluster_name in clusters[0]:
                 print('cluster {0} already exist'.format(cluster_name))
                 return cluster_name
         
@@ -358,11 +405,14 @@ class AwsCaas(AwsCost):
         self._ecs_client.create_cluster(clusterName=cluster_name)
 
         return cluster_name
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     def get_ecs_cluster_arn(self, cluster_name):
         """ Given the ECS cluster name, get the ECS ClusterARN.
         """
-        response = self._ecs_client.describe_clusters(clusters=[cluster])
+        response = self._ecs_client.describe_clusters(clusters=[cluster_name])
 
         print("ECS Cluster Details: %s", response)
         if len(response['clusters']) == 1:
@@ -371,6 +421,8 @@ class AwsCaas(AwsCost):
             return ''
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_ec2_instance(self, cluster_name):
         """
         By default, your container instance launches into your default cluster.
@@ -424,8 +476,10 @@ class AwsCaas(AwsCost):
         print("instance {0} created".format(instance_id))
 
         return instance_id
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _wait_instances(self, cluster, instance_id):
 
         # check for any container instance within the given cluster
@@ -442,34 +496,39 @@ class AwsCaas(AwsCost):
             time.sleep(WAIT_TIME)
             print('EC2 instances status for instance {0}: draining'.format(instance_id))
 
-    
+
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
-        #Shut everything down and delete task/service/instance/cluster
+        # shut everything down and delete task/service/instance/cluster
         try:
             print("Shutting down.....")
-            # Set desired service count to 0 (obligatory to delete)
+            # set desired service count to 0 (obligatory to delete)
             response = self._ecs_client.update_service(cluster=self._cluster_name,
                                                        service=self._service_name,
                                                        desiredCount=0)
-            # Delete service
+            # delete service
             response = self._ecs_client.delete_service(cluster=self._cluster_name,
                                                        service=self._service_name)
-            #pprint.pprint(response)
         except:
-            print("Service not found/not active")
+            print("service not found/not active")
         
-        # List all task definitions and revisions
-        tasks = self.list_tasks(self._task_name)
+        tasks = None
+        try:
+            # list all task definitions and revisions
+            tasks = self.list_tasks(self._task_name)
+        except:
+            print("tasks not found/not active")
 
-        # De-Register all task definitions
-        for task_definition in tasks["taskDefinitionArns"]:
-            # De-register task definition(s)
-            print("deregistering task {0}".format(task_definition))
-            deregister_response = self._ecs_client.deregister_task_definition(
-                taskDefinition=task_definition)
-            #pprint.pprint(deregister_response)
+        # de-Register all task definitions
+        if tasks:
+            for task_definition in tasks["taskDefinitionArns"]:
+                # De-register task definition(s)
+                print("deregistering task {0}".format(task_definition))
+                deregister_response = self._ecs_client.deregister_task_definition(
+                    taskDefinition=task_definition)
 
-        # Terminate virtual machine(s)
+        # terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
         if instances["containerInstanceArns"]:
             container_instance_resp = self._ecs_client.describe_container_instances(
@@ -485,7 +544,17 @@ class AwsCaas(AwsCost):
                 # wait for every container instance to be inactive
                 self._wait_instances(self._cluster_name, ec2_instance["ec2InstanceId"])
 
-        # Finally delete the cluster
-        print("deleting cluster {0}".format(self._cluster_name))
-        response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
+        # finally delete the cluster
+        clusters = self.list_cluster()
+
+        if clusters:
+            if not self._cluster_name in clusters[0]:
+                print('cluster {0} does not exist'.format(cluster_name))
+            else:
+                print('cluster {0} found'.format(cluster_name))
+                response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
+                print("cluster {0} deleted".format(self._cluster_name))
+        else:
+            print("cluster not found/active")
+        
 

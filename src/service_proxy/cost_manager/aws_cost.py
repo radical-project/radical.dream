@@ -267,9 +267,9 @@ class AwsCost:
             # Workaround for DUBLIN, Shared Tenancy and Linux
             (ec2_cpu, ec2_mem, ec2_cost) = ec2_pricing(_REGRIONS[region], instanceType, 'Shared', 'Linux')
             _PRICINGS[pricing_key]={}
-            _PRICINGS[pricing_key]['cpu']    = ec2_cpu      # Number of CPUs on the EC2 instance
+            _PRICINGS[pricing_key]['cpu']    = ec2_cpu   # Number of CPUs on the EC2 instance
             _PRICINGS[pricing_key]['memory'] = ec2_mem   # GiB of memory on the EC2 instance
-            _PRICINGS[pricing_key]['cost']   = ec2_cost    # Cost of EC2 instance (On-demand)
+            _PRICINGS[pricing_key]['cost']   = ec2_cost  # Cost of EC2 instance (On-demand)
 
         # Corner case: When no CPU is assigned to a ECS Task, cpushares = 0
         # Workaround: Assume a minimum cpushare, say 128 or 256 (0.25 vcpu is the minimum on Fargate).
@@ -318,13 +318,11 @@ class AwsCost:
         Scan the DynamoDB table to get all tasks in a service.
         Input - region, ECS ClusterARN and ECS ServiceName
         """
-        try:
-            resp = table.scan(FilterExpression=Attr('group').eq('service') &
-                            Attr('groupName').eq(service) &
-                            Attr('region').eq(region) &
-                            Attr('clusterArn').eq(cluster))
-        except ResourceNotFoundException:
-            
+
+        resp = table.scan(FilterExpression=Attr('group').eq('service') &
+                        Attr('groupName').eq(service) &
+                        Attr('region').eq(region) &
+                        Attr('clusterArn').eq(cluster))
         return (resp)
 
 
