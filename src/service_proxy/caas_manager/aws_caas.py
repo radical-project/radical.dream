@@ -91,7 +91,7 @@ class AwsCaas():
         #        execution based on the cost
 
         # 2-Create a cluster (this should be done once)
-        cluster = self.build_new_cluster(self._cluster_name)
+        cluster = self.create_cluster(self._cluster_name)
 
         # 3-Create Container definition
         container_def = self.create_container_def()
@@ -549,9 +549,9 @@ class AwsCaas():
 
         if clusters:
             if not self._cluster_name in clusters[0]:
-                print('cluster {0} does not exist'.format(cluster_name))
+                print('cluster {0} does not exist'.format(self._cluster_name))
             else:
-                print('cluster {0} found'.format(cluster_name))
+                print('cluster {0} found'.format(self._cluster_name))
                 response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
                 print("cluster {0} deleted".format(self._cluster_name))
         else:
