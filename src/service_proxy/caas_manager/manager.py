@@ -55,7 +55,8 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def async_execute_ctask(self, provider, cpu, memory, container_path=None):
+    def async_execute_ctask(self, provider, batch_size, cpu, memory,
+                                               container_path=None):
         """
         execute contianer and do not wait for it
         Ideally when container_path is provided it means 
@@ -64,7 +65,7 @@ class CaasManager(AwsCaas):
         # TODO: pass a cTask description
         #       via the user
         if provider == AWS:
-            self.run_aws_container(container_path)
+            self.run_aws_container(batch_size)
         
         if provider == AZURE:
             raise NotImplementedError

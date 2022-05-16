@@ -72,7 +72,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_aws_container(self, container_path):
+    def run_aws_container(self, batch_size=1, container_path=None):
         """
         Build Docker image, push to AWS and update ECS service.
         """
@@ -90,6 +90,7 @@ class AwsCaas():
         # FIXME: ask the user if they want to continue to the 
         #        execution based on the cost
 
+        submit_start = time.time()
         # 2-Create a cluster (this should be done once)
         cluster = self.create_cluster(self._cluster_name)
 
@@ -107,12 +108,21 @@ class AwsCaas():
         # so far it is failing, alternatively we are using
         # FARGATE
         #self.create_ec2_instance(cluster)
+        submit_stop = time.time()
 
-        # 7-Start the task
-        tasks = self.run_task(task_def_arn, cluster)
+        print('Submit time: {0}'.format(submit_stop - submit_start))
+
+        # 7-Start set of tasks
+        tasks = self.run_task(batch_size, task_def_arn, cluster)
 
         # 8-Wait on task completion
         self._wait_tasks(tasks, cluster)
+
+        done_stop = time.time()
+
+        print('Done time: {0}'.format(done_stop - submit_start))
+
+
 
 
     # --------------------------------------------------------------------------
@@ -173,9 +183,8 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_container_def(self, name ='hello_world_container',
-                                                 cpu=1, memory=1,
-                                                 image='ubuntu'):
+    def create_container_def(self, name ='hello_world_container', image='ubuntu',
+                                                                  cpu=1, memory=1024):
         con_def = {'name'        : name,
                    'cpu'         : cpu,
                    'memory'      : memory,
@@ -184,8 +193,14 @@ class AwsCaas():
                    'environment' : [],
                    'mountPoints' : [],
                    'volumesFrom' : [],
-                   'image'       : image,
-                   'command'     : ['/bin/echo', 'hello world']}
+                   "logConfiguration": {"logDriver": "awslogs",
+                                        "options": { 
+                                                    "awslogs-group" : "/ecs/first-run-task-definition",
+                                                    "awslogs-region": "us-east-1",
+                                                    "awslogs-stream-prefix": "ecs"}},
+                   'image'       : 'screwdrivercd/noop-container',
+                   "entryPoint"  : [],
+                   'command'     : ["/bin/echo", "noop"]}
 
         return con_def
 
@@ -201,7 +216,7 @@ class AwsCaas():
         task_def = {'family' :  'hello_world',
                     'volumes': [],
                     'cpu'    : '256',
-                    'memory' : '512',
+                    'memory' : '1024', # this should be greate or equal to container def memory
                     'containerDefinitions'   : [container_def],
                     'executionRoleArn'       : 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole',
                     'networkMode'            : 'awsvpc',
@@ -280,7 +295,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_task(self, task_def, cluster_name):
+    def run_task(self, batch_size, task_def, cluster_name):
         """
         Starts a new task using the specified task definition. In this
         mode AWS scheduler will handle the task placement.
@@ -300,20 +315,18 @@ class AwsCaas():
                                                                   'subnet-094da8d73899da51c',],
                                            'assignPublicIp'    : 'ENABLED',
                                            'securityGroups'    : ["sg-0702f37d21c55da64"]}}
+        for task in range(batch_size):
+            response = self._ecs_client.run_task(**kwargs)
+            task_id  = response['tasks'][0]['taskArn']
+            self._task_ids.append(task_id)
 
-        response = self._ecs_client.run_task(**kwargs)
+            if response['failures']:
+                raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
+                                        for failure in response['failures']]))
+            else:
+                print('submitting task {0}'.format(task_id))
 
-        if response['failures']:
-            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
-                                       for failure in response['failures']]))
-        else:
-            print('running task {0}'.format(task_def))
-        
-        self._task_ids.append(response)
-        
-        task_ids = [t['taskArn'] for t in response['tasks']]
-        
-        return task_ids
+        return self._task_ids
 
 
     # --------------------------------------------------------------------------
@@ -353,8 +366,6 @@ class AwsCaas():
                 break
             time.sleep(WAIT_TIME)
             print('ECS task status for tasks {0}: {1}'.format(task_ids, statuses))
-        
-        #self._shutdown()
 
 
     # --------------------------------------------------------------------------
