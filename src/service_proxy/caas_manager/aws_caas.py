@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import uuid
 import boto3
 import pprint
 import base64
@@ -45,18 +46,17 @@ class AwsCaas():
 
         4-Task: is the instantiation of a task definition within a cluster
         """
-        # FIXME: Do we really need to hide aws cost?
-        _cred      = cred
-        __aws_cost = None
+        __aws_cost   = None
+        __manager_id = str(uuid.uuid4())
 
-        self._ecs_client    = self._create_ecs_client(_cred)
-        self._ec2_client    = self._create_ec2_client(_cred)
-        self._iam_client    = self._create_iam_client(_cred)
-        self._prc_client    = self._create_prc_client(_cred)
-        self._dydb_resource = self._create_dydb_resource(_cred)
+        self._ecs_client    = self._create_ecs_client(cred)
+        self._ec2_client    = self._create_ec2_client(cred)
+        self._iam_client    = self._create_iam_client(cred)
+        self._prc_client    = self._create_prc_client(cred)
+        self._dydb_resource = self._create_dydb_resource(cred)
 
-        self._cluster_name = "BotoCluster"
-        self._service_name = "service_hello_world"
+        self._cluster_name = "cluster_{0}".format(__manager_id)
+        self._service_name = "service_{0}".format(__manager_id)
         self._task_name    = None
         self._task_ids     = []
 
@@ -72,7 +72,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_aws_container(self, batch_size=1, container_path=None):
+    def run(self, batch_size=1, container_path=None):
         """
         Build Docker image, push to AWS and update ECS service.
         """
@@ -100,8 +100,9 @@ class AwsCaas():
         # 4-Create a task definition
         task_name, task_def_arn = self.create_task_def(container_def)
         
-        # 5-create a service (this should be done once)
-        _ = self.create_ecs_service()
+        # 5-create a service
+        # this should not be done unless we need to resbumit the task forever
+        #_ = self.create_ecs_service()
 
         # 6-create ec2 instance or
         # this requires to link the EC2 instance with ECS
@@ -121,8 +122,6 @@ class AwsCaas():
         done_stop = time.time()
 
         print('Done time: {0}'.format(done_stop - submit_start))
-
-
 
 
     # --------------------------------------------------------------------------
@@ -558,6 +557,7 @@ class AwsCaas():
         # finally delete the cluster
         clusters = self.list_cluster()
 
+        # check if we have running clusters
         if clusters:
             if not self._cluster_name in clusters[0]:
                 print('cluster {0} does not exist'.format(self._cluster_name))
@@ -566,6 +566,6 @@ class AwsCaas():
                 response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
                 print("cluster {0} deleted".format(self._cluster_name))
         else:
-            print("cluster not found/active")
+            print("no cluster(s) found/active")
         
 

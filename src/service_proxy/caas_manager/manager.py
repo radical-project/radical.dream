@@ -20,7 +20,7 @@ class CaasManager(AwsCaas):
         
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
-                cred = self._proxy._load_credentials('aws')
+                cred = self._proxy._load_credentials(AWS)
                 AwsCaas.__init__(self, cred)
             if provider == AZURE:
                 raise NotImplementedError
@@ -55,17 +55,17 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def async_execute_ctask(self, provider, batch_size, cpu, memory,
+    def sync_execute_ctask(self, provider, batch_size, cpu, memory,
                                                container_path=None):
         """
-        execute contianer and do not wait for it
-        Ideally when container_path is provided it means 
-        we need to upload it to aws and use it.
+        execute contianer and wait for it. Ideally when
+        container_path is provided it means we need to 
+        upload it to aws and use it.
         """
         # TODO: pass a cTask description
         #       via the user
         if provider == AWS:
-            self.run_aws_container(batch_size)
+            self.run(batch_size)
         
         if provider == AZURE:
             raise NotImplementedError
@@ -76,9 +76,9 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def sync_execute_ctask(self, provider, container_path):
+    def async_execute_ctask(self, provider, container_path):
         """
-        execute contianer and wait for it
+        execute contianer and do not wait for it
         """
         raise NotImplementedError
     
