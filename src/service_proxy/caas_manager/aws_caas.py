@@ -24,7 +24,9 @@ existence and that Docker is running on the host machine.
 """
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-WAIT_TIME = 2
+ACTIVE            = True
+WAIT_TIME         = 2
+TASKS_PER_CLUSTER = 2000
 
 # --------------------------------------------------------------------------
 #
@@ -51,6 +53,8 @@ class AwsCaas():
         __aws_cost   = None
         __manager_id = str(uuid.uuid4())
 
+        self.status = ACTIVE
+        
         self._ecs_client    = self._create_ecs_client(cred)
         self._ec2_client    = self._create_ec2_client(cred)
         self._iam_client    = self._create_iam_client(cred)
@@ -72,6 +76,13 @@ class AwsCaas():
                                                  self._region_name)
 
 
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def is_active(self):
+        return self.status
+
+        
     # --------------------------------------------------------------------------
     #
     def run(self, batch_size=1, container_path=None):
@@ -115,8 +126,12 @@ class AwsCaas():
 
         print('Submit time: {0}'.format(submit_stop - submit_start))
 
-        # 7-Start set of tasks
-        tasks = self.run_task(batch_size, task_def_arn, cluster)
+        # 7-Start set of tasks (AWS allows only 200 tasks per cluster)
+        # TODO: if the user is asking for > 2000 tasks we should do:
+        #       1- Create new cluster and submit to it
+        #       2- or break and ask the user to use AWSbatch 
+        if batch_size <= TASKS_PER_CLUSTER:
+            tasks = self.run_ctask(batch_size, task_def_arn, cluster)
 
         # 8-Wait on task completion
         self._wait_tasks(tasks, cluster)
@@ -180,6 +195,29 @@ class AwsCaas():
         
         print('iam client created')
         return iam_client
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_cluster(self, cluster_name):
+
+        clusters = self.list_cluster()
+        # FIXME: check for existing clusters, if multiple clusters with "hydraa"
+        #        froud, then ask the user which one to use.
+        if clusters:
+            print('checking for existing hydraa cluster')
+            if 'hydraa' in clusters[0]:
+                print('found: {0}'.format(cluster_name))
+                # FIXME: cluster name should be generated in this func
+                #        and not in the class __init__
+                self._cluster_name = clusters[0]
+                return clusters[0]
+            else:
+                print('not found: {0}')
+    
+        print('creating new cluster {0}'.format(cluster_name))
+        self._ecs_client.create_cluster(clusterName=cluster_name)
+        return cluster_name
 
 
     # --------------------------------------------------------------------------
@@ -277,7 +315,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def start_task(self, task_def, cluster_name):
+    def start_ctask(self, task_def, cluster_name):
         """
         Starts a new task from the specified task definition on the
         specified container instance or instances. StartTask uses/assumes
@@ -296,7 +334,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_task(self, batch_size, task_def, cluster_name):
+    def run_ctask(self, batch_size, task_def, cluster_name):
         """
         Starts a new task using the specified task definition. In this
         mode AWS scheduler will handle the task placement.
@@ -328,9 +366,10 @@ class AwsCaas():
                 raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
                                         for failure in response['failures']]))
             else:
+                self._task_ids[str(task_arn)] = 'ctask.{0}'.format(task_id)
                 print('submitting task {0}'.format(task_id))
                 task_id +=1
-                self._task_ids[str(task_arn)] = str(task_id)
+                
 
         return tasks_arns
 
@@ -361,11 +400,31 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def task_run_time(self):
+    def profiles(self, to_csv=False):
 
         task_stamps = self._get_task_stamps(self._task_ids, self._cluster_name)
-        for key, val in task_stamps.items():
-            print (key, val['stoppedAt'] - val['pullStartedAt'])
+
+        try:
+            import pandas as pd
+        except ModuleNotFoundError:
+            print('pandas module required')
+
+        df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
+
+        if to_csv:
+            path = 'ctasks_df.csv'
+            df.to_csv(path)
+            print('Dataframe saved in {0}'.format(path))
+
+        return df
+
+    @property
+    def ttx(self):
+        df = self.profiles()
+        st = df['pullStartedAt'].min()
+        en = df['stoppedAt'].max()
+        ttx = en - st
+        return '{0} seconds'.format(ttx)
 
     # --------------------------------------------------------------------------
     #
@@ -439,30 +498,6 @@ class AwsCaas():
     def list_cluster(self):
         clusters = self._ecs_client.list_clusters()
         return clusters['clusterArns']
-
-
-    # --------------------------------------------------------------------------
-    #
-    def create_cluster(self, cluster_name):
-
-        clusters = self.list_cluster()
-        # FIXME: check for existing clusters, if multiple clusters with "hydraa"
-        #        froud, then ask the user which one to use.
-        if clusters:
-            print('checking for existing hydraa cluster')
-            if 'hydraa' in clusters[0]:
-                print('found: {0}'.format(cluster_name))
-                # FIXME: cluster name should be generated in this func
-                #        and not in the class __init__
-                self._cluster_name = clusters[0]
-                return clusters[0]
-            else:
-                print('not found: {0}')
-    
-        print('creating new cluster {0}'.format(cluster_name))
-        self._ecs_client.create_cluster(clusterName=cluster_name)
-        return cluster_name
-
 
 
     # --------------------------------------------------------------------------
@@ -615,5 +650,7 @@ class AwsCaas():
                 print("{0} deleted".format(self._cluster_name))
         else:
             print("no cluster(s) found/active")
+        
+        self.status = False
         
 

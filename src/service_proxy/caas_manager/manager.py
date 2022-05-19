@@ -12,9 +12,13 @@ class CaasManager(AwsCaas):
     ctask: container task
     """
 
+
     # --------------------------------------------------------------------------
     #
     def __init__(self, proxy_mgr):
+        
+        self._registered_managers = []
+
         if proxy:
             self._proxy = proxy_mgr
         
