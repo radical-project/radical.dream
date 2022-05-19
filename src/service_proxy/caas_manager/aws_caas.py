@@ -5,7 +5,7 @@ import uuid
 import boto3
 import pprint
 import base64
-
+from collections import OrderedDict
 from src.service_proxy.cost_manager.aws_cost import AwsCost
 """
 ~~~~~~~~~~~~~~~~
@@ -58,7 +58,7 @@ class AwsCaas():
         self._cluster_name = "cluster_{0}".format(__manager_id)
         self._service_name = "service_{0}".format(__manager_id)
         self._task_name    = None
-        self._task_ids     = []
+        self._task_ids     = OrderedDict()
 
         self._region_name  =  cred['region_name']
 
@@ -303,7 +303,9 @@ class AwsCaas():
         (ARN) of the cluster to run your task on. If you do
         not specify a cluster, the default cluster is assumed.
         """
-        kwargs = {}
+        task_id = 0 
+        tasks   = []
+        kwargs  = {}
         kwargs['count']           = 1
         kwargs['cluster']         = cluster_name
         kwargs['launchType']      = 'FARGATE'
@@ -316,16 +318,18 @@ class AwsCaas():
                                            'securityGroups'    : ["sg-0702f37d21c55da64"]}}
         for task in range(batch_size):
             response = self._ecs_client.run_task(**kwargs)
-            task_id  = response['tasks'][0]['taskArn']
-            self._task_ids.append(task_id)
+            task_arn = response['tasks'][0]['taskArn']
+            tasks.append(task_arn)
 
             if response['failures']:
                 raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
                                         for failure in response['failures']]))
             else:
                 print('submitting task {0}'.format(task_id))
+                task_id +=1
+                self._task_ids[str(task_id)] = str(task_arn)
 
-        return self._task_ids
+        return tasks
 
 
     # --------------------------------------------------------------------------
@@ -358,13 +362,14 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
+        tasks = [t for t in self._task_ids.keys()]
         while True:
             statuses = self._get_task_statuses(task_ids, cluster)
             if all([status == 'STOPPED' for status in statuses]):
-                print('ECS tasks {0} STOPPED'.format(','.join(task_ids)))
+                print('ECS tasks {0} STOPPED'.format(','.join(tasks)))
                 break
             time.sleep(WAIT_TIME)
-            print('ECS task status for tasks {0}: {1}'.format(task_ids, statuses))
+            print('ECS task status for tasks {0}: {1}'.format(tasks, statuses))
 
 
     # --------------------------------------------------------------------------
