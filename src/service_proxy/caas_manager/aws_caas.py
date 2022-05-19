@@ -5,6 +5,8 @@ import uuid
 import boto3
 import pprint
 import base64
+import datetime
+from dateutil.tz import tzlocal
 from collections import OrderedDict
 from src.service_proxy.cost_manager.aws_cost import AwsCost
 """
@@ -55,8 +57,8 @@ class AwsCaas():
         self._prc_client    = self._create_prc_client(cred)
         self._dydb_resource = self._create_dydb_resource(cred)
 
-        self._cluster_name = "cluster_{0}".format(__manager_id)
-        self._service_name = "service_{0}".format(__manager_id)
+        self._cluster_name = "hydraa_cluster_{0}".format(__manager_id)
+        self._service_name = "hydraa_service_{0}".format(__manager_id)
         self._task_name    = None
         self._task_ids     = OrderedDict()
 
@@ -66,8 +68,8 @@ class AwsCaas():
         #        can init the cost class otherwise we do not 
         #        need to do that.
         self.cost = AwsCost(self._prc_client, self._dydb_resource,
-                           self._cluster_name, self._service_name, 
-                                                self._region_name)
+                            self._cluster_name, self._service_name, 
+                                                 self._region_name)
 
 
     # --------------------------------------------------------------------------
@@ -303,15 +305,16 @@ class AwsCaas():
         (ARN) of the cluster to run your task on. If you do
         not specify a cluster, the default cluster is assumed.
         """
-        task_id = 0 
-        tasks   = []
-        kwargs  = {}
-        kwargs['count']           = 1
-        kwargs['cluster']         = cluster_name
-        kwargs['launchType']      = 'FARGATE'
-        kwargs['overrides']       = {}
-        kwargs['taskDefinition']  = task_def
-        kwargs['platformVersion'] = 'LATEST'
+        task_id    = 0 
+        kwargs     = {}
+        tasks_arns = []
+
+        kwargs['count']                = 1
+        kwargs['cluster']              = cluster_name
+        kwargs['launchType']           = 'FARGATE'
+        kwargs['overrides']            = {}
+        kwargs['taskDefinition']       = task_def
+        kwargs['platformVersion']      = 'LATEST'
         kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
                                                                   'subnet-094da8d73899da51c',],
                                            'assignPublicIp'    : 'ENABLED',
@@ -319,7 +322,7 @@ class AwsCaas():
         for task in range(batch_size):
             response = self._ecs_client.run_task(**kwargs)
             task_arn = response['tasks'][0]['taskArn']
-            tasks.append(task_arn)
+            tasks_arns.append(task_arn)
 
             if response['failures']:
                 raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
@@ -327,10 +330,42 @@ class AwsCaas():
             else:
                 print('submitting task {0}'.format(task_id))
                 task_id +=1
-                self._task_ids[str(task_id)] = str(task_arn)
+                self._task_ids[str(task_arn)] = str(task_id)
 
-        return tasks
+        return tasks_arns
 
+
+    # --------------------------------------------------------------------------
+    #
+    def _get_task_stamps(self, task_ids, cluster):
+        
+        task_stamps = OrderedDict()
+        task_arns   = [arn for arn in task_ids.keys()]
+        response    = self._ecs_client.describe_tasks(tasks=task_arns,
+                                                      cluster=cluster)
+
+        for task in response['tasks']:
+            arn = task['taskArn']
+            tid = task_ids[arn]
+
+            task_stamps[tid] = OrderedDict()
+            task_stamps[tid]['pullStartedAt'] = int(task['pullStartedAt'].strftime("%s"))
+            task_stamps[tid]['pullStoppedAt'] = int(task['pullStoppedAt'].strftime("%s"))
+            task_stamps[tid]['startedAt']     = int(task['startedAt'].strftime("%s"))
+            task_stamps[tid]['stoppedAt']     = int(task['stoppedAt'].strftime("%s"))
+            task_stamps[tid]['stoppingAt']    = int(task['stoppingAt'].strftime("%s"))
+        
+
+        return task_stamps
+
+
+    # --------------------------------------------------------------------------
+    #
+    def task_run_time(self):
+
+        task_stamps = self._get_task_stamps(self._task_ids, self._cluster_name)
+        for key, val in task_stamps.items():
+            print (key, val['stoppedAt'] - val['pullStartedAt'])
 
     # --------------------------------------------------------------------------
     #
@@ -362,7 +397,7 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
-        tasks = [t for t in self._task_ids.keys()]
+        tasks = [t for t in self._task_ids.values()]
         while True:
             statuses = self._get_task_statuses(task_ids, cluster)
             if all([status == 'STOPPED' for status in statuses]):
@@ -374,7 +409,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def kill_task(self, cluster_name, task_id, reason):
+    def stop_ctask(self, cluster_name, task_id, reason):
         """
         we identify 3 reasons to stop task:
         1- USER_CANCELED : user requested to kill the task
@@ -382,9 +417,10 @@ class AwsCaas():
         3- COST_CANCELED : Task must be kill due to exceeding cost
                            limit (set by user)
         """
+        task_arn = self.task_ids[task_id]
 
         response = self._ecs_client.stop_task(cluster = cluster_name,
-                                              task    = task_id,
+                                              task    = task_arn,
                                               reason  = reason)
 
         return response
@@ -410,16 +446,23 @@ class AwsCaas():
     def create_cluster(self, cluster_name):
 
         clusters = self.list_cluster()
-
+        # FIXME: check for existing clusters, if multiple clusters with "hydraa"
+        #        froud, then ask the user which one to use.
         if clusters:
-            if cluster_name in clusters[0]:
-                print('cluster {0} already exist'.format(cluster_name))
-                return cluster_name
-        
-        print("no existing cluster found, creating....")
+            print('checking for existing hydraa cluster')
+            if 'hydraa' in clusters[0]:
+                print('found: {0}'.format(cluster_name))
+                # FIXME: cluster name should be generated in this func
+                #        and not in the class __init__
+                self._cluster_name = clusters[0]
+                return clusters[0]
+            else:
+                print('not found: {0}')
+    
+        print('creating new cluster {0}'.format(cluster_name))
         self._ecs_client.create_cluster(clusterName=cluster_name)
-
         return cluster_name
+
 
 
     # --------------------------------------------------------------------------
@@ -566,10 +609,10 @@ class AwsCaas():
         if clusters:
             if not self._cluster_name in clusters[0]:
                 print('cluster {0} does not exist'.format(self._cluster_name))
-            else:
-                print('cluster {0} found'.format(self._cluster_name))
+            elif 'hydraa' in clusters[0]:
+                print('hydraa cluster {0} found'.format(self._cluster_name))
                 response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
-                print("cluster {0} deleted".format(self._cluster_name))
+                print("{0} deleted".format(self._cluster_name))
         else:
             print("no cluster(s) found/active")
         
