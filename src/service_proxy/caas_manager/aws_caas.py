@@ -9,19 +9,7 @@ import datetime
 from dateutil.tz import tzlocal
 from collections import OrderedDict
 from src.service_proxy.cost_manager.aws_cost import AwsCost
-"""
-~~~~~~~~~~~~~~~~
 
-A simple script that demonstrates how the docker and AWS Python clients
-can be used to automate the process of: building a Docker image, as
-defined by the Dockerfile in the project's root directory; pushing the
-image to AWS's Elastic Container Registry (ECR); and, then forcing a
-redeployment of a AWS Elastic Container Service (ECS) that uses the
-image to host the service. 
-
-For now, it is assumed that the AWS infrastructure is already in
-existence and that Docker is running on the host machine.
-"""
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 ACTIVE            = True
@@ -38,9 +26,9 @@ class AwsCaas():
 
     def __init__(self, cred):
 
-        __manager_id = str(uuid.uuid4())
+        self.manager_id = str(uuid.uuid4())
 
-        self.status = ACTIVE
+        self.status = False
         
         self._ecs_client    = self._create_ecs_client(cred)
         self._ec2_client    = self._create_ec2_client(cred)
@@ -48,19 +36,12 @@ class AwsCaas():
         self._prc_client    = self._create_prc_client(cred)
         self._dydb_resource = self._create_dydb_resource(cred)
 
-        self._cluster_name = "hydraa_cluster_{0}".format(__manager_id)
-        self._service_name = "hydraa_service_{0}".format(__manager_id)
+        self._cluster_name = None
+        self._service_name = None
         self._task_name    = None
         self._task_ids     = OrderedDict()
 
         self._region_name  =  cred['region_name']
-
-        # FIXME: If budget mode is enabled by the user then we
-        #        can **__init__ the cost class otherwise we do
-        #        not need to do that.
-        self.cost = AwsCost(self._prc_client, self._dydb_resource,
-                            self._cluster_name, self._service_name, 
-                                                 self._region_name)
 
 
     # --------------------------------------------------------------------------
@@ -68,6 +49,19 @@ class AwsCaas():
     @property
     def is_active(self):
         return self.status
+
+
+    # --------------------------------------------------------------------------
+    #
+    def __cost(self):
+        # FIXME: If budget mode is enabled by the user then we
+        #        can enable cost class otherwise we do
+        #        not need to do that.
+        self.cost = AwsCost(self._prc_client, self._dydb_resource,
+                            self._cluster_name, self._service_name,
+                                                 self._region_name)
+        
+        return self.cost
 
         
     # --------------------------------------------------------------------------
@@ -87,10 +81,12 @@ class AwsCaas():
         #
         # TODO: Ask the user if they want to continue to the 
         #       execution based on the cost.
-
+        
+        self.status = ACTIVE
+        
         submit_start = time.time()
         
-        cluster = self.create_cluster(self._cluster_name)
+        cluster = self.create_cluster()
 
         container_def = self.create_container_def()
 
@@ -112,10 +108,14 @@ class AwsCaas():
 
         # TODO: if the user is asking for > 2000 tasks we should do:
         #       1- Create new cluster and submit to it
-        #       2- Or break and ask the user to use AWSbatch 
+        #       2- Or break and ask the user to use AWSbatch
+        #
+        #       tasks_per_cluster = ceil(batch_size / TASKS_PER_CLUSTER)
 
-        if batch_size <= TASKS_PER_CLUSTER:
-            tasks = self.run_ctask(batch_size, task_def_arn, cluster)
+        if batch_size > TASKS_PER_CLUSTER:
+            raise Exception ('can not submit ({0}>{1}) tasks per cluster'.format(batch_size, TASKS_PER_CLUSTER))
+
+        tasks = self.run_ctask(batch_size, task_def_arn, cluster)
 
         # 8-Wait on task completion
         self._wait_tasks(tasks, cluster)
@@ -203,27 +203,30 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_cluster(self, cluster_name):
+    def create_cluster(self):
         """Create a HYDRAA cluster or check for existing one
            
            :param : cluster_name: string name to create with or look for
            :return: the name of the created or found cluster
         """
-
         clusters = self.list_cluster()
         # FIXME: check for existing clusters, if multiple clusters with "hydraa"
-        #        froud, then ask the user which one to use.
+        #        found, then ask the user which one to use.
         if clusters:
             print('checking for existing hydraa cluster')
+            
             if 'hydraa' in clusters[0]:
-                print('found: {0}'.format(cluster_name))
-                # FIXME: cluster name should be generated in this method
-                #        and not in the class __init__
+                print('hydraa cluster found: {0}'.format(clusters[0]))
                 self._cluster_name = clusters[0]
                 return clusters[0]
             else:
-                print('not found: {0}')
-    
+                print('not hydraa cluster found: {0}')
+        
+        else:
+            print('no cluster in this account')
+
+        cluster_name = "hydraa_cluster_{0}".format(self.manager_id)
+
         print('creating new cluster {0}'.format(cluster_name))
         self._ecs_client.create_cluster(clusterName=cluster_name)
         return cluster_name
@@ -307,7 +310,10 @@ class AwsCaas():
 
            :return: response of created ECS service
         """
+        # FIXME: check for exisitng hydraa services specifically.
 
+        self._service_name = "hydraa_service_{0}".format(self.manager_id)
+        
         # Check if the service already exist and use it
         running_services = self._ecs_client.list_services(cluster = self._cluster_name)
 
@@ -327,7 +333,7 @@ class AwsCaas():
                                                                           'subnets': ['subnet-094da8d73899da51c',],
                                                                           'assignPublicIp': 'ENABLED',
                                                                           'securityGroups': ["sg-0702f37d21c55da64"]}},
-                                                   #clientToken='request_identifier_string',
+                                                   # clientToken='request_identifier_string',
                                                    deploymentConfiguration={'maximumPercent': 200,
                                                                             'minimumHealthyPercent': 50})
         
@@ -430,7 +436,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def profiles(self, to_csv=False):
+    def profiles(self):
 
         task_stamps = self._get_task_stamps(self._task_ids, self._cluster_name)
 
@@ -441,10 +447,9 @@ class AwsCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        if to_csv:
-            path = 'ctasks_df.csv'
-            df.to_csv(path)
-            print('Dataframe saved in {0}'.format(path))
+        fname = 'ctasks_df_{0}.csv'.format(self.manager_id)
+        df.to_csv(fname)
+        print('Dataframe saved in {0}'.format(fname))
 
         return df
 
@@ -572,6 +577,10 @@ class AwsCaas():
         """
         cmd = ''
         instance_id = None
+
+        # FIXME: check for exisitng hydraa services specifically.
+
+        self._service_name = "hydraa_service_{0}".format(self.manager_id)
         
         # check if we have an already running instance
         reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
@@ -627,7 +636,12 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _shutdown(self):
-        # shut everything down and delete task/service/instance/cluster
+        """Shut everything down and delete task/service/instance/cluster"""
+
+        if not self._cluster_name and self.status == False:
+            print('can not call shutdown on a non-active manager')
+            return
+
         try:
             print("Shutting down.....")
             # set desired service count to 0 (obligatory to delete)
