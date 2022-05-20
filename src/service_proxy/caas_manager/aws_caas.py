@@ -31,26 +31,13 @@ TASKS_PER_CLUSTER = 2000
 # --------------------------------------------------------------------------
 #
 class AwsCaas():
+    """Represents a collection of clusters (resources) with a collection of
+       services, tasks and instances.:
+       :param cred: AWS credentials (access key, secert key, region)
+    """
 
-    # --------------------------------------------------------------------------
-    #
     def __init__(self, cred):
-        """
-        The components of AWS ECS form the following hierarchy:
 
-        1-Cluster: A cluster is a logical grouping of tasks or services
-
-        2-Task Definition: The task definition is a text file, in JSON 
-                            format, that describes one or more containers,
-                            up to a maximum of ten, that form your application.
-                            It can be thought of as a blueprint for your application.
-
-        3-Service: allows you to run and maintain a specified number of instances of
-                   a task definition simultaneously in an AWS ECS cluster
-
-        4-Task: is the instantiation of a task definition within a cluster
-        """
-        __aws_cost   = None
         __manager_id = str(uuid.uuid4())
 
         self.status = ACTIVE
@@ -69,8 +56,8 @@ class AwsCaas():
         self._region_name  =  cred['region_name']
 
         # FIXME: If budget mode is enabled by the user then we
-        #        can init the cost class otherwise we do not 
-        #        need to do that.
+        #        can **__init__ the cost class otherwise we do
+        #        not need to do that.
         self.cost = AwsCost(self._prc_client, self._dydb_resource,
                             self._cluster_name, self._service_name, 
                                                  self._region_name)
@@ -87,49 +74,46 @@ class AwsCaas():
     #
     def run(self, batch_size=1, container_path=None):
         """
-        Build Docker image, push to AWS and update ECS service.
+        Create a cluster, container, task defination with user requirements.
+        and run them via **run_task
+
+        :param: batch_size: number of identical tasks that runs within the
+                same cluster on with the same resource requirements.
+        :param: container_path: if provided then upload that container to
+                S3 storage for execution. 
         """
-        # The user will provide the task , mem and cpu once they do that
-        # a fucntion [here] should calculate the cost
+        # TODO: User should provide the task , mem and cpu once they do that.
+        # TODO: CaasManager should operates within a budget.
         #
-        # 1-check the avilable budget
-        #    avilabel_budget = self.get_user_budget()
-        # 2- calculate the cost of executing this container
-        #    cost = self._calculate_container_cost(time, cpu, mem)
-        # 3- ask the user if he/she wants to continue or not:
-        #    value = input("Executing container will cost {0} out of your budget {1} press enter to continue:\n")
-        #    print(f'You entered {value}')
-        #
-        # FIXME: ask the user if they want to continue to the 
-        #        execution based on the cost
+        # TODO: Ask the user if they want to continue to the 
+        #       execution based on the cost.
 
         submit_start = time.time()
-        # 2-Create a cluster (this should be done once)
+        
         cluster = self.create_cluster(self._cluster_name)
 
-        # 3-Create Container definition
         container_def = self.create_container_def()
 
-        # 4-Create a task definition
         task_name, task_def_arn = self.create_task_def(container_def)
-        
-        # 5-create a service
-        # this should not be done unless we need to resbumit the task forever
-        #_ = self.create_ecs_service()
 
-        # 6-create ec2 instance or
-        # this requires to link the EC2 instance with ECS
-        # so far it is failing, alternatively we are using
-        # FARGATE
-        #self.create_ec2_instance(cluster)
+        # FIXME: Enabling the service should be specified by the user
+        # self.create_ecs_service()
+
+
+        # FIXME: this requires to link the EC2 instance with ECS
+        #        so far it is failing, alternatively we are using
+        #        Fargate
+        # self.create_ec2_instance(cluster)
+
         submit_stop = time.time()
 
         print('Submit time: {0}'.format(submit_stop - submit_start))
 
-        # 7-Start set of tasks (AWS allows only 200 tasks per cluster)
+
         # TODO: if the user is asking for > 2000 tasks we should do:
         #       1- Create new cluster and submit to it
-        #       2- or break and ask the user to use AWSbatch 
+        #       2- Or break and ask the user to use AWSbatch 
+
         if batch_size <= TASKS_PER_CLUSTER:
             tasks = self.run_ctask(batch_size, task_def_arn, cluster)
 
@@ -144,6 +128,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _create_dydb_resource(self, cred):
+        """a wrapper around create dynamo db client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
         dydb_client = boto3.resource('dynamodb', aws_access_key_id     = cred['aws_access_key_id'],
                                                  aws_secret_access_key = cred['aws_secret_access_key'],
                                                  region_name           = cred['region_name'])
@@ -155,6 +143,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _create_prc_client(self, cred):
+        """a wrapper around create price client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
         prc_client = boto3.client('pricing', aws_access_key_id     = cred['aws_access_key_id'],
                                              aws_secret_access_key = cred['aws_secret_access_key'],
                                              region_name           = cred['region_name'])
@@ -167,6 +159,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _create_ec2_client(self, cred):
+        """a wrapper around create EC2 client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
         ec2_client = boto3.client('ec2', aws_access_key_id     = cred['aws_access_key_id'],
                                            aws_secret_access_key = cred['aws_secret_access_key'],
                                            region_name           = cred['region_name'])
@@ -179,6 +175,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _create_ecs_client(self, cred):
+        """a wrapper around create ECS client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
         ecs_client = boto3.client('ecs', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
@@ -189,6 +189,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _create_iam_client(self, cred):
+        """a wrapper around create IAM client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
         iam_client = boto3.client('iam', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
@@ -200,6 +204,11 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def create_cluster(self, cluster_name):
+        """Create a HYDRAA cluster or check for existing one
+           
+           :param : cluster_name: string name to create with or look for
+           :return: the name of the created or found cluster
+        """
 
         clusters = self.list_cluster()
         # FIXME: check for existing clusters, if multiple clusters with "hydraa"
@@ -208,7 +217,7 @@ class AwsCaas():
             print('checking for existing hydraa cluster')
             if 'hydraa' in clusters[0]:
                 print('found: {0}'.format(cluster_name))
-                # FIXME: cluster name should be generated in this func
+                # FIXME: cluster name should be generated in this method
                 #        and not in the class __init__
                 self._cluster_name = clusters[0]
                 return clusters[0]
@@ -224,6 +233,15 @@ class AwsCaas():
     #
     def create_container_def(self, name ='hello_world_container', image='ubuntu',
                                                                   cpu=1, memory=1024):
+        """ Build the internal structure of the container defination.
+            
+            :param: name   : container name
+            :param: image  : image name to pull or upload
+            :param: cpu    : number of cores to assign for this container
+            :param: memory : amount of memory to assign for this container
+
+            :return: container defination
+        """
         con_def = {'name'        : name,
                    'cpu'         : cpu,
                    'memory'      : memory,
@@ -247,12 +265,15 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def create_task_def(self, container_def):
-        """
-        create a container defination
+        """Build the internal structure of the task defination.
+
+           :param: container_def: a dictionary of a container specifications.
+
+           :return: task defination name and task ARN (Amazon Resource Names)
         """
         # FIXME: This a registering with minimal definition,
         #        user should specifiy how much per task (cpu/mem)
-        task_def = {'family' :  'hello_world',
+        task_def = {'family' : 'hello_world',
                     'volumes': [],
                     'cpu'    : '256',
                     'memory' : '1024', # this should be greate or equal to container def memory
@@ -277,11 +298,14 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def create_ecs_service(self):
-        """
-        Create service with exactly 1 desired instance of the task
-        Info: Amazon ECS allows you to run and maintain a specified number
-        (the "desired count") of instances of a task definition
-        simultaneously in an ECS cluster.
+        """Create service with exactly 1 desired instance of the task
+           Info: Amazon ECS allows you to run and maintain a specified
+           number (the "desired count") of instances of a task definition
+           simultaneously in an ECS cluster.
+
+           :param: None
+
+           :return: response of created ECS service
         """
 
         # Check if the service already exist and use it
@@ -310,17 +334,22 @@ class AwsCaas():
 
         
         print('service {0} created'.format(self._service_name))
+        
         return response
 
 
     # --------------------------------------------------------------------------
     #
     def start_ctask(self, task_def, cluster_name):
-        """
-        Starts a new task from the specified task definition on the
-        specified container instance or instances. StartTask uses/assumes
-        that you have your own scheduler to place tasks manually on specific
-        container instances.
+        """Starts a new container task (ctask) from the specified task definition
+           on the specified container instance or instances. StartTask uses/assumes
+           that you have your own scheduler to place tasks manually on specific
+           container instances.
+
+           :param: task_def    : a dictionary of a task defination specifications.
+           :param: cluster_name: cluster name to operate within
+
+           :return: None
         """
 
         containers   = self._ecs_client.list_container_instances(cluster=cluster_name)
@@ -335,13 +364,15 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def run_ctask(self, batch_size, task_def, cluster_name):
-        """
-        Starts a new task using the specified task definition. In this
-        mode AWS scheduler will handle the task placement.
+        """Starts a new ctask using the specified task definition. In this
+           mode AWS scheduler will handle the task placement.
 
-        cluster: The short name or full Amazon Resource Name
-        (ARN) of the cluster to run your task on. If you do
-        not specify a cluster, the default cluster is assumed.
+           :param: batch_size  : number of tasks to submit to the cluster.
+           :param: task_def    : a dictionary of a task defination specifications.
+           :param: cluster_name: cluster name to operate within.
+
+           :return: submited ctasks ARNs
+
         """
         task_id    = 0 
         kwargs     = {}
@@ -393,7 +424,6 @@ class AwsCaas():
             task_stamps[tid]['startedAt']     = int(task['startedAt'].strftime("%s"))
             task_stamps[tid]['stoppedAt']     = int(task['stoppedAt'].strftime("%s"))
             task_stamps[tid]['stoppingAt']    = int(task['stoppingAt'].strftime("%s"))
-        
 
         return task_stamps
 
@@ -407,7 +437,7 @@ class AwsCaas():
         try:
             import pandas as pd
         except ModuleNotFoundError:
-            print('pandas module required')
+            print('pandas module required to obtain profiles')
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
@@ -418,6 +448,9 @@ class AwsCaas():
 
         return df
 
+
+    # --------------------------------------------------------------------------
+    #
     @property
     def ttx(self):
         df = self.profiles()
@@ -425,6 +458,7 @@ class AwsCaas():
         en = df['stoppedAt'].max()
         ttx = en - st
         return '{0} seconds'.format(ttx)
+
 
     # --------------------------------------------------------------------------
     #
