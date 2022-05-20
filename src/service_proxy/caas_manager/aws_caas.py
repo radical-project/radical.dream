@@ -14,7 +14,7 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 ACTIVE            = True
 WAIT_TIME         = 2
-TASKS_PER_CLUSTER = 2000
+TASKS_PER_CLUSTER = 1000
 
 # --------------------------------------------------------------------------
 #
@@ -81,6 +81,15 @@ class AwsCaas():
         #
         # TODO: Ask the user if they want to continue to the 
         #       execution based on the cost.
+
+        # TODO: if the user is asking for > 2000 tasks we should do:
+        #       1- Create new cluster and submit to it
+        #       2- Or break and ask the user to use AWSbatch
+        #
+        #       tasks_per_cluster = ceil(batch_size / TASKS_PER_CLUSTER)
+
+        if batch_size > TASKS_PER_CLUSTER:
+            raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TASKS_PER_CLUSTER))
         
         self.status = ACTIVE
         
@@ -93,31 +102,27 @@ class AwsCaas():
         task_name, task_def_arn = self.create_task_def(container_def)
 
         # FIXME: Enabling the service should be specified by the user
+        #
         # self.create_ecs_service()
 
 
         # FIXME: this requires to link the EC2 instance with ECS
         #        so far it is failing, alternatively we are using
         #        Fargate
+        #
         # self.create_ec2_instance(cluster)
 
         submit_stop = time.time()
 
         print('Submit time: {0}'.format(submit_stop - submit_start))
 
-
-        # TODO: if the user is asking for > 2000 tasks we should do:
-        #       1- Create new cluster and submit to it
-        #       2- Or break and ask the user to use AWSbatch
-        #
-        #       tasks_per_cluster = ceil(batch_size / TASKS_PER_CLUSTER)
-
-        if batch_size > TASKS_PER_CLUSTER:
-            raise Exception ('can not submit ({0}>{1}) tasks per cluster'.format(batch_size, TASKS_PER_CLUSTER))
+        # NOTE: submitting more than 50 conccurent tasks might fail
+        #       due to user ECS/Fargate quota
+        # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
 
         tasks = self.run_ctask(batch_size, task_def_arn, cluster)
 
-        # 8-Wait on task completion
+        # wait on task completion
         self._wait_tasks(tasks, cluster)
 
         done_stop = time.time()
@@ -228,14 +233,17 @@ class AwsCaas():
         cluster_name = "hydraa_cluster_{0}".format(self.manager_id)
 
         print('creating new cluster {0}'.format(cluster_name))
+
         self._ecs_client.create_cluster(clusterName=cluster_name)
+        self._cluster_name = cluster_name
+
         return cluster_name
 
 
     # --------------------------------------------------------------------------
     #
     def create_container_def(self, name ='hello_world_container', image='ubuntu',
-                                                                  cpu=1, memory=1024):
+                                                                  cpu=1, memory=900):
         """ Build the internal structure of the container defination.
             
             :param: name   : container name
@@ -276,16 +284,18 @@ class AwsCaas():
         """
         # FIXME: This a registering with minimal definition,
         #        user should specifiy how much per task (cpu/mem)
-        task_def = {'family' : 'hello_world',
-                    'volumes': [],
-                    'cpu'    : '256',
-                    'memory' : '1024', # this should be greate or equal to container def memory
-                    'containerDefinitions'   : [container_def],
-                    'executionRoleArn'       : 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole',
-                    'networkMode'            : 'awsvpc',
-                    'requiresCompatibilities': ['FARGATE']}
+        task_def = {}
+
+        task_def['family']                  = 'hello_world'
+        task_def['volumes']                 = []
+        task_def['cpu']                     = '256'
+        task_def['memory']                  = '2048' # this should be greate or equal to container def memory
+        task_def['containerDefinitions']    = [container_def]
+        task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
+        task_def['networkMode']             = 'awsvpc'
+        task_def['requiresCompatibilities'] = ['FARGATE']
         
-        reg_task     = self._ecs_client.register_task_definition(**task_def)
+        reg_task = self._ecs_client.register_task_definition(**task_def)
         
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
@@ -404,9 +414,8 @@ class AwsCaas():
                                         for failure in response['failures']]))
             else:
                 self._task_ids[str(task_arn)] = 'ctask.{0}'.format(task_id)
-                print('submitting task {0}'.format(task_id))
+                print('submitting task: {0}/{1}'.format(task_id, batch_size), end = "\r")
                 task_id +=1
-                
 
         return tasks_arns
 
@@ -438,6 +447,12 @@ class AwsCaas():
     #
     def profiles(self):
 
+        fname = 'ctasks_df_{0}.csv'.format(self.manager_id)
+
+        if os.path.isfile(fname):
+            print('profiles already exist {0}'.format(fname))
+            return fname
+
         task_stamps = self._get_task_stamps(self._task_ids, self._cluster_name)
 
         try:
@@ -451,14 +466,20 @@ class AwsCaas():
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
 
-        return df
+        return fname
 
 
     # --------------------------------------------------------------------------
     #
     @property
     def ttx(self):
-        df = self.profiles()
+        fcsv = self.profiles()
+        try:
+            import pandas as pd
+        except ModuleNotFoundError:
+            print('pandas module required to obtain profiles')
+        
+        df = pd.read_csv(fcsv)
         st = df['pullStartedAt'].min()
         en = df['stoppedAt'].max()
         ttx = en - st
