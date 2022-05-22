@@ -59,17 +59,17 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def sync_execute_ctask(self, provider, batch_size, cpu, memory,
-                                               container_path=None):
+    def sync_execute_ctask(self, provider, launch_type, batch_size,
+                                 cpu, memory, container_path=None):
         """
         execute contianer and wait for it. Ideally when
         container_path is provided it means we need to 
         upload it to aws and use it.
         """
-        # TODO: pass a cTask description
+        # TODO: pass a ctask description
         #       via the user
         if provider == AWS:
-            self.run(batch_size)
+            self.run(launch_type, batch_size)
         
         if provider == AZURE:
             raise NotImplementedError
