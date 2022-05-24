@@ -85,6 +85,7 @@ class AwsCost:
             )
 
             ret_list = []
+            print(response)
             if 'PriceList' in response:
                 for iter in response['PriceList']:
                     ret_dict = {}
@@ -100,6 +101,7 @@ class AwsCost:
                     ret_dict['pricePerUnit'] = mydict_terms['priceDimensions'][list( mydict_terms['priceDimensions'].keys() )[0]]['pricePerUnit']
                     ret_list.append(ret_dict)
             
+            print(ret_list)
             ec2_cpu  = float( ret_list[0]['vcpu'] )
             ec2_mem  = float( re.findall("[+-]?\d+\.?\d*", ret_list[0]['memory'])[0] )
             ec2_cost = float( ret_list[0]['pricePerUnit']['USD'] )
@@ -254,7 +256,7 @@ class AwsCost:
 
     # --------------------------------------------------------------------------
     #
-    def cost_of_ec2task(region, cpu, memory, ostype, instanceType, runTime):
+    def cost_of_ec2task(self, region, cpu, memory, ostype, instanceType, runTime):
         """
         Get Cost in USD to run a ECS task where launchMode==EC2.
         The AWS Pricing API returns all costs in hours. runTime is in seconds.
@@ -265,7 +267,7 @@ class AwsCost:
         pricing_key = '_'.join(['ec2',region, instanceType, ostype]) 
         if pricing_key not in _PRICINGS:
             # Workaround for DUBLIN, Shared Tenancy and Linux
-            (ec2_cpu, ec2_mem, ec2_cost) = ec2_pricing(_REGRIONS[region], instanceType, 'Shared', 'Linux')
+            (ec2_cpu, ec2_mem, ec2_cost) = self.ec2_pricing(_REGRIONS[region], instanceType, 'Shared', 'Linux')
             _PRICINGS[pricing_key]={}
             _PRICINGS[pricing_key]['cpu']    = ec2_cpu   # Number of CPUs on the EC2 instance
             _PRICINGS[pricing_key]['memory'] = ec2_mem   # GiB of memory on the EC2 instance

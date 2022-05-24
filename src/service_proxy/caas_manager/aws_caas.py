@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import uuid
@@ -95,6 +96,10 @@ class AwsCaas():
         #
         # TODO: Ask the user if they want to continue to the 
         #       execution based on the cost.
+
+        # TODO: In our scheduling mechanism we need to consider:
+        #       memory, cpu and number of instances besides tasks
+        #       per task_def and task_defs per cluster
         
         self.status = ACTIVE
 
@@ -295,7 +300,7 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def create_container_def(self, name ='hello_world_container', image='ubuntu',
-                                                                  cpu=1, memory=10):
+                                                                  cpu=1, memory=7):
         """ Build the internal structure of the container defination.
             
             :param: name   : container name
@@ -502,15 +507,16 @@ class AwsCaas():
         response = self._ecs_client.run_task(**kwargs)
 
         if response['failures']:
-            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
-                                    for failure in response['failures']]))
+            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                                       failure['reason']) for failure in response['failures']]))
 
         for task in response['tasks']:
             task_arn = task['taskArn']
             self._tasks_arns.append(task_arn)
 
             self._task_ids[str(task_arn)] = 'ctask.{0}'.format(self._task_id)
-            print('submitting task: {0}/{1}'.format(self._task_id, batch_size-1))
+            print(('submitting tasks {0}/{1}').format(self._task_id, batch_size-1) + '\r',
+                                       sep='', end ='', file = sys.stdout , flush = False)
             self._task_id +=1
 
         return self._tasks_arns
@@ -530,11 +536,11 @@ class AwsCaas():
             tid = task_ids[arn]
 
             task_stamps[tid] = OrderedDict()
-            task_stamps[tid]['pullStartedAt'] = int(task['pullStartedAt'].strftime("%s"))
-            task_stamps[tid]['pullStoppedAt'] = int(task['pullStoppedAt'].strftime("%s"))
-            task_stamps[tid]['startedAt']     = int(task['startedAt'].strftime("%s"))
-            task_stamps[tid]['stoppedAt']     = int(task['stoppedAt'].strftime("%s"))
-            task_stamps[tid]['stoppingAt']    = int(task['stoppingAt'].strftime("%s"))
+            task_stamps[tid]['pullStartedAt'] = int(task.get('pullStartedAt', 0).strftime("%s"))
+            task_stamps[tid]['pullStoppedAt'] = int(task.get('pullStoppedAt', 0).strftime("%s"))
+            task_stamps[tid]['startedAt']     = int(task.get('startedAt', 0).strftime("%s"))
+            task_stamps[tid]['stoppedAt']     = int(task.get('stoppedAt', 0).strftime("%s"))
+            task_stamps[tid]['stoppingAt']    = int(task.get('stoppingAt', 0).strftime("%s"))
 
         return task_stamps
 
@@ -558,7 +564,8 @@ class AwsCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        fname = 'ctasks_df_{0}.csv'.format(self.manager_id)
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(self._launch_type, len(self._task_ids),
+                                                                       self.manager_id)
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
 
@@ -612,14 +619,23 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
+
+        UP = "\x1B[3A"
+        CLR = "\x1B[0K"
+        print("\n\n")
         tasks = [t for t in self._task_ids.values()]
         while True:
             statuses = self._get_task_statuses(task_ids, cluster)
+            pending = list(filter(lambda pending: pending == 'PENDING', statuses))
+            running = list(filter(lambda pending: pending == 'RUNNING', statuses))
+            stopped = list(filter(lambda pending: pending == 'STOPPED', statuses))
+            
             if all([status == 'STOPPED' for status in statuses]):
                 print('ECS tasks {0} STOPPED'.format(','.join(tasks)))
                 break
-            time.sleep(WAIT_TIME)
-            print('ECS task status for tasks {0}: {1}'.format(tasks, statuses))
+
+            print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
+                           len(pending), CLR, len(running), CLR, len(stopped), CLR))
 
 
     # --------------------------------------------------------------------------
@@ -745,7 +761,7 @@ class AwsCaas():
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
                     print('EC2 instance registered')
                     break
-                print('waiting for an EC2 instance to regiser')
+                print('waiting for instance {0} to regiser'.format(instance.id))
                 time.sleep(WAIT_TIME)
 
             return instance_id
@@ -813,12 +829,17 @@ class AwsCaas():
             print("service not found/not active")
 
         # de-Register all task definitions
-
-        for task_fam_key, task_fam_val in self._family_ids.items():
-            # De-register task definition(s)
-            print("deregistering task {0}".format(task_fam_val['ARN']))
-            deregister_response = self._ecs_client.deregister_task_definition(
-                taskDefinition=task_fam_val['ARN'])
+        if self._family_ids:
+            try:
+                for task_fam_key, task_fam_val in self._family_ids.items():
+                    # De-register task definition(s)
+                    print("deregistering task {0}".format(task_fam_val['ARN']))
+                    deregister_response = self._ecs_client.deregister_task_definition(
+                        taskDefinition=task_fam_val['ARN'])
+            except Exception as e:
+                raise e
+            finally:
+                self._family_ids.clear()
 
         # terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
