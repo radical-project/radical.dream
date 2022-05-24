@@ -17,9 +17,12 @@ ACTIVE            = True
 FARGATE           = 'FARGATE'
 WAIT_TIME         = 2
 
-TASK_DEFINATION_PER_EC2   = 500
-TASKS_PER_TASK_DEFINATION = 10
-TASKS_PER_FARGATE_CLUSTER = 1000
+CPTD = 10    # The max number of containers defs within a task def.
+TDPC = 500   # The max number of task defs per cluster.
+TPFC = 1000  # The max number of tasks per FARGATE cluster.
+CIPC = 5000  # Number of container instances per cluster.
+CSPA = 10000 # Number of clusters per account.
+
 
 # --------------------------------------------------------------------------
 #
@@ -45,9 +48,13 @@ class AwsCaas():
 
         self._cluster_name = None
         self._service_name = None
-        self._task_name    = None
-        self._task_ids     = OrderedDict()
 
+        self._task_id      = 0
+        self._task_ids     = OrderedDict()
+        self._family_ids   = OrderedDict()
+        self._tasks_arns   = []
+
+        self._launch_type  =  None
         self._region_name  =  cred['region_name']
 
 
@@ -88,14 +95,10 @@ class AwsCaas():
         #
         # TODO: Ask the user if they want to continue to the 
         #       execution based on the cost.
-
-        # TODO: if the user is asking for > 2000 tasks we should do:
-        #       1- Create new cluster and submit to it
-        #       2- Or break and ask the user to use AWSbatch
-        #
-        #       tasks_per_cluster = ceil(batch_size / TASKS_PER_CLUSTER)
         
         self.status = ACTIVE
+
+        self.launch_type = launch_type
         
         submit_start = time.time()
         
@@ -107,34 +110,28 @@ class AwsCaas():
 
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
-            task_name, task_def_arn = self.create_ec2_task_def(container_def)
+            tptd = self._schedule(batch_size)
+            for batch in tptd:
+                family_id, task_def_arn = self.create_ec2_task_def(container_def)
+                tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                self._family_ids[family_id]['batch_size'] = batch
 
         if launch_type == FARGATE:
-            if batch_size > TASKS_PER_FARGATE_CLUSTER:
-                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TASKS_PER_CLUSTER))
+            # NOTE: submitting more than 50 conccurent tasks might fail
+            #       due to user ECS/Fargate quota
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
+            if batch_size > TPFC:
+                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
 
             task_name, task_def_arn = self.create_fargate_task_def(container_def)
+            tasks = self.run_ctask(launch_type, batch_size, task_def_arn, cluster)
 
         # FIXME: Enabling the service should be specified by the user
         #
         # self.create_ecs_service()
 
-        submit_stop = time.time()
-
-        print('Submit time: {0}'.format(submit_stop - submit_start))
-
-        # NOTE: submitting more than 50 conccurent tasks might fail
-        #       due to user ECS/Fargate quota
-        # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
-
-        tasks = self.run_ctask(launch_type, batch_size, task_def_arn, cluster)
-
         # wait on task completion
-        self._wait_tasks(tasks, cluster)
-
-        done_stop = time.time()
-
-        print('Done time: {0}'.format(done_stop - submit_start))
+        self._wait_tasks(self._tasks_arns, cluster)
 
 
     # --------------------------------------------------------------------------
@@ -381,8 +378,10 @@ class AwsCaas():
             task_def['cpu'] = cpu # optional
         if memory:
             task_def['memory'] = memory    # optional
+        
+        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
-        task_def['family']                  = 'hello_world'
+        task_def['family']                  = family_id
         task_def['volumes']                 = []
         task_def['containerDefinitions']    = [container_def]
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
@@ -391,14 +390,14 @@ class AwsCaas():
         reg_task = self._ecs_client.register_task_definition(**task_def)
         
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
-
-        # FIXME: this should be a uniqe name that this class assigns
-        #        with the unique uuid
-        self._task_name = "hello_world"
         
-        print('task {0} is registered'.format(self._task_name))
+        print('task {0} is registered'.format(family_id))
 
-        return self._task_name, task_def_arn
+        # save the family id and its ARN
+        self._family_ids[family_id] = OrderedDict()
+        self._family_ids[family_id]['ARN'] =  task_def_arn
+
+        return family_id, task_def_arn
 
     
     # --------------------------------------------------------------------------
@@ -483,9 +482,7 @@ class AwsCaas():
            :return: submited ctasks ARNs
 
         """
-        task_id    = 0 
         kwargs     = {}
-        tasks_arns = []
 
         kwargs['count']                = batch_size
         kwargs['cluster']              = cluster_name
@@ -510,13 +507,13 @@ class AwsCaas():
 
         for task in response['tasks']:
             task_arn = task['taskArn']
-            tasks_arns.append(task_arn)
+            self._tasks_arns.append(task_arn)
 
-            self._task_ids[str(task_arn)] = 'ctask.{0}'.format(task_id)
-            print('submitting task: {0}/{1}'.format(task_id, batch_size-1))
-            task_id +=1
+            self._task_ids[str(task_arn)] = 'ctask.{0}'.format(self._task_id)
+            print('submitting task: {0}/{1}'.format(self._task_id, batch_size-1))
+            self._task_id +=1
 
-        return tasks_arns
+        return self._tasks_arns
 
 
     # --------------------------------------------------------------------------
@@ -647,8 +644,10 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def list_tasks(self, task_name):
+
+
         response = self._ecs_client.list_task_definitions(familyPrefix=task_name,
-                                                          status='ACTIVE')
+                                                                 status='ACTIVE')
         return response
 
 
@@ -754,6 +753,46 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
+    def _schedule(self, batch_size):
+
+        import math
+
+        tasks_per_task_def = []
+
+        task_defs = math.ceil(batch_size / CPTD)
+
+        if task_defs > TDPC:
+            raise ('scheduled task defination per ({0}) cluster > ({1})'.format(task_defs, TDPC))
+
+        # If we cannot split the
+        # number into exactly 'task_defs' parts
+        if(batch_size < task_defs):
+            print(-1)
+    
+        # If batch_size % task_defs == 0 then the minimum
+        # difference is 0 and all
+        # numbers are batch_size / task_defs
+        elif (batch_size % task_defs == 0):
+            for i in range(task_defs):
+                tasks_per_task_def.append(batch_size // task_defs)
+        else:
+            # upto task_defs-(batch_size % task_defs) the values
+            # will be batch_size / task_defs
+            # after that the values
+            # will be batch_size / task_defs + 1
+            zp = task_defs - (batch_size % task_defs)
+            pp = batch_size//task_defs
+            for i in range(task_defs):
+                if(i>= zp):
+                    tasks_per_task_def.append(pp + 1)
+                else:
+                    tasks_per_task_def.append(pp)
+        
+        return tasks_per_task_def
+
+
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
         """Shut everything down and delete task/service/instance/cluster"""
 
@@ -772,21 +811,14 @@ class AwsCaas():
                                                        service=self._service_name)
         except:
             print("service not found/not active")
-        
-        tasks = None
-        try:
-            # list all task definitions and revisions
-            tasks = self.list_tasks(self._task_name)
-        except:
-            print("tasks not found/not active")
 
         # de-Register all task definitions
-        if tasks:
-            for task_definition in tasks["taskDefinitionArns"]:
-                # De-register task definition(s)
-                print("deregistering task {0}".format(task_definition))
-                deregister_response = self._ecs_client.deregister_task_definition(
-                    taskDefinition=task_definition)
+
+        for task_fam_key, task_fam_val in self._family_ids.items():
+            # De-register task definition(s)
+            print("deregistering task {0}".format(task_fam_val['ARN']))
+            deregister_response = self._ecs_client.deregister_task_definition(
+                taskDefinition=task_fam_val['ARN'])
 
         # terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
