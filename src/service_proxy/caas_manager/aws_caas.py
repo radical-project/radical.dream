@@ -16,7 +16,10 @@ EC2               = 'EC2'
 ACTIVE            = True
 FARGATE           = 'FARGATE'
 WAIT_TIME         = 2
-TASKS_PER_CLUSTER = 1000
+
+TASK_DEFINATION_PER_EC2   = 500
+TASKS_PER_TASK_DEFINATION = 10
+TASKS_PER_FARGATE_CLUSTER = 1000
 
 # --------------------------------------------------------------------------
 #
@@ -91,9 +94,6 @@ class AwsCaas():
         #       2- Or break and ask the user to use AWSbatch
         #
         #       tasks_per_cluster = ceil(batch_size / TASKS_PER_CLUSTER)
-
-        if batch_size > TASKS_PER_CLUSTER:
-            raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TASKS_PER_CLUSTER))
         
         self.status = ACTIVE
         
@@ -108,27 +108,16 @@ class AwsCaas():
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
             task_name, task_def_arn = self.create_ec2_task_def(container_def)
+
         if launch_type == FARGATE:
+            if batch_size > TASKS_PER_FARGATE_CLUSTER:
+                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TASKS_PER_CLUSTER))
+
             task_name, task_def_arn = self.create_fargate_task_def(container_def)
 
         # FIXME: Enabling the service should be specified by the user
         #
         # self.create_ecs_service()
-
-
-        # FIXME: this requires to link the EC2 instance with ECS
-        #        so far it is failing, alternatively we are using
-        #        Fargate
-        #
-        # self.create_ec2_instance(cluster)
-
-        while True:
-            res = self._ecs_client.describe_clusters(clusters = [self._cluster_name])
-            if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
-                print('EC2 instance registered')
-                break
-            print('waiting for an EC2 instance to regiser')
-            time.sleep(WAIT_TIME)
 
         submit_stop = time.time()
 
@@ -309,7 +298,7 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def create_container_def(self, name ='hello_world_container', image='ubuntu',
-                                                                  cpu=1, memory=200):
+                                                                  cpu=1, memory=10):
         """ Build the internal structure of the container defination.
             
             :param: name   : container name
@@ -354,8 +343,8 @@ class AwsCaas():
 
         task_def['family']                  = 'hello_world'
         task_def['volumes']                 = []
-        task_def['cpu']                     = '256'
-        task_def['memory']                  = '2048' # this should be greate or equal to container def memory
+        task_def['cpu']                     = '256'  # required
+        task_def['memory']                  = '2048' # required
         task_def['containerDefinitions']    = [container_def]
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['networkMode']             = 'awsvpc'
@@ -376,21 +365,25 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_task_def(self, container_def):
+    def create_ec2_task_def(self, container_def, cpu = 0, memory = 0):
         """Build the internal structure of the task defination.
 
            :param: container_def: a dictionary of a container specifications.
 
+           :param: cpu: the number of CPU units used by the task.
+
+           :param: memory: the amount of memory (in MiB) used by the task.
+
            :return: task defination name and task ARN (Amazon Resource Names)
         """
-        # FIXME: This a registering with minimal definition,
-        #        user should specifiy how much per task (cpu/mem)
         task_def = {}
+        if cpu:
+            task_def['cpu'] = cpu # optional
+        if memory:
+            task_def['memory'] = memory    # optional
 
         task_def['family']                  = 'hello_world'
         task_def['volumes']                 = []
-        task_def['cpu']                     = '128'
-        task_def['memory']                  = '900'
         task_def['containerDefinitions']    = [container_def]
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['requiresCompatibilities'] = ['EC2']
@@ -494,7 +487,7 @@ class AwsCaas():
         kwargs     = {}
         tasks_arns = []
 
-        kwargs['count']                = 1
+        kwargs['count']                = batch_size
         kwargs['cluster']              = cluster_name
         kwargs['launchType']           = launch_type
         kwargs['overrides']            = {}
@@ -506,21 +499,22 @@ class AwsCaas():
             kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
                                                                       'subnet-094da8d73899da51c',],
                                               'assignPublicIp'     : 'ENABLED',
-                                              'securityGroups'     : ["sgr-035b80163ea840a9f"]}}
+                                              'securityGroups'     : ["sg-0702f37d21c55da64"]}}
                 
-        for task in range(batch_size):
-            response = self._ecs_client.run_task(**kwargs)
-            print(response)
-            task_arn = response['tasks'][0]['taskArn']
+        # submit tasks of size "batch_size"
+        response = self._ecs_client.run_task(**kwargs)
+
+        if response['failures']:
+            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
+                                    for failure in response['failures']]))
+
+        for task in response['tasks']:
+            task_arn = task['taskArn']
             tasks_arns.append(task_arn)
 
-            if response['failures']:
-                raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'], failure['reason'])
-                                        for failure in response['failures']]))
-            else:
-                self._task_ids[str(task_arn)] = 'ctask.{0}'.format(task_id)
-                print('submitting task: {0}/{1}'.format(task_id, batch_size), end = "\r")
-                task_id +=1
+            self._task_ids[str(task_arn)] = 'ctask.{0}'.format(task_id)
+            print('submitting task: {0}/{1}'.format(task_id, batch_size-1))
+            task_id +=1
 
         return tasks_arns
 
@@ -672,7 +666,6 @@ class AwsCaas():
         """
         response = self._ecs_client.describe_clusters(clusters=[cluster_name])
 
-        print("ECS cluster details: {0}".format(response))
         if len(response['clusters']) == 1:
             return (response['clusters'][0]['clusterArn'])
         else:
@@ -681,15 +674,8 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_instance(self, cluster_name):
+    def create_ec2_instance(self, cluster_name, InstanceType = None):
             """
-            By default, your container instance launches into your default cluster.
-            If you want to launch into your own cluster instead of the default,
-            choose the Advanced Details list and paste the following script
-            into the User data field, replacing your_cluster_name with the name of your cluster.
-            !/bin/bash
-            echo ECS_CLUSTER=your_cluster_name >> /etc/ecs/ecs.config
-
             ImageId: An AMI ID is required to launch an instance and must be
                     specified here or in a launch template.
 
@@ -721,14 +707,16 @@ class AwsCaas():
                 
                 return instance_id
             
-            print("no existing instance found")
-            ECS_Optimized_AMI    = 'ami-061c10a2cb32f3491'
-            command   = "#!/bin/bash \n echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config".format(cluster_name)
-            instances = self._ec2_resource.create_instances(ImageId=ECS_Optimized_AMI,
+            print("No existing EC2 instance found")
+            
+            command        = "#!/bin/bash \n echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config".format(cluster_name)
+            ecs_opt_ami    = 'ami-061c10a2cb32f3491'
+            instance_type  = "t2.micro"
+
+            instances = self._ec2_resource.create_instances(ImageId=ecs_opt_ami,
                                                             MinCount=1, 
                                                             MaxCount=1,
-                                                            InstanceType="t2.micro",
-                                                            #IamInstanceProfile={},
+                                                            InstanceType=instance_type,
                                                             TagSpecifications=[
                                                                             {
                                                                                 'ResourceType': 'instance',
@@ -743,16 +731,23 @@ class AwsCaas():
                                                             UserData= command)
 
             for instance in instances:
-                print(f'EC2 instance "{instance.id}" has been launched')
+                print(f'EC2 instance "{instance.id}" of type "{instance_type}" has been launched')
                 
                 instance.wait_until_running()
                 
                 self._ec2_client.associate_iam_instance_profile(IamInstanceProfile={"Arn" : 'arn:aws:iam::626113121967:instance-profile/ecsInstanceRole',},
                                                                 InstanceId=instance.id,)
 
-                print(f'EC2 Instance Profile has been attached')
-
                 print(f'EC2 instance "{instance.id}" has been started')
+
+            # wait for the instance to connect to the targeted cluster
+            while True:
+                res = self._ecs_client.describe_clusters(clusters = [self._cluster_name])
+                if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
+                    print('EC2 instance registered')
+                    break
+                print('waiting for an EC2 instance to regiser')
+                time.sleep(WAIT_TIME)
 
             return instance_id
 
@@ -801,10 +796,14 @@ class AwsCaas():
             containerInstances=instances["containerInstanceArns"])
 
             for ec2_instance in container_instance_resp["containerInstances"]:
-                print("terminating instance {0}".format(ec2_instance))
+                istance_id = ec2_instance['ec2InstanceId']
+                print("terminating instance {0}".format(istance_id))
                 ec2_termination_resp = self._ec2_client.terminate_instances(
                     DryRun=False,
-                    InstanceIds=[ec2_instance["ec2InstanceId"],])
+                    InstanceIds=[istance_id])
+                
+                waiter = self._ec2_client.get_waiter('instance_terminated')
+                waiter.wait(InstanceIds=[istance_id])
 
         # finally delete the cluster
         clusters = self.list_cluster()
@@ -814,9 +813,8 @@ class AwsCaas():
             if not self._cluster_name in clusters[0]:
                 print('cluster {0} does not exist'.format(self._cluster_name))
             elif 'hydraa' in clusters[0]:
-                print('hydraa cluster {0} found'.format(self._cluster_name))
                 response = self._ecs_client.delete_cluster(cluster=self._cluster_name)
-                print("{0} deleted".format(self._cluster_name))
+                print("hydraa cluster {0} found and deleted".format(self._cluster_name))
         else:
             print("no cluster(s) found/active")
         
