@@ -5,6 +5,7 @@ import time
 import uuid
 import boto3
 import pprint
+import atexit
 import base64
 
 from datetime import datetime
@@ -59,6 +60,7 @@ class AwsCaas():
         self.launch_type  =  None
         self._region_name =  cred['region_name']
 
+        atexit.register(self._shutdown)
 
     # --------------------------------------------------------------------------
     #
