@@ -6,7 +6,8 @@ import uuid
 import boto3
 import pprint
 import base64
-import datetime
+
+from datetime import datetime
 from dateutil.tz import tzlocal
 from collections import OrderedDict
 from src.service_proxy.cost_manager.aws_cost import AwsCost
@@ -55,8 +56,8 @@ class AwsCaas():
         self._family_ids   = OrderedDict()
         self._tasks_arns   = []
 
-        self._launch_type  =  None
-        self._region_name  =  cred['region_name']
+        self.launch_type  =  None
+        self._region_name =  cred['region_name']
 
 
     # --------------------------------------------------------------------------
@@ -102,34 +103,25 @@ class AwsCaas():
         #       per task_def and task_defs per cluster
         
         self.status = ACTIVE
-
         self.launch_type = launch_type
         
-        submit_start = time.time()
-        
         cluster = self.create_cluster()
-
         self._wait_clusters(cluster)
 
         container_def = self.create_container_def()
+        tptd = self._schedule(batch_size, launch_type)
+
+        if launch_type == FARGATE:
+            for batch in tptd:
+                family_id, task_def_arn = self.create_fargate_task_def(container_def, 256, 1024)
+                tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
 
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
-            tptd = self._schedule(batch_size)
             for batch in tptd:
                 family_id, task_def_arn = self.create_ec2_task_def(container_def)
                 tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
                 self._family_ids[family_id]['batch_size'] = batch
-
-        if launch_type == FARGATE:
-            # NOTE: submitting more than 50 conccurent tasks might fail
-            #       due to user ECS/Fargate quota
-            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
-            if batch_size > TPFC:
-                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
-
-            task_name, task_def_arn = self.create_fargate_task_def(container_def)
-            tasks = self.run_ctask(launch_type, batch_size, task_def_arn, cluster)
 
         # FIXME: Enabling the service should be specified by the user
         #
@@ -332,21 +324,23 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_fargate_task_def(self, container_def):
+    def create_fargate_task_def(self, container_def, cpu, memory):
         """Build the internal structure of the task defination.
 
            :param: container_def: a dictionary of a container specifications.
 
            :return: task defination name and task ARN (Amazon Resource Names)
         """
-        # FIXME: This a registering with minimal definition,
-        #        user should specifiy how much per task (cpu/mem)
         task_def = {}
+        if not cpu or not memory:
+            raise Exception('Fargate task must have a memory or cpu units specified')
 
-        task_def['family']                  = 'hello_world'
+        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
+
+        task_def['family']                  = family_id
         task_def['volumes']                 = []
-        task_def['cpu']                     = '256'  # required
-        task_def['memory']                  = '2048' # required
+        task_def['cpu']                     = str(cpu)    # required
+        task_def['memory']                  = str(memory) # required
         task_def['containerDefinitions']    = [container_def]
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['networkMode']             = 'awsvpc'
@@ -356,13 +350,13 @@ class AwsCaas():
         
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
-        # FIXME: this should be a uniqe name that this class assigns
-        #        with the unique uuid
-        self._task_name = "hello_world"
-        
-        print('task {0} is registered'.format(self._task_name))
+        print('task {0} is registered'.format(family_id))
 
-        return self._task_name, task_def_arn
+        # save the family id and its ARN
+        self._family_ids[family_id] = OrderedDict()
+        self._family_ids[family_id]['ARN'] =  task_def_arn
+
+        return family_id, task_def_arn
 
 
     # --------------------------------------------------------------------------
@@ -515,8 +509,8 @@ class AwsCaas():
             self._tasks_arns.append(task_arn)
 
             self._task_ids[str(task_arn)] = 'ctask.{0}'.format(self._task_id)
-            print(('submitting tasks {0}/{1}').format(self._task_id, batch_size-1) + '\r',
-                                       sep='', end ='', file = sys.stdout , flush = False)
+            print(('submitting tasks {0}/{1}').format(self._task_id, batch_size-1),
+                                                                          end='\r')
             self._task_id +=1
 
         return self._tasks_arns
@@ -525,6 +519,9 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _get_task_stamps(self, task_ids, cluster):
+        """Pull the timestamps for every task by its ARN and convert
+           them to a human readable.
+        """
         
         task_stamps = OrderedDict()
         task_arns   = [arn for arn in task_ids.keys()]
@@ -534,13 +531,16 @@ class AwsCaas():
         for task in response['tasks']:
             arn = task['taskArn']
             tid = task_ids[arn]
-
             task_stamps[tid] = OrderedDict()
-            task_stamps[tid]['pullStartedAt'] = int(task.get('pullStartedAt', 0).strftime("%s"))
-            task_stamps[tid]['pullStoppedAt'] = int(task.get('pullStoppedAt', 0).strftime("%s"))
-            task_stamps[tid]['startedAt']     = int(task.get('startedAt', 0).strftime("%s"))
-            task_stamps[tid]['stoppedAt']     = int(task.get('stoppedAt', 0).strftime("%s"))
-            task_stamps[tid]['stoppingAt']    = int(task.get('stoppingAt', 0).strftime("%s"))
+            try:
+                task_stamps[tid]['pullStartedAt'] = datetime.timestamp(task.get('pullStartedAt', 0.0))
+                task_stamps[tid]['pullStoppedAt'] = datetime.timestamp(task.get('pullStoppedAt', 0.0))
+                task_stamps[tid]['startedAt']     = datetime.timestamp(task.get('startedAt', 0.0))
+                task_stamps[tid]['stoppedAt']     = datetime.timestamp(task.get('stoppedAt', 0.0))
+                task_stamps[tid]['stoppingAt']    = datetime.timestamp(task.get('stoppingAt', 0.0))
+            
+            except TypeError:
+                pass
 
         return task_stamps
 
@@ -564,8 +564,8 @@ class AwsCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(self._launch_type, len(self._task_ids),
-                                                                       self.manager_id)
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(self.launch_type, len(self._task_ids),
+                                                                      self.manager_id)
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
 
@@ -702,7 +702,6 @@ class AwsCaas():
 
             UserData: accept any linux commnad (acts as a bootstraper for the instance)
             """
-            cmd = ''
             instance_id = None
 
             # FIXME: check for exisitng EC2 hydraa instances specifically.
@@ -728,22 +727,19 @@ class AwsCaas():
             ecs_opt_ami    = 'ami-061c10a2cb32f3491'
             instance_type  = "t2.micro"
 
-            instances = self._ec2_resource.create_instances(ImageId=ecs_opt_ami,
-                                                            MinCount=1, 
-                                                            MaxCount=1,
-                                                            InstanceType=instance_type,
-                                                            TagSpecifications=[
-                                                                            {
-                                                                                'ResourceType': 'instance',
-                                                                                'Tags': [
-                                                                                    {
-                                                                                        'Key': 'Name',
-                                                                                        'Value': 'my-ec2-instance'
-                                                                                    },
-                                                                                ]
-                                                                            },
-                                                                        ],
-                                                            UserData= command)
+            kwargs = {}
+            kwargs['ImageId']           = ecs_opt_ami
+            kwargs['MinCount']          = 1
+            kwargs['MaxCount']          = 1
+            kwargs['InstanceType']      = instance_type
+            kwargs['UserData']          = command
+            kwargs['TagSpecifications'] = [{'ResourceType'   : 'instance',
+                                            'Tags': [{'Key'  : 'Name',
+                                                      'Value': 'my-ec2-instance'}
+                                                       ]
+                                                       }]
+
+            instances = self._ec2_resource.create_instances(**kwargs)
 
             for instance in instances:
                 print(f'EC2 instance "{instance.id}" of type "{instance_type}" has been launched')
@@ -761,7 +757,7 @@ class AwsCaas():
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
                     print('EC2 instance registered')
                     break
-                print('waiting for instance {0} to regiser'.format(instance.id))
+                print('waiting for instance {0} to register'.format(instance.id))
                 time.sleep(WAIT_TIME)
 
             return instance_id
@@ -769,9 +765,16 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _schedule(self, batch_size):
+    def _schedule(self, batch_size, launch_type):
 
         import math
+
+        if launch_type == FARGATE:
+            # NOTE: submitting more than 50 conccurent tasks might fail
+            #       due to user ECS/Fargate quota
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
+            if batch_size > TPFC:
+                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
 
         tasks_per_task_def = []
 
@@ -809,6 +812,39 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
+    def __cleanup(self):
+
+        caller = sys._getframe().f_back.f_code.co_name
+        if caller != '_shutdown':
+            raise Exception('can not perform cleanup')
+
+        self.manager_id = None
+
+        self.status = False
+
+        self._ecs_client    = None
+        self._ec2_client    = None
+        self._iam_client    = None
+        self._prc_client    = None
+
+        self._ec2_resource  = None
+        self._dydb_resource = None
+
+        self._cluster_name = None
+        self._service_name = None
+
+        self._task_ids.clear()
+        self._family_ids.clear()
+        self._tasks_arns.clear()
+
+        self.launch_type  =  None
+        self._region_name =  None
+
+        print('done')
+        
+
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
         """Shut everything down and delete task/service/instance/cluster"""
 
@@ -830,16 +866,11 @@ class AwsCaas():
 
         # de-Register all task definitions
         if self._family_ids:
-            try:
-                for task_fam_key, task_fam_val in self._family_ids.items():
-                    # De-register task definition(s)
-                    print("deregistering task {0}".format(task_fam_val['ARN']))
-                    deregister_response = self._ecs_client.deregister_task_definition(
-                        taskDefinition=task_fam_val['ARN'])
-            except Exception as e:
-                raise e
-            finally:
-                self._family_ids.clear()
+            for task_fam_key, task_fam_val in self._family_ids.items():
+                # De-register task definition(s)
+                print("deregistering task {0}".format(task_fam_val['ARN']))
+                deregister_response = self._ecs_client.deregister_task_definition(
+                    taskDefinition=task_fam_val['ARN'])
 
         # terminate virtual machine(s)
         instances = self._ecs_client.list_container_instances(cluster=self._cluster_name)
@@ -871,6 +902,6 @@ class AwsCaas():
         else:
             print("no cluster(s) found/active")
         
-        self.status = False
+        self.__cleanup()
         
 
