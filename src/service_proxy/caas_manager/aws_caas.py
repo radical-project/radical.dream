@@ -33,13 +33,20 @@ class AwsCaas():
     """Represents a collection of clusters (resources) with a collection of
        services, tasks and instances.:
        :param cred: AWS credentials (access key, secert key, region)
+
+       :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, cred):
+    def __init__(self, cred, DryRun=False):
 
         self.manager_id = str(uuid.uuid4())
 
         self.status = False
+        
+        # TODO: enable DryRun by the user to
+        #       verify permissions before starting
+        #       the actual run.
+        self.DryRun = DryRun
         
         self._ecs_client    = self._create_ecs_client(cred)
         self._ec2_client    = self._create_ec2_client(cred)
@@ -71,15 +78,13 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def __cost(self):
+    def cost(self) -> AwsCost:
         # FIXME: If budget mode is enabled by the user then we
         #        can enable cost class otherwise we do
-        #        not need to do that.
-        self.cost = AwsCost(self._prc_client, self._dydb_resource,
-                            self._cluster_name, self._service_name,
-                                                 self._region_name)
-        
-        return self.cost
+        #        not need to do that.        
+        return AwsCost(self._prc_client, self._dydb_resource,
+                      self._cluster_name, self._service_name,
+                                           self._region_name)
 
         
     # --------------------------------------------------------------------------
@@ -89,10 +94,13 @@ class AwsCaas():
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
 
-        :param: batch_size: number of identical tasks that runs within the
-                same cluster on with the same resource requirements.
-        :param: container_path: if provided then upload that container to
-                S3 storage for execution. 
+        :param: batch_size: int 
+                         number of identical tasks that runs within the
+                         same cluster on with the same resource requirements.
+
+        :param: container_path: str
+                         if provided then upload that container to
+                         S3 storage for execution. 
         """
         # TODO: User should provide the task , mem and cpu once they do that.
         # TODO: CaasManager should operates within a budget.
@@ -293,8 +301,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_container_def(self, name ='hello_world_container', image='ubuntu',
-                                                                  cpu=1, memory=7):
+    def create_container_def(self, image='ubuntu', cpu=1, memory=7):
         """ Build the internal structure of the container defination.
             
             :param: name   : container name
@@ -304,7 +311,7 @@ class AwsCaas():
 
             :return: container defination
         """
-        con_def = {'name'        : name,
+        con_def = {'name'        : 'noop',
                    'cpu'         : cpu,
                    'memory'      : memory,
                    'portMappings': [],
@@ -771,6 +778,9 @@ class AwsCaas():
 
         import math
 
+        if not batch_size:
+            raise Exception('Batch size can not be 0')
+
         if launch_type == FARGATE:
             # NOTE: submitting more than 50 conccurent tasks might fail
             #       due to user ECS/Fargate quota
@@ -851,7 +861,6 @@ class AwsCaas():
         """Shut everything down and delete task/service/instance/cluster"""
 
         if not self._cluster_name and self.status == False:
-            print('can not call shutdown on a non-active manager')
             return
 
         try:
