@@ -67,6 +67,9 @@ class AwsCaas():
         self.launch_type  =  None
         self._region_name =  cred['region_name']
 
+        self.budget       = 0
+        self.run_cost     = 0
+
         atexit.register(self._shutdown)
 
     # --------------------------------------------------------------------------
@@ -78,18 +81,14 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def cost(self) -> AwsCost:
-        # FIXME: If budget mode is enabled by the user then we
-        #        can enable cost class otherwise we do
-        #        not need to do that.        
-        return AwsCost(self._prc_client, self._dydb_resource,
-                      self._cluster_name, self._service_name,
-                                           self._region_name)
+    def budget(self) -> AwsCost:      
+        return AwsCost(self._prc_client, self._dydb_resource, self._region_name)
 
         
     # --------------------------------------------------------------------------
     #
-    def run(self, launch_type, batch_size=1, container_path=None):
+    def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
+                                          time=0, container_path=None):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
@@ -105,16 +104,35 @@ class AwsCaas():
         # TODO: User should provide the task , mem and cpu once they do that.
         # TODO: CaasManager should operates within a budget.
         #
-        # TODO: Ask the user if they want to continue to the 
-        #       execution based on the cost.
 
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
         #       per task_def and task_defs per cluster
-        
-        self.status = ACTIVE
+
+        # TODO: Ask the user if they want to continue to the 
+        #       execution based on the cost.
+        if budget:
+            budget_calc = self.budget()
+            if not time:
+                raise Exception('Estimated runtime is required')
+
+            run_cost =  budget_calc.get_cost(launch_type, batch_size, cpu, memory, time)
+
+            if run_cost > budget:
+                msg = 'run_cost = {0} USD > {1} USD'.format(round(run_cost, 4), budget)
+                user_in = input('run cost is higher than budget {0}, continue? yes/no: \n'.format(msg))
+                if user_in == 'no':
+                    return
+                if user_in == 'yes':
+                    pass
+        print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
+
+        self.cost        = cost
+        self.budget      = budget
+
+        self.status      = ACTIVE
         self.launch_type = launch_type
-        
+
         cluster = self.create_cluster()
         self._wait_clusters(cluster)
 
@@ -640,11 +658,12 @@ class AwsCaas():
             stopped = list(filter(lambda pending: pending == 'STOPPED', statuses))
             
             if all([status == 'STOPPED' for status in statuses]):
-                print('ECS tasks {0} STOPPED'.format(','.join(tasks)))
+                print('Done, {0} tasks stopped'.format(len(tasks)))
                 break
 
             print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
                            len(pending), CLR, len(running), CLR, len(stopped), CLR))
+            time.sleep(0.5)
 
 
     # --------------------------------------------------------------------------

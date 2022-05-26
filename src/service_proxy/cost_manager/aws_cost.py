@@ -1,3 +1,4 @@
+import re
 import ast
 import datetime
 from dateutil.tz import *
@@ -47,9 +48,9 @@ class AwsCost:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, prc_client, dydb_resource, cluster_name,
-                       service_name, region_name, ecs_client=None,
-                                                  ec2_client=None):
+    def __init__(self, prc_client, dydb_resource, region_name,
+                         cluster_name=None, service_name=None,
+                         ecs_client=None, ec2_client=None):
         
         self._prc_client    = prc_client
         self._dydb_resource = dydb_resource
@@ -59,11 +60,32 @@ class AwsCost:
         self._cluster_name = cluster_name
         self._service_name = service_name
         self._region_name  = region_name
+    
+    
+    # --------------------------------------------------------------------------
+    #
+    def get_cost(self, launch_type, batch_size, runTime, cpu=0, mem=0):
+
+        fgate_total_cost = []
+
+        if launch_type == 'EC2':
+            instance_cost = self.ec2_pricing(self._region_name, 't2.micro', 'Linux', runTime)
+            return instance_cost
+        
+        if launch_type == 'FARGATE':
+            if not cpu and not mem:
+                raise Exception('cpu and memory is required to calaculte Fargate price')
+
+            task_cost = self.cost_of_fgtask(self._region_name, batch_size, cpu, mem, 'Linux', runTime)
+            fgate_total_cost.append(task_cost)
+
+            return sum(fgate_total_cost)
+
 
 
     # --------------------------------------------------------------------------
     #
-    def ec2_pricing(self, region, instance_type, tenancy, ostype):
+    def ec2_pricing(self, region, instance_type, ostype, time):
             """
             Query AWS Pricing APIs to find cost of EC2 instance in the region.
             Given the paramters we use at input, we should get a UNIQUE result.
@@ -74,10 +96,8 @@ class AwsCost:
             svc_code = 'AmazonEC2'
             response = self._prc_client.get_products(ServiceCode=svc_code,
                 Filters = [
-                    {'Type' :'TERM_MATCH', 'Field':'location',          'Value': region},
+                    {'Type' :'TERM_MATCH', 'Field':'location',          'Value': _REGRIONS[region]},
                     {'Type' :'TERM_MATCH', 'Field': 'servicecode',      'Value': svc_code},
-                    {'Type' :'TERM_MATCH', 'Field': 'preInstalledSw',   'Value': 'NA'},
-                    {'Type' :'TERM_MATCH', 'Field': 'tenancy',          'Value': tenancy},
                     {'Type' :'TERM_MATCH', 'Field':'instanceType',      'Value': instance_type},
                     {'Type' :'TERM_MATCH', 'Field': 'operatingSystem',  'Value': ostype}
                 ],
@@ -85,7 +105,6 @@ class AwsCost:
             )
 
             ret_list = []
-            print(response)
             if 'PriceList' in response:
                 for iter in response['PriceList']:
                     ret_dict = {}
@@ -100,12 +119,15 @@ class AwsCost:
                     ret_dict['unit'] = mydict_terms['priceDimensions'][list( mydict_terms['priceDimensions'].keys() )[0]]['unit']
                     ret_dict['pricePerUnit'] = mydict_terms['priceDimensions'][list( mydict_terms['priceDimensions'].keys() )[0]]['pricePerUnit']
                     ret_list.append(ret_dict)
-            
-            print(ret_list)
+
             ec2_cpu  = float( ret_list[0]['vcpu'] )
             ec2_mem  = float( re.findall("[+-]?\d+\.?\d*", ret_list[0]['memory'])[0] )
             ec2_cost = float( ret_list[0]['pricePerUnit']['USD'] )
-            return(ec2_cpu, ec2_mem, ec2_cost)
+            #return(ec2_cpu, ec2_mem, ec2_cost)
+
+            cost = ec2_cost * (time / 60)
+
+            return cost
 
 
     # --------------------------------------------------------------------------
@@ -233,7 +255,7 @@ class AwsCost:
 
     # --------------------------------------------------------------------------
     #
-    def cost_of_fgtask(self, region, cpu, memory, ostype, runTime):
+    def cost_of_fgtask(self, region, batch_size, cpu, memory, ostype, runTime):
 
         pricing_key = 'fargate_' + region
         if pricing_key not in _PRICINGS:
@@ -244,14 +266,12 @@ class AwsCost:
             _PRICINGS[pricing_key]={}
             _PRICINGS[pricing_key]['cpu']    = cpu_cost
             _PRICINGS[pricing_key]['memory'] = mem_cost
-        
-        print(float(_PRICINGS[pricing_key]['memory']))
 
         mem_charges = ( (float(memory)) / 1024.0 ) * float(_PRICINGS[pricing_key]['memory']) * (runTime/60.0/60.0)
         cpu_charges = ( (float(cpu)) / 1024.0 )    * float(_PRICINGS[pricing_key]['cpu'])    * (runTime/60.0/60.0)
 
-        print('In cost_of_fgtask: mem_charges=%f, cpu_charges=%f',  mem_charges, cpu_charges)
-        return(mem_charges, cpu_charges)
+        #print('In cost_of_fgtask: mem_charges=%f, cpu_charges=%f',  mem_charges, cpu_charges)
+        return (mem_charges + cpu_charges) * batch_size
 
 
     # --------------------------------------------------------------------------

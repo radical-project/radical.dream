@@ -60,7 +60,7 @@ class CaasManager(AwsCaas):
     # --------------------------------------------------------------------------
     #
     def sync_execute_ctask(self, provider, launch_type, batch_size,
-                                 cpu, memory, container_path=None):
+                           cpu, memory, budget =0, time=0, container_path=None):
         """
         execute contianers and wait for it. Ideally when
         container_path is provided it means we need to
@@ -69,7 +69,7 @@ class CaasManager(AwsCaas):
         # TODO: pass a ctask description
         #       via the user
         if provider == AWS:
-            self.run(launch_type, batch_size)
+            self.run(launch_type, batch_size, budget, cpu, memory, time)
         
         if provider == AZURE:
             raise NotImplementedError
@@ -81,7 +81,7 @@ class CaasManager(AwsCaas):
     # --------------------------------------------------------------------------
     #
     def async_execute_ctask(self, provider, launch_type, batch_size,
-                                  cpu, memory, container_path=None):
+                            cpu, memory, time=0, container_path=None):
         """
         execute contianers and do not wait for it. Ideally when
         container_path is provided it means we need to
@@ -90,7 +90,7 @@ class CaasManager(AwsCaas):
         # TODO: pass a ctask description
         #       via the user
         if provider == AWS:
-            self.run(launch_type, batch_size)
+            self.run(launch_type, batch_size, cpu, memory, time)
         
         if provider == AZURE:
             raise NotImplementedError
