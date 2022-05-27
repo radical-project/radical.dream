@@ -60,6 +60,10 @@ class AwsCaas():
         self._service_name = None
 
         self._task_id      = 0
+        
+        # FIXME: rename task_ids to tasks_book
+        #        as we save more things than just
+        #        task ids
         self._task_ids     = OrderedDict()
         self._family_ids   = OrderedDict()
         self._tasks_arns   = []
@@ -81,7 +85,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def budget(self) -> AwsCost:      
+    def _budget(self) -> AwsCost:      
         return AwsCost(self._prc_client, self._dydb_resource, self._region_name)
 
         
@@ -119,14 +123,14 @@ class AwsCaas():
         #       per task_def and task_defs per cluster
 
         if budget:
-            budget_calc = self.budget()
+            budget_calc = self._budget()
             if not time:
-                raise Exception('Estimated runtime is required')
+                raise Exception('estimated runtime is required')
 
             run_cost =  budget_calc.get_cost(launch_type, batch_size, cpu, memory, time)
 
             if run_cost > budget:
-                msg = 'run_cost = {0} USD > {1} USD'.format(round(run_cost, 4), budget)
+                msg = '({0} USD > {1} USD)'.format(round(run_cost, 4), budget)
                 user_in = input('run cost is higher than budget {0}, continue? yes/no: \n'.format(msg))
                 if user_in == 'no':
                     return
@@ -134,7 +138,7 @@ class AwsCaas():
                     pass
         print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
 
-        self.cost        = cost
+        self.cost        = run_cost
         self.budget      = budget
 
         self.status      = ACTIVE
@@ -634,7 +638,8 @@ class AwsCaas():
         """
         response = self._ecs_client.describe_tasks(tasks=task_ids, cluster=cluster)
 
-        # Error checking
+        #FIXME: if we have a failure then update the task_ids 
+        #       with status/error code and print it.
         if response['failures'] != []:
             raise Exception('There were some failures:\n{0}'.format(
                 response['failures']))
@@ -812,17 +817,17 @@ class AwsCaas():
             #       due to user ECS/Fargate quota
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
             if batch_size > TPFC:
-                raise Exception ('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
+                raise Exception('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
 
         tasks_per_task_def = []
 
         task_defs = math.ceil(batch_size / CPTD)
 
         if task_defs > TDPC:
-            raise ('scheduled task defination per ({0}) cluster > ({1})'.format(task_defs, TDPC))
+            raise Exception('scheduled task defination per ({0}) cluster > ({1})'.format(task_defs, TDPC))
 
         # If we cannot split the
-        # number into exactly 'task_defs' parts
+        # number into exactly 'task_defs of 10' parts
         if(batch_size < task_defs):
             print(-1)
     
@@ -901,10 +906,10 @@ class AwsCaas():
         except:
             print("service not found/not active")
 
-        # de-Register all task definitions
+        # degister all task definitions
         if self._family_ids:
             for task_fam_key, task_fam_val in self._family_ids.items():
-                # De-register task definition(s)
+                # deregister task definition(s)
                 print("deregistering task {0}".format(task_fam_val['ARN']))
                 deregister_response = self._ecs_client.deregister_task_definition(
                     taskDefinition=task_fam_val['ARN'])
