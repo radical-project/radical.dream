@@ -16,6 +16,7 @@ from src.service_proxy.cost_manager.aws_cost import AwsCost
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 EC2               = 'EC2'
+BUDGET            = 0
 ACTIVE            = True
 FARGATE           = 'FARGATE'
 WAIT_TIME         = 2
@@ -71,8 +72,7 @@ class AwsCaas():
         self.launch_type  =  None
         self._region_name =  cred['region_name']
 
-        self.budget       = 0
-        self.run_cost     = 0
+        self._run_cost     = 0
 
         atexit.register(self._shutdown)
 
@@ -81,6 +81,20 @@ class AwsCaas():
     @property
     def is_active(self):
         return self.status
+
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def run_budget(self):
+        return BUDGET
+
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def run_cost(self):
+        return self._run_cost
 
 
     # --------------------------------------------------------------------------
@@ -121,7 +135,6 @@ class AwsCaas():
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
         #       per task_def and task_defs per cluster
-
         if budget:
             budget_calc = self._budget()
             if not time:
@@ -130,16 +143,19 @@ class AwsCaas():
             run_cost =  budget_calc.get_cost(launch_type, batch_size, cpu, memory, time)
 
             if run_cost > budget:
-                msg = '({0} USD > {1} USD)'.format(round(run_cost, 4), budget)
+                msg = '({0} USD > {1} USD)'.format(run_cost, budget)
                 user_in = input('run cost is higher than budget {0}, continue? yes/no: \n'.format(msg))
                 if user_in == 'no':
                     return
                 if user_in == 'yes':
                     pass
+                else:
+                    print('invalid input, abort')
+                    return
         print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
 
+        BUDGET           = budget
         self.cost        = run_cost
-        self.budget      = budget
 
         self.status      = ACTIVE
         self.launch_type = launch_type

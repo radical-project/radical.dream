@@ -12,6 +12,12 @@ class CaasManager(AwsCaas):
     ctask: container task
     """
 
+    # TODO: we might need to pass a TaskDescription
+    #       class that contains:
+    #       TaskDescription.AwsTaskDefination
+    #       TaskDescription.AwsContainerDefination
+    #       TaskDescription.AwsService
+
 
     # --------------------------------------------------------------------------
     #

@@ -12,15 +12,16 @@ AWSCost offers the capabilities to obtain the cost of:
 https://github.com/aws-samples/amazon-ecs-chargeback/blob/master/ecs-chargeback
 """
 
-# cpu to memory weight
-CTMW    = 0.5
+# cpu to memory weight 
+CTMW    = 0.5 # (512 cpus/ 1024 memory)
+
 HOURLY  = 'hour'
 DAILY   = 'day'
 MONTHLY = 'month'
 YEARLY  = 'year'
 
-_PRICINGS = {}
-_REGRIONS = {
+PRICINGS = {}
+REGRIONS = {
             "us-east-2"         : "US East (Ohio)",
             "us-east-1"         : "US East (N. Virginia)",
             "us-west-1"         : "US West (N. California)",
@@ -66,20 +67,21 @@ class AwsCost:
     #
     def get_cost(self, launch_type, batch_size, runTime, cpu=0, mem=0):
 
-        fgate_total_cost = []
+        # TODO: provide instance type instead of hard coded it
 
         if launch_type == 'EC2':
-            instance_cost = self.ec2_pricing(self._region_name, 't2.micro', 'Linux', runTime)
-            return instance_cost
+            tasks_cost = self.cost_of_ec2task(self._region_name, batch_size,
+                                      cpu, mem, 'Linux','t2.micro', runTime)
+            return tasks_cost
         
         if launch_type == 'FARGATE':
             if not cpu and not mem:
                 raise Exception('cpu and memory is required to calaculte Fargate price')
 
-            task_cost = self.cost_of_fgtask(self._region_name, batch_size, cpu, mem, 'Linux', runTime)
-            fgate_total_cost.append(task_cost)
+            tasks_cost = self.cost_of_fgtask(self._region_name, batch_size, cpu, mem,
+                                                                    'Linux', runTime)
 
-            return sum(fgate_total_cost)
+            return task_cost
 
 
 
@@ -96,7 +98,7 @@ class AwsCost:
             svc_code = 'AmazonEC2'
             response = self._prc_client.get_products(ServiceCode=svc_code,
                 Filters = [
-                    {'Type' :'TERM_MATCH', 'Field':'location',          'Value': _REGRIONS[region]},
+                    {'Type' :'TERM_MATCH', 'Field':'location',          'Value': REGRIONS[region]},
                     {'Type' :'TERM_MATCH', 'Field': 'servicecode',      'Value': svc_code},
                     {'Type' :'TERM_MATCH', 'Field':'instanceType',      'Value': instance_type},
                     {'Type' :'TERM_MATCH', 'Field': 'operatingSystem',  'Value': ostype}
@@ -123,11 +125,10 @@ class AwsCost:
             ec2_cpu  = float( ret_list[0]['vcpu'] )
             ec2_mem  = float( re.findall("[+-]?\d+\.?\d*", ret_list[0]['memory'])[0] )
             ec2_cost = float( ret_list[0]['pricePerUnit']['USD'] )
-            #return(ec2_cpu, ec2_mem, ec2_cost)
 
             cost = ec2_cost * (time / 60)
 
-            return cost
+            return cost, ec2_cpu, ec2_mem, ec2_cost
 
 
     # --------------------------------------------------------------------------
@@ -258,40 +259,37 @@ class AwsCost:
     def cost_of_fgtask(self, region, batch_size, cpu, memory, ostype, runTime):
 
         pricing_key = 'fargate_' + region
-        if pricing_key not in _PRICINGS:
-            # First time. Updating Dictionary
-            # Workarond - for DUBLIN (cpu_cost, mem_cost) = ecs_pricing(region, session)
-            #(cpu_cost, mem_cost) = ecs_pricing(_REGRIONS[region], session)
-            (cpu_cost, mem_cost) = self.ecs_pricing(_REGRIONS[region])
-            _PRICINGS[pricing_key]={}
-            _PRICINGS[pricing_key]['cpu']    = cpu_cost
-            _PRICINGS[pricing_key]['memory'] = mem_cost
+        if pricing_key not in PRICINGS:
+            (cpu_cost, mem_cost) = self.ecs_pricing(REGRIONS[region])
+            PRICINGS[pricing_key]={}
+            PRICINGS[pricing_key]['cpu']    = cpu_cost
+            PRICINGS[pricing_key]['memory'] = mem_cost
 
-        mem_charges = ( (float(memory)) / 1024.0 ) * float(_PRICINGS[pricing_key]['memory']) * (runTime/60.0/60.0)
-        cpu_charges = ( (float(cpu)) / 1024.0 )    * float(_PRICINGS[pricing_key]['cpu'])    * (runTime/60.0/60.0)
+        mem_charges = ( (float(memory)) / 1024.0 ) * float(PRICINGS[pricing_key]['memory']) * (runTime/60.0/60.0)
+        cpu_charges = ( (float(cpu)) / 1024.0 )    * float(PRICINGS[pricing_key]['cpu'])    * (runTime/60.0/60.0)
 
-        #print('In cost_of_fgtask: mem_charges=%f, cpu_charges=%f',  mem_charges, cpu_charges)
-        return (mem_charges + cpu_charges) * batch_size
+        cost = round((mem_charges + cpu_charges) * batch_size, 4)
+        return 
 
 
     # --------------------------------------------------------------------------
     #
-    def cost_of_ec2task(self, region, cpu, memory, ostype, instanceType, runTime):
+    def cost_of_ec2task(self, region, batch_size, cpu, memory, ostype, instanceType, runTime):
         """
         Get Cost in USD to run a ECS task where launchMode==EC2.
         The AWS Pricing API returns all costs in hours. runTime is in seconds.
         """
-        global _PRICINGS
-        global _REGRIONS
+        # we provide the runtime in minutes.
+        runTime = runTime * 60
 
-        pricing_key = '_'.join(['ec2',region, instanceType, ostype]) 
-        if pricing_key not in _PRICINGS:
+        pricing_key = '_'.join(['ec2', region, instanceType, ostype]) 
+        if pricing_key not in PRICINGS:
             # Workaround for DUBLIN, Shared Tenancy and Linux
-            (ec2_cpu, ec2_mem, ec2_cost) = self.ec2_pricing(_REGRIONS[region], instanceType, 'Shared', 'Linux')
-            _PRICINGS[pricing_key]={}
-            _PRICINGS[pricing_key]['cpu']    = ec2_cpu   # Number of CPUs on the EC2 instance
-            _PRICINGS[pricing_key]['memory'] = ec2_mem   # GiB of memory on the EC2 instance
-            _PRICINGS[pricing_key]['cost']   = ec2_cost  # Cost of EC2 instance (On-demand)
+            (_, ec2_cpu, ec2_mem, ec2_cost) = self.ec2_pricing(region, instanceType, ostype, runTime)
+            PRICINGS[pricing_key]={}
+            PRICINGS[pricing_key]['cpu']    = ec2_cpu   # Number of CPUs on the EC2 instance
+            PRICINGS[pricing_key]['memory'] = ec2_mem   # GiB of memory on the EC2 instance
+            PRICINGS[pricing_key]['cost']   = ec2_cost  # Cost of EC2 instance (On-demand)
 
         # Corner case: When no CPU is assigned to a ECS Task, cpushares = 0
         # Workaround: Assume a minimum cpushare, say 128 or 256 (0.25 vcpu is the minimum on Fargate).
@@ -299,12 +297,12 @@ class AwsCost:
             cpu = '128'
 
         # Split EC2 cost bewtween memory and weights
-        ec2_cpu2mem = ec2_cpu2mem_weights(_PRICINGS[pricing_key]['memory'], _PRICINGS[pricing_key]['cpu'])
-        cpu_charges = ((float(cpu)) / 1024.0 / _PRICINGS[pricing_key]['cpu']) * ( float(_PRICINGS[pricing_key]['cost']) * ec2_cpu2mem ) * (runTime/60.0/60.0)
-        mem_charges = ((float(memory)) / 1024.0 / _PRICINGS[pricing_key]['memory'] ) * ( float(_PRICINGS[pricing_key]['cost']) * (1.0 - ec2_cpu2mem) ) * (runTime/60.0/60.0)
+        ec2_cpu2mem = self.ec2_cpu2mem_weights(PRICINGS[pricing_key]['memory'], PRICINGS[pricing_key]['cpu'])
+        cpu_charges = ((float(cpu)) / 1024.0 / PRICINGS[pricing_key]['cpu']) * ( float(PRICINGS[pricing_key]['cost']) * ec2_cpu2mem ) * (runTime/60.0/60.0)
+        mem_charges = ((float(memory)) / 1024.0 / PRICINGS[pricing_key]['memory'] ) * ( float(PRICINGS[pricing_key]['cost']) * (1.0 - ec2_cpu2mem) ) * (runTime/60.0/60.0)
 
-        print('In cost_of_ec2task: mem_charges=%f, cpu_charges=%f',  mem_charges, cpu_charges)
-        return(mem_charges, cpu_charges)
+        cost = round((mem_charges + cpu_charges) * batch_size, 5)
+        return cost
 
 
     # --------------------------------------------------------------------------
@@ -347,6 +345,13 @@ class AwsCost:
                         Attr('clusterArn').eq(cluster))
         return (resp)
 
+
+    # --------------------------------------------------------------------------
+    #
+    def ec2_cpu2mem_weights(self, mem, cpu):
+        # Depending on the type of instance, we can make split cost beteen CPU and memory
+        # disproportionately.
+        return CTMW
 
     # --------------------------------------------------------------------------
     #
