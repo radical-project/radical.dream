@@ -11,7 +11,7 @@ import base64
 from datetime import datetime
 from dateutil.tz import tzlocal
 from collections import OrderedDict
-from src.service_proxy.cost_manager.aws_cost import AwsCost
+from hydraa.services.cost_manager.aws_cost import AwsCost
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -152,10 +152,11 @@ class AwsCaas():
                 else:
                     print('invalid input, abort')
                     return
-        print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
-
-        BUDGET           = budget
-        self.cost        = run_cost
+            
+            print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
+            
+            BUDGET           = budget
+            self.cost        = run_cost
 
         self.status      = ACTIVE
         self.launch_type = launch_type
@@ -686,7 +687,7 @@ class AwsCaas():
             stopped = list(filter(lambda pending: pending == 'STOPPED', statuses))
             
             if all([status == 'STOPPED' for status in statuses]):
-                print('Done, {0} tasks stopped'.format(len(tasks)))
+                print('Finished, {0} tasks stopped with status: "Done"'.format(len(tasks)))
                 break
 
             print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
@@ -920,7 +921,7 @@ class AwsCaas():
             response = self._ecs_client.delete_service(cluster=self._cluster_name,
                                                        service=self._service_name)
         except:
-            print("service not found/not active")
+            print("no active service found")
 
         # degister all task definitions
         if self._family_ids:

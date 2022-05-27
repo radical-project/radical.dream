@@ -1,5 +1,5 @@
-from src.provider_proxy import proxy
-from src.service_proxy.caas_manager.aws_caas import AwsCaas
+from hydraa.providers.proxy import proxy
+from hydraa.services.caas_manager.aws_caas import AwsCaas
 
 AWS    = 'aws'
 AZURE  = 'azure'
@@ -65,8 +65,8 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def sync_execute_ctask(self, provider, launch_type, batch_size,
-                           cpu, memory, budget =0, time=0, container_path=None):
+    def sync_execute_ctask(self, launch_type, batch_size, cpu, memory,
+                               budget=0, time=0, container_path=None):
         """
         execute contianers and wait for it. Ideally when
         container_path is provided it means we need to
@@ -74,20 +74,20 @@ class CaasManager(AwsCaas):
         """
         # TODO: pass a ctask description
         #       via the user
-        if provider == AWS:
+        if AWS in self._proxy.loaded_providers:
             self.run(launch_type, batch_size, budget, cpu, memory, time)
         
-        if provider == AZURE:
+        if AZURE in self._proxy.loaded_providers:
             raise NotImplementedError
         
-        if provider == GCLOUD:
-            raise NotImplementedError
+        if GCLOUD in self._proxy.loaded_providers:
+            raise NotImplementedError 
 
 
     # --------------------------------------------------------------------------
     #
-    def async_execute_ctask(self, provider, launch_type, batch_size,
-                            cpu, memory, time=0, container_path=None):
+    def async_execute_ctask(self, launch_type, batch_size, cpu, memory,
+                                budget=0, time=0, container_path=None):
         """
         execute contianers and do not wait for it. Ideally when
         container_path is provided it means we need to
@@ -95,13 +95,13 @@ class CaasManager(AwsCaas):
         """
         # TODO: pass a ctask description
         #       via the user
-        if provider == AWS:
+        if AWS in self._proxy.loaded_providers:
             self.run(launch_type, batch_size, cpu, memory, time)
         
-        if provider == AZURE:
+        if AZURE in self._proxy.loaded_providers:
             raise NotImplementedError
         
-        if provider == GCLOUD:
+        if GCLOUD in self._proxy.loaded_providers:
             raise NotImplementedError 
     
     # --------------------------------------------------------------------------
