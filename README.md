@@ -57,4 +57,12 @@ Pending: 2
 Running: 0
 Stopped: 8
 Done, 10 tasks stopped
+
+exit
+Shutting down.....
+service not found/not active
+deregistering task arn:aws:ecs:us-east-1:626113121967:task-definition/hydraa_family_145e510b-469b-4359-9a8d-6900f1c9d468:1
+terminating instance i-08419f0b810c9d466
+hydraa cluster hydraa_cluster_3c14e84d-d243-4ba7-a493-979aa919b33d found and deleted
+done
 ```
