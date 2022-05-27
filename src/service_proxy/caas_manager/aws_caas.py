@@ -96,21 +96,28 @@ class AwsCaas():
         :param: batch_size: int 
                          number of identical tasks that runs within the
                          same cluster on with the same resource requirements.
+        
+        :param: budget: float
+                         expected charging amount by AWS to operate within.
+        
+        :param: cpu: int
+                     number of cpus per ctask
+        
+        :param: memory: int
+                        memory size in MB
+        
+        :param: timeL int
+                       expected execution time on AWS in minutes
 
         :param: container_path: str
                          if provided then upload that container to
                          S3 storage for execution. 
         """
-        # TODO: User should provide the task , mem and cpu once they do that.
-        # TODO: CaasManager should operates within a budget.
         #
-
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
         #       per task_def and task_defs per cluster
 
-        # TODO: Ask the user if they want to continue to the 
-        #       execution based on the cost.
         if budget:
             budget_calc = self.budget()
             if not time:
