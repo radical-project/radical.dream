@@ -56,7 +56,7 @@ task hydraa_family_145e510b-469b-4359-9a8d-6900f1c9d468 is registered
 Pending: 2
 Running: 0
 Stopped: 8
-Done, 10 tasks stopped
+Finished, 10 tasks stopped with status: "Done"
 
 exit
 Shutting down.....
