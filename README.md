@@ -3,63 +3,58 @@ Cloud Broker Implementation
 
 ## Usage:
 ```python
-In [2]: from src.provider_proxy.proxy import proxy
-   ...: from src.provider_proxy.aws import AWS
-   ...:
-   ...:
-   ...:
-   ...: from src.service_proxy.caas_manager.manager import CaasManager
-   ...:
-   ...: proxy_mgr = proxy()
-   ...:
-   ...: proxy_mgr.login(['aws'])
-   ...:
-   ...: aws_cl = AWS(proxy_mgr)
-   ...:
-   ...: caas_mgr = CaasManager(proxy_mgr)
-   ...: caas_mgr.async_execute_container('aws', 1, 400)
-```
-output:
-```python
+from hydraa import providers, services
+
+provider_mgr = providers.proxy()
+provider_mgr.login(['aws'])
+
+service_mgr = services.manager
+
+caas_mgr = service_mgr.CaasManager(provider_mgr)
+
 verifying aws loaded credentials
 loading aws credentials
 login to aws succeed
-ecs client created
-ec2 client created
-iam client created
-cluster BotoCluster already exist
-task hello_world is registered
-no exisitng service found, creating.....
-service service_hello_world created
-no existing instance found
-instance i-0d2f4c26971c61853 created
-running task arn:aws:ecs:us-east-1:626113121967:task-definition/hello_world:54
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['PENDING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS task status for tasks ['arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b']: ['DEPROVISIONING']
-ECS tasks arn:aws:ecs:us-east-1:626113121967:task/BotoCluster/8071a301e1244718af82081347b7a73b STOPPED
-Shutting down.....
-deregistering task arn:aws:ecs:us-east-1:626113121967:task-definition/hello_world:54
-deleting cluster BotoCluster
+
+
+ECS      client created
+EC2      client created
+IAM      client created
+Pricing  client created
+EC2      resource created
+DynamoDB resource created
+
+caas_mgr.sync_execute_ctask('EC2', 1000, 1, 7, budget=0.15, time = 120)
+run cost is higher than budget (0.2 USD > 0.15 USD), continue? yes/no:
+
+yes
+
+Estimated run_cost is: 0.15 USD
+
+no cluster found in this account
+creating new cluster hydraa_cluster_3c14e84d-d243-4ba7-a493-979aa919b33d
+ECS cluster hydraa_cluster_3c14e84d-d243-4ba7-a493-979aa919b33d is ACTIVE
+No existing EC2 instance found
+EC2 instance "i-08419f0b810c9d466" of type "t2.micro" has been launched
+EC2 instance "i-08419f0b810c9d466" has been started
+
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+waiting for instance i-08419f0b810c9d466 to register
+
+EC2 instance registered
+
+task hydraa_family_145e510b-469b-4359-9a8d-6900f1c9d468 is registered
+Pending: 2
+Running: 0
+Stopped: 8
+Done, 10 tasks stopped
 ```
