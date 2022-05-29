@@ -21,7 +21,7 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, proxy_mgr):
+    def __init__(self, proxy_mgr, asynchronous):
         
         self._registered_managers = []
 
@@ -31,7 +31,7 @@ class CaasManager(AwsCaas):
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                AwsCaas.__init__(self, cred)
+                AwsCaas.__init__(self, cred, asynchronous)
             if provider == AZURE:
                 raise NotImplementedError
             if provider == GCLOUD:
@@ -65,8 +65,8 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def sync_execute_ctask(self, launch_type, batch_size, cpu, memory,
-                               budget=0, time=0, container_path=None):
+    def execute_ctask_batch(self, launch_type, batch_size, cpu, memory,
+                                budget=0, time=0, container_path=None):
         """
         execute contianers and wait for it. Ideally when
         container_path is provided it means we need to
@@ -75,7 +75,9 @@ class CaasManager(AwsCaas):
         # TODO: pass a ctask description
         #       via the user
         if AWS in self._proxy.loaded_providers:
-            self.run(launch_type, batch_size, budget, cpu, memory, time)
+            run_id = self.run(launch_type, batch_size, budget, cpu, memory,
+                                                                      time)
+            return run_id
         
         if AZURE in self._proxy.loaded_providers:
             raise NotImplementedError
@@ -86,23 +88,9 @@ class CaasManager(AwsCaas):
 
     # --------------------------------------------------------------------------
     #
-    def async_execute_ctask(self, launch_type, batch_size, cpu, memory,
-                                budget=0, time=0, container_path=None):
-        """
-        execute contianers and do not wait for it. Ideally when
-        container_path is provided it means we need to
-        upload it to aws and use it.
-        """
-        # TODO: pass a ctask description
-        #       via the user
-        if AWS in self._proxy.loaded_providers:
-            self.run(launch_type, batch_size, cpu, memory, time)
-        
-        if AZURE in self._proxy.loaded_providers:
-            raise NotImplementedError
-        
-        if GCLOUD in self._proxy.loaded_providers:
-            raise NotImplementedError 
+    def execute_cjob_batch(self, launch_type, batch_size, cpu, memory,
+                               budget=0, time=0, container_path=None):
+        raise NotImplementedError
     
     # --------------------------------------------------------------------------
     #

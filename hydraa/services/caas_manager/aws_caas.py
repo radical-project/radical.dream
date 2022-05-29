@@ -7,6 +7,7 @@ import boto3
 import pprint
 import atexit
 import base64
+import typing as t
 
 from datetime import datetime
 from dateutil.tz import tzlocal
@@ -38,7 +39,7 @@ class AwsCaas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, cred, DryRun=False):
+    def __init__(self, cred, asynchronous, DryRun=False):
 
         self.manager_id = str(uuid.uuid4())
 
@@ -73,6 +74,9 @@ class AwsCaas():
         self._region_name =  cred['region_name']
 
         self._run_cost     = 0
+
+        # wait or do not wait for the tasks to finish 
+        self.asynchronous = asynchronous
 
         atexit.register(self._shutdown)
 
@@ -167,17 +171,25 @@ class AwsCaas():
         container_def = self.create_container_def()
         tptd = self._schedule(batch_size, launch_type)
 
+        run_id = str(uuid.uuid4())
+
         if launch_type == FARGATE:
             for batch in tptd:
                 family_id, task_def_arn = self.create_fargate_task_def(container_def, 256, 1024)
                 tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                self._family_ids[family_id]['batch_size'] = batch
 
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
             for batch in tptd:
                 family_id, task_def_arn = self.create_ec2_task_def(container_def)
                 tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                self._family_ids[family_id]['run_id']     = run_id
+                self._family_ids[family_id]['task_list']  = tasks
                 self._family_ids[family_id]['batch_size'] = batch
+
+        if self.asynchronous:
+            return run_id
 
         # FIXME: Enabling the service should be specified by the user
         #
@@ -185,6 +197,16 @@ class AwsCaas():
 
         # wait on task completion
         self._wait_tasks(self._tasks_arns, cluster)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_run_status(self, run_id):
+        for key, val in self._family_ids.items():
+            if val.get('run_id') == run_id:
+                statuses = self._get_task_statuses(val.get('task_list'),
+                                                    self._cluster_name)
+            print(statuses)
 
 
     # --------------------------------------------------------------------------
@@ -564,8 +586,8 @@ class AwsCaas():
             self._tasks_arns.append(task_arn)
 
             self._task_ids[str(task_arn)] = 'ctask.{0}'.format(self._task_id)
-            print(('submitting tasks {0}/{1}').format(self._task_id, batch_size-1),
-                                                                          end='\r')
+            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1),
+                                                                                     end='\r')
             self._task_id +=1
 
         return self._tasks_arns
@@ -799,8 +821,8 @@ class AwsCaas():
             instances = self._ec2_resource.create_instances(**kwargs)
 
             for instance in instances:
-                print(f'EC2 instance "{instance.id}" of type "{instance_type}" has been launched')
-                
+                print(f'EC2 instance "{instance.id}" of type "{instance_type}" is being launched')
+
                 instance.wait_until_running()
                 
                 self._ec2_client.associate_iam_instance_profile(IamInstanceProfile={"Arn" : 'arn:aws:iam::626113121967:instance-profile/ecsInstanceRole',},

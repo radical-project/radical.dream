@@ -23,14 +23,15 @@ class proxy(object):
 
         self.loaded_providers     = []
         self._loaded_credentials  = {}
-    
+
+
     def login(self, providers: list):
 
         for provider in providers:
             if provider in  [AWS, AZURE, GCLOUD]:
                 self._verify_credentials(provider)
                 self.loaded_providers.append(provider)
-                print('login to {0} succeed'.format(provider))
+                print('Login to {0} succeed'.format(provider))
             else:
                 print('{0} provider not supported'.format(provider))
 
@@ -39,7 +40,7 @@ class proxy(object):
         '''
         check if the provided credentials are valid.
         '''
-        print('verifying {0} loaded credentials'.format(provider))
+        print('Verifying {0} credentials'.format(provider))
         if provider == AWS:
             try:
                 # get AWS credentials
@@ -67,7 +68,6 @@ class proxy(object):
         if provider in self._loaded_credentials:
             return self._loaded_credentials[provider]
 
-        print('loading {0} credentials'.format(provider))
         if provider == AWS:
             try:
                 ACCESS_KEY_ID     = os.environ['ACCESS_KEY_ID']
