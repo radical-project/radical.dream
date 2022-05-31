@@ -224,7 +224,9 @@ class AwsCaas():
         running = list(filter(lambda pending: pending == 'RUNNING', run_stat))
         stopped = list(filter(lambda pending: pending == 'STOPPED', run_stat))
 
-        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending), len(running), len(stopped)))
+        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending),
+                                                                 len(running),
+                                                                 len(stopped)))
         if running or pending:
             print('run: {0} is running'.format(run_id))
         
