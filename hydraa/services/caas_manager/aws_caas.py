@@ -13,6 +13,7 @@ from datetime import datetime
 from dateutil.tz import tzlocal
 from collections import OrderedDict
 from hydraa.services.cost_manager.aws_cost import AwsCost
+from hydraa.services.maas_manager.aws_maas import AwsMaas
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -54,9 +55,11 @@ class AwsCaas():
         self._ec2_client    = self._create_ec2_client(cred)
         self._iam_client    = self._create_iam_client(cred)
         self._prc_client    = self._create_prc_client(cred)
+        self._clw_client    = self._create_clw_client(cred)
 
         self._ec2_resource  = self._create_ec2_resource(cred)
         self._dydb_resource = self._create_dydb_resource(cred)
+
 
         self._cluster_name = None
         self._service_name = None
@@ -105,6 +108,12 @@ class AwsCaas():
     #
     def _budget(self) -> AwsCost:      
         return AwsCost(self._prc_client, self._dydb_resource, self._region_name)
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def _moniter(self) -> AwsMaas:
+        return AwsMaas(self._clw_client)
 
         
     # --------------------------------------------------------------------------
@@ -202,12 +211,28 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def get_run_status(self, run_id):
+        
+        run_status = [] 
         for key, val in self._family_ids.items():
             if val.get('run_id') == run_id:
                 statuses = self._get_task_statuses(val.get('task_list'),
-                                                    self._cluster_name)
-            print(statuses)
+                                                     self._cluster_name)
+                run_status.append(statuses)
+        
+        run_stat =  [item for sublist in run_status for item in sublist]
+        pending = list(filter(lambda pending: pending == 'PENDING', run_stat))
+        running = list(filter(lambda pending: pending == 'RUNNING', run_stat))
+        stopped = list(filter(lambda pending: pending == 'STOPPED', run_stat))
 
+        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending), len(running), len(stopped)))
+        if running or pending:
+            print('run: {0} is running'.format(run_id))
+        
+        if all([status == 'STOPPED' for status in run_stat]):
+            print('run: {0} is finished'.format(run_id))
+        
+        print(msg)
+           
 
     # --------------------------------------------------------------------------
     #
@@ -302,6 +327,21 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
+    def _create_clw_client(self, cred):
+        """a wrapper around create CloudWatch client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
+        clw_client = boto3.client('cloudwatch', aws_access_key_id     = cred['aws_access_key_id'],
+                                                aws_secret_access_key = cred['aws_secret_access_key'],
+                                                region_name           = cred['region_name'])
+        
+        print('CloudWatch client created')
+        return clw_client
+
+
+    # --------------------------------------------------------------------------
+    #
     def create_cluster(self):
         """Create a HYDRAA cluster or check for existing one
            
@@ -333,7 +373,7 @@ class AwsCaas():
 
         return cluster_name
 
-    
+
     # --------------------------------------------------------------------------
     #
     def _wait_clusters(self, cluster_name):
@@ -697,6 +737,8 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
+        if not self.asynchronous:
+            raise Exception('Task wait is not supported in synchronous mode')
 
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
@@ -836,7 +878,7 @@ class AwsCaas():
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
                     print('EC2 instance registered')
                     break
-                print('waiting for instance {0} to register'.format(instance.id))
+                print('waiting for instance {0} to register'.format(instance.id), end = '\r')
                 time.sleep(WAIT_TIME)
 
             return instance_id
