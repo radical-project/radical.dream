@@ -40,9 +40,9 @@ class AwsCaas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, cred, asynchronous, DryRun=False):
+    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
 
-        self.manager_id = str(uuid.uuid4())
+        self.manager_id = manager_id
 
         self.status = False
         

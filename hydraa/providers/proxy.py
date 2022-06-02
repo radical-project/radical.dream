@@ -5,6 +5,9 @@ import boto3
 from botocore.exceptions import NoCredentialsError
 from botocore.exceptions import InvalidConfigError
 
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.resource.resources import ResourceManagementClient
+
 AWS    = 'aws'
 AZURE  = 'azure'
 GCLOUD = 'google'
@@ -56,7 +59,13 @@ class proxy(object):
                 raise
 
         if provider == AZURE:
-            raise NotImplementedError
+            azu_creds  = self._load_credentials(provider)
+            credential = DefaultAzureCredential()
+            azu_client = ResourceManagementClient(credential=credential, 
+                                                  subscription_id=azu_creds['az_sub_id'])
+            for resource_group in azu_client.resource_groups.list():
+                pass
+            
         if provider == GCLOUD:
             raise NotImplementedError
 
@@ -70,13 +79,9 @@ class proxy(object):
 
         if provider == AWS:
             try:
-                ACCESS_KEY_ID     = os.environ['ACCESS_KEY_ID']
-                ACCESS_KEY_SECRET = os.environ['ACCESS_KEY_SECRET']
-                REGION            = os.environ['AWS_REGION']
-                
-                aws_creds = {'aws_access_key_id'     : ACCESS_KEY_ID,
-                             'aws_secret_access_key' : ACCESS_KEY_SECRET,
-                             'region_name'           : REGION}
+                aws_creds = {'aws_access_key_id'     : os.environ['ACCESS_KEY_ID'],
+                             'aws_secret_access_key' : os.environ['ACCESS_KEY_SECRET'],
+                             'region_name'           : os.environ['AWS_REGION']}
                 self._loaded_credentials[provider] = aws_creds
                 return aws_creds
             except KeyError:
@@ -84,12 +89,14 @@ class proxy(object):
 
         if provider == AZURE:
             try:
-                AZ_TENANT_ID   = os.environ['az_tenant_id']
-                AZ_SUB_ID      = os.environ['az_sub_id']
-                AZ_APP_ID      = os.environ['az_app_id']
-                AZ_APP_SEC_KEY = os.environ['az_app_sec']
+                azu_creds = {'az_sub_id'  : os.environ['AZU_SUB_ID'],
+                             'region_name': os.environ['AZU_REGION']}
                 
-                return (AZ_TENANT_ID, AZ_SUB_ID, AZ_APP_ID, AZ_APP_SEC_KEY)
+                #AZ_TENANT_ID   = os.environ['az_tenant_id']
+                #AZ_SUB_ID      = os.environ['az_sub_id']
+                #AZ_APP_ID      = os.environ['az_app_id']
+                #AZ_APP_SEC_KEY = os.environ['az_app_sec']
+                return azu_creds
             except KeyError:
                 raise
 

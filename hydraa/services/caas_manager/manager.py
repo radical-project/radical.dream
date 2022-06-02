@@ -1,5 +1,7 @@
+import uuid
 from hydraa.providers.proxy import proxy
-from hydraa.services.caas_manager.aws_caas import AwsCaas
+from hydraa.services.caas_manager.aws_caas   import AwsCaas
+from hydraa.services.caas_manager.azure_caas import AzureCaas
 
 AWS    = 'aws'
 AZURE  = 'azure'
@@ -7,7 +9,7 @@ GCLOUD = 'google'
 
 # --------------------------------------------------------------------------
 #
-class CaasManager(AwsCaas):
+class CaasManager:
     """
     ctask: container task
     """
@@ -23,7 +25,9 @@ class CaasManager(AwsCaas):
     #
     def __init__(self, proxy_mgr, asynchronous):
         
+        _id = str(uuid.uuid4())
         self._registered_managers = []
+        
 
         if proxy:
             self._proxy = proxy_mgr
@@ -31,9 +35,10 @@ class CaasManager(AwsCaas):
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                AwsCaas.__init__(self, cred, asynchronous)
+                self.AwsCaas = AwsCaas(_id, cred, asynchronous)
             if provider == AZURE:
-                raise NotImplementedError
+                cred = self._proxy._load_credentials(AZURE)
+                self.AzureCaas = AzureCaas(_id, cred, asynchronous)
             if provider == GCLOUD:
                 raise NotImplementedError
             
@@ -45,9 +50,9 @@ class CaasManager(AwsCaas):
         container on a provider
         """
         if provider == AWS:
-            self._aws_container_cost(1, 1, 400, 'hour')
+            pass
         if provider == AZURE:
-            raise NotImplementedError
+            pass
         
         if provider == GCLOUD:
             raise NotImplementedError 
@@ -75,8 +80,8 @@ class CaasManager(AwsCaas):
         # TODO: pass a ctask description
         #       via the user
         if AWS in self._proxy.loaded_providers:
-            run_id = self.run(launch_type, batch_size, budget, cpu, memory,
-                                                                      time)
+            run_id = self.AwsCaas.run(launch_type, batch_size, budget, cpu, memory,
+                                                                              time)
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
@@ -100,7 +105,7 @@ class CaasManager(AwsCaas):
         previously created components by the user
         """
         if provider == AWS:
-            self._shutdown()
+            self.AwsCaas._shutdown()
         
         if provider == AZURE:
             raise NotImplementedError
