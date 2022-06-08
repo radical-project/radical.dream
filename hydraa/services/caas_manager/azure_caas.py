@@ -2,8 +2,9 @@ import sys
 import math
 import uuid
 import time
-#import common.helpers
+import atexit
 
+from collections import OrderedDict
 from azure.batch import BatchServiceClient
 from azure.identity import DefaultAzureCredential
 from azure.batch.batch_auth import SharedKeyCredentials
@@ -41,55 +42,75 @@ class AzureCaas():
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
-        self._container_group_name = None
-        
-        self._region_name =  cred['region_name']
-        self.asynchronous = asynchronous
+        self._resource_group_name   = None
+        self._container_group_names = OrderedDict()
 
         self._task_id     = 0
 
+        self._task_ids    = OrderedDict()
+
+        self._region_name = cred['region_name']
+        self._run_cost    = 0
+
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
-    
+
+        atexit.register(self._shutdown)
+
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def is_active(self):
+        return self.status
+
+
+    # --------------------------------------------------------------------------
+    #
     def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
                                           time=0, container_path=None):
         
         run_id = str(uuid.uuid4())
 
-        container_image_app = "mcr.microsoft.com/azuredocs/aci-helloworld"
-        container_image_sidecar = "mcr.microsoft.com/azuredocs/aci-tutorial-sidecar"
-        container_image_taskbased = "mcr.microsoft.com/azuredocs/aci-wordcount"
+        container_image_app = "screwdrivercd/noop-container"
 
         cpcg = self._schedule(batch_size)
 
         res_group = self.create_resource_group()
         
         for batch in cpcg:
-            containers = self.run_ctask(batch, memory, cpu, container_image_app)
-            self.create_container_group(res_group, containers)
-        
+            containers, tasks = self.run_ctask(batch, memory, cpu, container_image_app)
+            contaier_group_name = self.create_container_group(res_group, containers)
+            self._container_group_names[contaier_group_name]['run_id']     = run_id
+            self._container_group_names[contaier_group_name]['task_list']  = tasks
+            self._container_group_names[contaier_group_name]['batch_size'] = batch
+
         if self.asynchronous:
             return run_id
 
     
-
+    # --------------------------------------------------------------------------
+    #
     def _create_container_client(self, cred):
         
         client = ContainerInstanceManagementClient(credential=DefaultAzureCredential(), 
                                                    subscription_id=cred['az_sub_id'])
 
-        
         return client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_resource_client(self, cred):
         
         client = ResourceManagementClient(credential=DefaultAzureCredential(), 
                                                    subscription_id=cred['az_sub_id'])
+
         return client
 
-    
 
+    # --------------------------------------------------------------------------
+    #
     def create_resource_group(self):
 
         for resource_group in self.res_client.resource_groups.list():
@@ -99,17 +120,19 @@ class AzureCaas():
         
         # Create (and then get) a resource group into which the container groups
         # are to be created
-        resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
+        self._resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
 
-        print("Creating resource group '{0}'...".format(resource_group_name))
-        self.res_client.resource_groups.create_or_update(resource_group_name,
+        print("Creating resource group '{0}'...".format(self._resource_group_name))
+        self.res_client.resource_groups.create_or_update(self._resource_group_name,
                                              {'location': self._region_name})
         
-        resource_group = self.res_client.resource_groups.get(resource_group_name)
+        resource_group = self.res_client.resource_groups.get(self._resource_group_name)
         
         return resource_group
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_container_group(self, resource_group, contianers):
         """Creates a container group with a single.multiple container(s).
         https://docs.microsoft.com/en-us/azure/container-instances/container-instances-container-groups
@@ -144,30 +167,41 @@ class AzureCaas():
         # Get the created container group
         container_group = self._con_client.container_groups.get(resource_group.name,
                                                          self._container_group_name)
+        
+        self._container_group_names[self._container_group_name] = OrderedDict()
+
+        return self._container_group_name
 
 
+    # --------------------------------------------------------------------------
+    #
     def run_ctask(self, container_batch, memory, cpu, container_image_name,
                                                   start_command_line=None):
 
+        tasks_names    = []
         container_list = []
 
         for container in range(container_batch):
             # Configure the container
+            task_name = 'ctask-{0}'.format(self._task_id)
             container_resource_requests = ResourceRequests(memory_in_gb=memory,
                                                                        cpu=cpu)
             container_resource_requirements = ResourceRequirements(
                                           requests=container_resource_requests)
 
-            container = Container(name='ctask-{0}'.format(self._task_id),
+            container = Container(name=task_name,
                                   image=container_image_name,
                                   resources=container_resource_requirements,
-                                  command=start_command_line)
+                                  command=["/bin/echo", "noop"])
+            tasks_names.append(task_name)
             container_list.append(container)
+            self._task_ids[str(self._task_id)]  = task_name
             print(('submitting tasks {0}/{1}').format(self._task_id, container_batch - 1))
+
             self._task_id +=1
         
 
-        return container_list
+        return container_list, tasks_names
 
 
 
@@ -232,8 +266,9 @@ class AzureCaas():
     
 
     def _shutdown(self):
-        pass                       
-        
+        pass
+        #self._con_client.container_groups.begin_delete(self._resource_group_name,
+        #                                               self._resource_group_name)
         
 
 
