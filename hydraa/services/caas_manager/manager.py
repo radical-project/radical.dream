@@ -31,7 +31,9 @@ class CaasManager:
 
         if proxy:
             self._proxy = proxy_mgr
-        
+        # TODO: add the created classes based on the loaded
+        #       providers instead of only provider name. This
+        #       will help for easier shutdown.
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
@@ -85,7 +87,9 @@ class CaasManager:
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
-            raise NotImplementedError
+            run_id = self.AzureCaas.run(launch_type, batch_size, budget, cpu, memory,
+                                                                                time)
+            return run_id
         
         if GCLOUD in self._proxy.loaded_providers:
             raise NotImplementedError 
@@ -104,15 +108,13 @@ class CaasManager:
         shudown the manager(s) by deleting all the 
         previously created components by the user
         """
-        if provider == AWS:
-            self.AwsCaas._shutdown()
-        
-        if provider == AZURE:
-            raise NotImplementedError
-        
-        if provider == GCLOUD:
-            raise NotImplementedError 
-
-
-
-
+        if provider:
+            if provider == AWS:
+                self.AwsCaas._shutdown()
+            
+            if provider == AZURE:
+                raise NotImplementedError
+            
+            if provider == GCLOUD:
+                raise NotImplementedError
+            

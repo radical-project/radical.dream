@@ -89,13 +89,12 @@ class proxy(object):
 
         if provider == AZURE:
             try:
-                azu_creds = {'az_sub_id'  : os.environ['AZU_SUB_ID'],
-                             'region_name': os.environ['AZU_REGION']}
-                
-                #AZ_TENANT_ID   = os.environ['az_tenant_id']
-                #AZ_SUB_ID      = os.environ['az_sub_id']
-                #AZ_APP_ID      = os.environ['az_app_id']
-                #AZ_APP_SEC_KEY = os.environ['az_app_sec']
+                azu_creds = {'az_sub_id'    : os.environ['AZURE_SUBSCRIPTION_ID'],
+                             'region_name'  : os.environ['AZURE_REGION'],
+                             'az_batch_name': os.environ.get('AZURE_BATCH_NAME', None),
+                             'az_batch_url' : os.environ.get('AZURE_BATCH_URL',  None),
+                             'az_batch_pkey': os.environ.get('AZURE_BATCH_PKEY', None),
+                             'az_batch_skey': os.environ.get('AZURE_BATCH_SKEY', None)}
                 return azu_creds
             except KeyError:
                 raise
