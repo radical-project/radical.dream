@@ -113,7 +113,7 @@ class CaasManager:
                 self.AwsCaas._shutdown()
             
             if provider == AZURE:
-                raise NotImplementedError
+                self.AzureCaas._shutdown()
             
             if provider == GCLOUD:
                 raise NotImplementedError

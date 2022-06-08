@@ -25,6 +25,7 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
+ACTIVE    = True
 WAIT_TIME = 2
 AZURE_RGX = '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
 
@@ -33,11 +34,16 @@ CGPRG = 60  # Number of container groups per resource group
 
 
 class AzureCaas():
-    def __init__(self, manager_id, cred, asynchronous):
+    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
         
         self.manager_id = manager_id
 
         self.status = False
+
+        # TODO: enable DryRun by the user to
+        #       verify permissions before starting
+        #       the actual run.
+        self.DryRun = DryRun
         
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
@@ -70,6 +76,9 @@ class AzureCaas():
     def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
                                           time=0, container_path=None):
         
+        
+        self.status = ACTIVE
+
         run_id = str(uuid.uuid4())
 
         container_image_app = "screwdrivercd/noop-container"
@@ -87,6 +96,8 @@ class AzureCaas():
 
         if self.asynchronous:
             return run_id
+        
+        self._wait_tasks()
 
     
     # --------------------------------------------------------------------------
@@ -160,9 +171,9 @@ class AzureCaas():
         cg = self._con_client.container_groups.begin_create_or_update(resource_group.name,
                                                               self._container_group_name,
                                                                                   group)
-        while cg.done() is False:
-            sys.stdout.write('.')
-            time.sleep(1)
+        #while cg.done() is False:
+        #    sys.stdout.write('.')
+        #    time.sleep(1)
 
         # Get the created container group
         container_group = self._con_client.container_groups.get(resource_group.name,
@@ -202,7 +213,25 @@ class AzureCaas():
         
 
         return container_list, tasks_names
+    
+    
+    def _wait_tasks(self):
 
+        if self.asynchronous:
+            raise Exception('Task wait is not supported in asynchronous mode')
+        
+        UP = "\x1B[3A"
+        CLR = "\x1B[0K"
+        print("\n\n")
+
+        groups = [g for g in self._container_group_names.keys()]
+
+        while True:
+            for group in groups:
+                container_group = self._con_client.container_groups.get(self._resource_group_name,
+                                                                                            group)
+                for container in container_group.containers:
+                    print(container.instance_view.current_state.state)
 
 
     def list_container_groups(resource_group):
@@ -266,9 +295,15 @@ class AzureCaas():
     
 
     def _shutdown(self):
-        pass
-        #self._con_client.container_groups.begin_delete(self._resource_group_name,
-        #                                               self._resource_group_name)
+        if not self._resource_group_name and self.status == False:
+            return
+
+        for key, val in self._container_group_names.items():
+            print(print("terminating container group {0}".format(key)))
+            del_op = self._con_client.container_groups.begin_delete(self._resource_group_name, key)
+        
+        print(print("terminating resource group {0}".format(self._resource_group_name)))
+        self.res_client.resource_groups.begin_delete(self._resource_group_name)
         
 
 
