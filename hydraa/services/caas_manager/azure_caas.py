@@ -1,8 +1,10 @@
+import os
 import sys
 import math
 import uuid
 import time
 import atexit
+import datetime
 
 from collections import OrderedDict
 from azure.batch import BatchServiceClient
@@ -257,6 +259,89 @@ class AzureCaas():
             time.sleep(0.5)
 
 
+    # --------------------------------------------------------------------------
+    #
+    def _get_tasks_stamps(self):
+
+        task_stamps = OrderedDict()
+        containers = []
+        groups = [g for g in self._container_group_names.keys()]
+        for group in groups:
+            container_group = self._con_client.container_groups.get(self._resource_group_name,
+                                                                                        group)
+            containers.extend(c for c in container_group.containers)
+        
+
+        for container in containers:
+            tname = container.name
+            events = container.instance_view.events
+            task_stamps[tname] = OrderedDict()
+
+            task_stamps[tname]['Pulling_start'] = datetime.datetime.timestamp(events[0].first_timestamp)
+            task_stamps[tname]['Pulling_stop']  = datetime.datetime.timestamp(events[0].last_timestamp)
+
+            task_stamps[tname]['Pulled_start']  = datetime.datetime.timestamp(events[1].first_timestamp)
+            task_stamps[tname]['Pulled_start']  = datetime.datetime.timestamp(events[1].last_timestamp)
+
+            task_stamps[tname]['Created_start']  = datetime.datetime.timestamp(events[2].first_timestamp)
+            task_stamps[tname]['Created_stop']   = datetime.datetime.timestamp(events[2].last_timestamp)
+
+            task_stamps[tname]['Started_start']  = datetime.datetime.timestamp(events[3].first_timestamp)
+            task_stamps[tname]['Started_stop']   = datetime.datetime.timestamp(events[3].last_timestamp)
+
+            state = container.instance_view.current_state
+
+            task_stamps[tname][state.state+'_start'] = datetime.datetime.timestamp(state.start_time)
+            task_stamps[tname][state.state+'_stop']  = datetime.datetime.timestamp(state.finish_time)
+        
+        return task_stamps
+
+
+    # --------------------------------------------------------------------------
+    #
+    def profiles(self):
+
+        fname = 'azure_ctasks_df_{0}.csv'.format(self.manager_id)
+
+        if os.path.isfile(fname):
+            print('profiles already exist {0}'.format(fname))
+            return fname
+
+        task_stamps = self._get_tasks_stamps()
+
+        try:
+            import pandas as pd
+        except ModuleNotFoundError:
+            print('pandas module required to obtain profiles')
+
+        df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
+
+        fname = 'azure_{0}_ctasks_{1}.csv'.format(len(self._task_ids), self.manager_id)
+        df.to_csv(fname)
+        print('Dataframe saved in {0}'.format(fname))
+
+        return fname
+
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def ttx(self):
+        fcsv = self.profiles()
+        try:
+            import pandas as pd
+        except ModuleNotFoundError:
+            print('pandas module required to obtain profiles')
+        
+        df = pd.read_csv(fcsv)
+        st = df['Pulling_start'].min()
+        en = df['Terminated_stop'].max()
+        ttx = en - st
+        return '{0} seconds'.format(ttx)
+
+
+    # --------------------------------------------------------------------------
+    #
     def list_container_groups(resource_group):
         """Lists the container groups in the specified resource group.
 
