@@ -246,7 +246,6 @@ class AwsCaas():
         dydb_client = boto3.resource('ec2', aws_access_key_id     = cred['aws_access_key_id'],
                                             aws_secret_access_key = cred['aws_secret_access_key'],
                                             region_name           = cred['region_name'])
-        print('EC2 resource created')
 
         return dydb_client
 
@@ -261,7 +260,6 @@ class AwsCaas():
         dydb_client = boto3.resource('dynamodb', aws_access_key_id     = cred['aws_access_key_id'],
                                                  aws_secret_access_key = cred['aws_secret_access_key'],
                                                  region_name           = cred['region_name'])
-        print('DynamoDB resource created')
 
         return dydb_client
 
@@ -276,8 +274,7 @@ class AwsCaas():
         prc_client = boto3.client('pricing', aws_access_key_id     = cred['aws_access_key_id'],
                                              aws_secret_access_key = cred['aws_secret_access_key'],
                                              region_name           = cred['region_name'])
-        
-        print('Pricing client created')
+
 
         return prc_client
 
@@ -293,7 +290,7 @@ class AwsCaas():
                                            aws_secret_access_key = cred['aws_secret_access_key'],
                                            region_name           = cred['region_name'])
         
-        print('EC2 client created')
+
 
         return ec2_client
 
@@ -308,7 +305,7 @@ class AwsCaas():
         ecs_client = boto3.client('ecs', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
-        print('ECS client created')
+
         return ecs_client
 
 
@@ -322,8 +319,7 @@ class AwsCaas():
         iam_client = boto3.client('iam', aws_access_key_id     = cred['aws_access_key_id'],
                                          aws_secret_access_key = cred['aws_secret_access_key'],
                                          region_name           = cred['region_name'])
-        
-        print('IAM client created')
+
         return iam_client
 
 
@@ -337,8 +333,7 @@ class AwsCaas():
         clw_client = boto3.client('cloudwatch', aws_access_key_id     = cred['aws_access_key_id'],
                                                 aws_secret_access_key = cred['aws_secret_access_key'],
                                                 region_name           = cred['region_name'])
-        
-        print('CloudWatch client created')
+
         return clw_client
 
 

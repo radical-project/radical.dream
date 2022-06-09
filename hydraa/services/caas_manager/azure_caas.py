@@ -211,7 +211,7 @@ class AzureCaas():
             tasks_names.append(task_name)
             container_list.append(container)
             self._task_ids[str(self._task_id)]  = task_name
-            print(('submitting tasks {0}/{1}').format(self._task_id, container_batch - 1))
+            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1))
 
             self._task_id +=1
 
@@ -281,7 +281,7 @@ class AzureCaas():
             task_stamps[tname]['Pulling_stop']  = datetime.datetime.timestamp(events[0].last_timestamp)
 
             task_stamps[tname]['Pulled_start']  = datetime.datetime.timestamp(events[1].first_timestamp)
-            task_stamps[tname]['Pulled_start']  = datetime.datetime.timestamp(events[1].last_timestamp)
+            task_stamps[tname]['Pulled_stop']  = datetime.datetime.timestamp(events[1].last_timestamp)
 
             task_stamps[tname]['Created_start']  = datetime.datetime.timestamp(events[2].first_timestamp)
             task_stamps[tname]['Created_stop']   = datetime.datetime.timestamp(events[2].last_timestamp)

@@ -57,7 +57,7 @@ class CaasManager:
             pass
         
         if provider == GCLOUD:
-            raise NotImplementedError 
+            raise NotImplementedError
 
 
     # --------------------------------------------------------------------------
