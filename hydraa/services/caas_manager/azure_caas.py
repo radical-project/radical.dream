@@ -29,6 +29,11 @@ ACTIVE    = True
 WAIT_TIME = 2
 AZURE_RGX = '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
 
+
+# NOTE: If we ask for 100 tasks for now it will fail.
+#       free tier (current subscription) only supports
+#       6 container groups per resource group (pay as you go is 60)
+
 CPCG  = 6   # Number of containers per container group
 CGPRG = 60  # Number of container groups per resource group
 
@@ -76,7 +81,6 @@ class AzureCaas():
     def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
                                           time=0, container_path=None):
         
-        
         self.status = ACTIVE
 
         run_id = str(uuid.uuid4())
@@ -86,7 +90,7 @@ class AzureCaas():
         cpcg = self._schedule(batch_size)
 
         res_group = self.create_resource_group()
-        
+
         for batch in cpcg:
             containers, tasks = self.run_ctask(batch, memory, cpu, container_image_app)
             contaier_group_name = self.create_container_group(res_group, containers)
@@ -97,7 +101,7 @@ class AzureCaas():
         if self.asynchronous:
             return run_id
         
-        self._wait_tasks()
+        self._wait_tasks(batch_size)
 
     
     # --------------------------------------------------------------------------
@@ -169,11 +173,8 @@ class AzureCaas():
 
         # Create the container group
         cg = self._con_client.container_groups.begin_create_or_update(resource_group.name,
-                                                              self._container_group_name,
-                                                                                  group)
-        #while cg.done() is False:
-        #    sys.stdout.write('.')
-        #    time.sleep(1)
+                                                               self._container_group_name,
+                                                                                    group)
 
         # Get the created container group
         container_group = self._con_client.container_groups.get(resource_group.name,
@@ -203,19 +204,34 @@ class AzureCaas():
             container = Container(name=task_name,
                                   image=container_image_name,
                                   resources=container_resource_requirements,
-                                  command=["/bin/echo", "noop"])
+                                  command=["sleep", "10"])
+
             tasks_names.append(task_name)
             container_list.append(container)
             self._task_ids[str(self._task_id)]  = task_name
             print(('submitting tasks {0}/{1}').format(self._task_id, container_batch - 1))
 
             self._task_id +=1
-        
 
         return container_list, tasks_names
+
+
+    def _get_task_statuses(self):
+        
+        statuses = []
+        groups = [g for g in self._container_group_names.keys()]
+        for group in groups:
+            container_group = self._con_client.container_groups.get(self._resource_group_name,
+                                                                                        group)
+            try:
+                statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
+            except AttributeError:
+                time.sleep(1)
+
+        return statuses
     
-    
-    def _wait_tasks(self):
+
+    def _wait_tasks(self, batch_size):
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
@@ -224,14 +240,21 @@ class AzureCaas():
         CLR = "\x1B[0K"
         print("\n\n")
 
-        groups = [g for g in self._container_group_names.keys()]
-
         while True:
-            for group in groups:
-                container_group = self._con_client.container_groups.get(self._resource_group_name,
-                                                                                            group)
-                for container in container_group.containers:
-                    print(container.instance_view.current_state.state)
+
+            statuses = self._get_task_statuses()
+            pending = list(filter(lambda pending: pending == 'Waiting', statuses))
+            running = list(filter(lambda pending: pending == 'Running', statuses))
+            stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
+
+            if len(statuses) == batch_size:
+                if all([status == 'Terminated' for status in statuses]):
+                    print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
+                    break
+
+            print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
+                        len(pending), CLR, len(running), CLR, len(stopped), CLR))
+            time.sleep(0.5)
 
 
     def list_container_groups(resource_group):
