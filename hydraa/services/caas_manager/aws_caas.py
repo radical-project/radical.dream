@@ -587,6 +587,10 @@ class AwsCaas():
     def run_ctask(self, launch_type, batch_size, task_def, cluster_name):
         """Starts a new ctask using the specified task definition. In this
            mode AWS scheduler will handle the task placement.
+           run_ctask is a wrapper around RUN_TASK: which suitable for tasks
+           that runs for x amount of time and stops like batch jobs.
+
+           run_ctask supports only default task placement.
 
            :param: batch_size  : number of tasks to submit to the cluster.
            :param: task_def    : a dictionary of a task defination specifications.
