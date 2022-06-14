@@ -142,7 +142,7 @@ class AwsCaas():
 
         :param: container_path: str
                          if provided then upload that container to
-                         S3 storage for execution. 
+                         S3 storage for execution.
         """
         #
         # TODO: In our scheduling mechanism we need to consider:
@@ -738,7 +738,7 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
         """
-        if not self.asynchronous:
+        if self.asynchronous:
             raise Exception('Task wait is not supported in synchronous mode')
 
         UP = "\x1B[3A"
