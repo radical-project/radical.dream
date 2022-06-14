@@ -739,7 +739,7 @@ class AwsCaas():
         Wait for task status until STOPPED
         """
         if self.asynchronous:
-            raise Exception('Task wait is not supported in synchronous mode')
+            raise Exception('Task wait is not supported in asynchronous mode')
 
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
