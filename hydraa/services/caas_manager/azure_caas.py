@@ -100,7 +100,7 @@ class AzureCaas():
         res_group = self.create_resource_group()
 
         for batch in cpcg:
-            containers, tasks = self.run_ctask(batch, memory, cpu, container_image_app)
+            containers, tasks = self.submit_ctasks(batch, memory, cpu, container_image_app)
             contaier_group_name = self.create_container_group(res_group, containers)
             self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
             self._container_group_names[contaier_group_name]['run_id']        = run_id
@@ -161,7 +161,7 @@ class AzureCaas():
         
         # Create (and then get) a resource group into which the container groups
         # are to be created
-        self._resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
+        self._resource_group_name = 'hydraa-resource-group-{0}'.format(self.manager_id)
 
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
@@ -188,9 +188,9 @@ class AzureCaas():
                         microsoft\aci-helloworld:latest
             command = ['/bin/sh', '-c', 'echo FOO BAR && tail -f /dev/null']
         """
-        self._container_group_name = 'hydraa-contianer-gr-{0}'.format(str(uuid.uuid4()))
+        self._container_group_name = 'hydraa-contianer-group-{0}'.format(str(uuid.uuid4()))
 
-        print("Creating container group '{0}'...".format(self._container_group_name))
+        #print("Creating container group '{0}'...".format(self._container_group_name), end='\r')
 
         group = ContainerGroup(location=resource_group.location,
                                containers=contianers,
@@ -213,7 +213,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_ctask(self, container_batch, memory, cpu, container_image_name,
+    def submit_ctasks(self, container_batch, memory, cpu, container_image_name,
                                                   start_command_line=None):
 
         tasks_names    = []
@@ -234,9 +234,9 @@ class AzureCaas():
 
             tasks_names.append(task_name)
             container_list.append(container)
-            self._task_ids[str(self._task_id)]  = task_name
-            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1), end='\r')
-            print()
+            self._task_ids[str(self._task_id)] = task_name
+            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1),
+                                                                                     end='\r')
 
             self._task_id +=1
 

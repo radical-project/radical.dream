@@ -190,14 +190,14 @@ class AwsCaas():
         if launch_type == FARGATE:
             for batch in tptd:
                 family_id, task_def_arn = self.create_fargate_task_def(container_def, 256, 1024)
-                tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                tasks = self.submit_ctasks(launch_type, batch, task_def_arn, cluster)
                 self._family_ids[family_id]['batch_size'] = batch
 
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
             for batch in tptd:
                 family_id, task_def_arn = self.create_ec2_task_def(container_def)
-                tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                tasks = self.submit_ctasks(launch_type, batch, task_def_arn, cluster)
                 self._family_ids[family_id]['manager_id'] = self.manager_id
                 self._family_ids[family_id]['run_id']     = run_id
                 self._family_ids[family_id]['task_list']  = tasks
@@ -599,13 +599,13 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run_ctask(self, launch_type, batch_size, task_def, cluster_name):
+    def submit_ctasks(self, launch_type, batch_size, task_def, cluster_name):
         """Starts a new ctask using the specified task definition. In this
            mode AWS scheduler will handle the task placement.
-           run_ctask is a wrapper around RUN_TASK: which suitable for tasks
+           submit_ctasks is a wrapper around RUN_TASK: which suitable for tasks
            that runs for x amount of time and stops like batch jobs.
 
-           run_ctask supports only default task placement.
+           submit_ctasks supports only default task placement.
 
            :param: batch_size  : number of tasks to submit to the cluster.
            :param: task_def    : a dictionary of a task defination specifications.
