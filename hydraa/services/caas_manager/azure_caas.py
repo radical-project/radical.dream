@@ -65,6 +65,8 @@ class AzureCaas():
         self._region_name = cred['region_name']
         self._run_cost    = 0
 
+        self.runs_tree = OrderedDict()
+
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
 
@@ -83,10 +85,14 @@ class AzureCaas():
     def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
                                           time=0, container_path=None):
         
+        if self.status:
+            self.__cleanup()
+
         self.status = ACTIVE
 
         run_id = str(uuid.uuid4())
 
+        # FIXME: this will be a user defined via class Cloud_Task
         container_image_app = "screwdrivercd/noop-container"
 
         cpcg = self._schedule(batch_size)
@@ -96,16 +102,34 @@ class AzureCaas():
         for batch in cpcg:
             containers, tasks = self.run_ctask(batch, memory, cpu, container_image_app)
             contaier_group_name = self.create_container_group(res_group, containers)
-            self._container_group_names[contaier_group_name]['run_id']     = run_id
-            self._container_group_names[contaier_group_name]['task_list']  = tasks
-            self._container_group_names[contaier_group_name]['batch_size'] = batch
+            self._container_group_names[contaier_group_name]['self.manager_id'] = self.manager_id
+            self._container_group_names[contaier_group_name]['run_id']          = run_id
+            self._container_group_names[contaier_group_name]['resource_name']   = self._resource_group_name
+            self._container_group_names[contaier_group_name]['task_list']       = tasks
+            self._container_group_names[contaier_group_name]['batch_size']      = batch
+        
+        self.runs_tree[run_id] =  self._container_group_names
 
         if self.asynchronous:
             return run_id
         
         self._wait_tasks(batch_size)
 
-    
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def get_runs_tree(self):
+        return self.runs_tree
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_run_status(self, run_id):
+        #TODO: implement this
+        pass
+
+
     # --------------------------------------------------------------------------
     #
     def _create_container_client(self, cred):
@@ -206,18 +230,21 @@ class AzureCaas():
             container = Container(name=task_name,
                                   image=container_image_name,
                                   resources=container_resource_requirements,
-                                  command=["sleep", "10"])
+                                  command=["/bin/echo", "noop"])
 
             tasks_names.append(task_name)
             container_list.append(container)
             self._task_ids[str(self._task_id)]  = task_name
-            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1))
+            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1), end='\r')
+            print()
 
             self._task_id +=1
 
         return container_list, tasks_names
 
 
+    # --------------------------------------------------------------------------
+    #
     def _get_task_statuses(self):
         
         statuses = []
@@ -231,8 +258,10 @@ class AzureCaas():
                 time.sleep(1)
 
         return statuses
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _wait_tasks(self, batch_size):
 
         if self.asynchronous:
@@ -325,7 +354,6 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    @property
     def ttx(self):
         fcsv = self.profiles()
         try:
@@ -359,6 +387,7 @@ class AzureCaas():
 
         for container_group in container_groups:
             print("  {0}".format(container_group.name))
+
 
     # --------------------------------------------------------------------------
     #
@@ -400,24 +429,47 @@ class AzureCaas():
                     tasks_per_container_grp.append(pp)
         
         return tasks_per_container_grp
-    
 
+
+    # --------------------------------------------------------------------------
+    #
+    def __cleanup(self):
+
+        caller = sys._getframe().f_back.f_code.co_name
+        self._container_group_names = OrderedDict()
+
+        self._task_id     = 0
+        self._task_ids.clear()
+        self._run_cost    = 0
+
+        if caller == '_shutdown':
+            self.manager_id  = None
+            self.status      = False
+            self.res_client  = None
+            self._con_client = None
+
+            self._resource_group_name   = None
+            self._container_group_names.clear()
+
+            self.runs_tree.clear()
+            print('done')
+
+
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
         if not self._resource_group_name and self.status == False:
             return
 
         for key, val in self._container_group_names.items():
-            print(print("terminating container group {0}".format(key)))
+            print(("terminating container group {0}".format(key)))
             del_op = self._con_client.container_groups.begin_delete(self._resource_group_name, key)
         
-        print(print("terminating resource group {0}".format(self._resource_group_name)))
+        print(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
         
+        self.__cleanup()
 
-
-
-
-    
 
 
 
