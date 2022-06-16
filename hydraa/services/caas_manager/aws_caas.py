@@ -78,6 +78,8 @@ class AwsCaas():
 
         self._run_cost     = 0
 
+        self.runs_tree = OrderedDict()
+
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
 
@@ -144,6 +146,9 @@ class AwsCaas():
                          if provided then upload that container to
                          S3 storage for execution.
         """
+        if self.status:
+            self.__cleanup()
+
         #
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
@@ -193,9 +198,12 @@ class AwsCaas():
             for batch in tptd:
                 family_id, task_def_arn = self.create_ec2_task_def(container_def)
                 tasks = self.run_ctask(launch_type, batch, task_def_arn, cluster)
+                self._family_ids[family_id]['manager_id'] = self.manager_id
                 self._family_ids[family_id]['run_id']     = run_id
                 self._family_ids[family_id]['task_list']  = tasks
                 self._family_ids[family_id]['batch_size'] = batch
+        
+        self.runs_tree[run_id] =  self._family_ids
 
         if self.asynchronous:
             return run_id
@@ -206,6 +214,13 @@ class AwsCaas():
 
         # wait on task completion
         self._wait_tasks(self._tasks_arns, cluster)
+
+
+    # --------------------------------------------------------------------------
+    #
+    @property
+    def get_runs_tree(self):
+        return self.runs_tree
 
 
     # --------------------------------------------------------------------------
@@ -940,32 +955,32 @@ class AwsCaas():
     def __cleanup(self):
 
         caller = sys._getframe().f_back.f_code.co_name
-        if caller != '_shutdown':
-            raise Exception('can not perform cleanup')
-
-        self.manager_id = None
-
-        self.status = False
-
-        self._ecs_client    = None
-        self._ec2_client    = None
-        self._iam_client    = None
-        self._prc_client    = None
-
-        self._ec2_resource  = None
-        self._dydb_resource = None
-
-        self._cluster_name = None
-        self._service_name = None
-
+        self._task_id     = 0
+        self.launch_type  =  None
         self._task_ids.clear()
-        self._family_ids.clear()
         self._tasks_arns.clear()
 
-        self.launch_type  =  None
-        self._region_name =  None
+        self._run_cost    = 0
 
-        print('done')
+        if caller == '_shutdown':
+            self.manager_id = None
+            self.status = False
+
+            self._ecs_client    = None
+            self._ec2_client    = None
+            self._iam_client    = None
+            self._prc_client    = None
+
+            self._ec2_resource  = None
+            self._dydb_resource = None
+
+            self._cluster_name = None
+            self._service_name = None
+
+            self._family_ids.clear()
+
+            self._region_name =  None
+            print('done')
         
 
     # --------------------------------------------------------------------------

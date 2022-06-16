@@ -102,11 +102,11 @@ class AzureCaas():
         for batch in cpcg:
             containers, tasks = self.run_ctask(batch, memory, cpu, container_image_app)
             contaier_group_name = self.create_container_group(res_group, containers)
-            self._container_group_names[contaier_group_name]['self.manager_id'] = self.manager_id
-            self._container_group_names[contaier_group_name]['run_id']          = run_id
-            self._container_group_names[contaier_group_name]['resource_name']   = self._resource_group_name
-            self._container_group_names[contaier_group_name]['task_list']       = tasks
-            self._container_group_names[contaier_group_name]['batch_size']      = batch
+            self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
+            self._container_group_names[contaier_group_name]['run_id']        = run_id
+            self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
+            self._container_group_names[contaier_group_name]['task_list']     = tasks
+            self._container_group_names[contaier_group_name]['batch_size']    = batch
         
         self.runs_tree[run_id] =  self._container_group_names
 
