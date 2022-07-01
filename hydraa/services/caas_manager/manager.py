@@ -1,4 +1,6 @@
 import uuid
+from typing import List
+from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
 from hydraa.services.caas_manager.aws_caas   import AwsCaas
 from hydraa.services.caas_manager.azure_caas import AzureCaas
@@ -27,7 +29,6 @@ class CaasManager:
         
         _id = str(uuid.uuid4())
         self._registered_managers = []
-        
 
         if proxy:
             self._proxy = proxy_mgr
@@ -72,8 +73,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def execute_ctask_batch(self, launch_type, batch_size, cpu, memory,
-                                budget=0, time=0, container_path=None):
+    def execute_ctask_batch(self, tasks: List[Task], budget=0, time=0, container_path=None):
         """
         execute contianers and wait for it. Ideally when
         container_path is provided it means we need to
@@ -87,8 +87,7 @@ class CaasManager:
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
-            run_id = self.AzureCaas.run(launch_type, batch_size, budget, cpu, memory,
-                                                                                time)
+            run_id = self.AzureCaas.run(tasks, budget, time)
             return run_id
         
         if GCLOUD in self._proxy.loaded_providers:

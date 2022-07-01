@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import uuid
+import copy
 import time
 import atexit
 import datetime
@@ -27,6 +28,7 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
+AZURE     = 'azure'
 ACTIVE    = True
 WAIT_TIME = 2
 AZURE_RGX = '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
@@ -58,8 +60,8 @@ class AzureCaas():
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
 
+        self.run_id       = None 
         self._task_id     = 0
-
         self._task_ids    = OrderedDict()
 
         self._region_name = cred['region_name']
@@ -82,38 +84,33 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
-                                          time=0, container_path=None):
+    def run(self, ctasks, budget=0, time=0, container_path=None):
         
         if self.status:
             self.__cleanup()
 
         self.status = ACTIVE
 
-        run_id = str(uuid.uuid4())
+        self.run_id = str(uuid.uuid4())
 
-        # FIXME: this will be a user defined via class Cloud_Task
-        container_image_app = "screwdrivercd/noop-container"
-
-        cpcg = self._schedule(batch_size)
+        cpcg = self._schedule(ctasks)
 
         res_group = self.create_resource_group()
 
         for batch in cpcg:
-            containers, tasks = self.submit_ctasks(batch, memory, cpu, container_image_app)
+            containers, tasks = self.submit_ctasks(batch)
             contaier_group_name = self.create_container_group(res_group, containers)
             self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
-            self._container_group_names[contaier_group_name]['run_id']        = run_id
             self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
             self._container_group_names[contaier_group_name]['task_list']     = tasks
-            self._container_group_names[contaier_group_name]['batch_size']    = batch
+            self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
         
-        self.runs_tree[run_id] =  self._container_group_names
+        self.runs_tree[self.run_id] =  self._container_group_names
 
         if self.asynchronous:
-            return run_id
+            return self.run_id
         
-        self._wait_tasks(batch_size)
+        self._wait_tasks(ctasks)
 
 
     # --------------------------------------------------------------------------
@@ -135,7 +132,7 @@ class AzureCaas():
     def _create_container_client(self, cred):
         
         client = ContainerInstanceManagementClient(credential=DefaultAzureCredential(), 
-                                                   subscription_id=cred['az_sub_id'])
+                                                    subscription_id=cred['az_sub_id'])
 
         return client
 
@@ -145,7 +142,7 @@ class AzureCaas():
     def _create_resource_client(self, cred):
         
         client = ResourceManagementClient(credential=DefaultAzureCredential(), 
-                                                   subscription_id=cred['az_sub_id'])
+                                            subscription_id=cred['az_sub_id'])
 
         return client
 
@@ -213,56 +210,65 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit_ctasks(self, container_batch, memory, cpu, container_image_name,
-                                                  start_command_line=None):
+    def submit_ctasks(self, ctasks_batch):
 
-        tasks_names    = []
+        tasks          = []
         container_list = []
 
-        for container in range(container_batch):
-            # Configure the container
-            task_name = 'ctask-{0}'.format(self._task_id)
-            container_resource_requests = ResourceRequests(memory_in_gb=memory,
-                                                                       cpu=cpu)
+        for ctask in ctasks_batch:
+            ctask.run_id   = self.run_id
+            ctask.id       = self._task_id
+            ctask.name     = 'ctask-{0}'.format(self._task_id)
+            ctask.provider = AZURE
+
+            container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
+                                                                     cpu=ctask.vcpus)
             container_resource_requirements = ResourceRequirements(
                                           requests=container_resource_requests)
 
-            container = Container(name=task_name,
-                                  image=container_image_name,
+            container = Container(name=ctask.name,
+                                  image=ctask.image,
                                   resources=container_resource_requirements,
-                                  command=["/bin/echo", "noop"])
+                                  command=ctask.cmd)
 
-            tasks_names.append(task_name)
+            tasks.append(ctask)
             container_list.append(container)
-            self._task_ids[str(self._task_id)] = task_name
-            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1),
-                                                                                     end='\r')
+            self._task_ids[str(ctask.id)] = ctask.name
+            print(('submitting tasks {0}/{1}').format(ctask.id, len(self._task_ids) - 1),
+                                                                                end='\r')
 
             self._task_id +=1
 
-        return container_list, tasks_names
+        return container_list, tasks
 
 
     # --------------------------------------------------------------------------
     #
     def _get_task_statuses(self):
-        
+
         statuses = []
         groups = [g for g in self._container_group_names.keys()]
         for group in groups:
             container_group = self._con_client.container_groups.get(self._resource_group_name,
                                                                                         group)
+            
+            ctasks = self._container_group_names[group]['task_list']
+
             try:
+                for i in range(len(ctasks)):
+                    ctasks[i].events = container_group.containers[i].instance_view.events
+                    ctasks[i].state  = container_group.containers[i].instance_view.current_state.state
                 statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
+            
             except AttributeError:
-                time.sleep(1)
+                time.sleep(0.2)
 
         return statuses
 
 
     # --------------------------------------------------------------------------
     #
-    def _wait_tasks(self, batch_size):
+    def _wait_tasks(self, ctasks):
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
@@ -274,18 +280,18 @@ class AzureCaas():
         while True:
 
             statuses = self._get_task_statuses()
+
             pending = list(filter(lambda pending: pending == 'Waiting', statuses))
             running = list(filter(lambda pending: pending == 'Running', statuses))
             stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
 
-            if len(statuses) == batch_size:
-                if all([status == 'Terminated' for status in statuses]):
-                    print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
-                    break
+            if all([status == 'Terminated' for status in statuses]):
+                print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
+                break
 
             print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
                         len(pending), CLR, len(running), CLR, len(stopped), CLR))
-            time.sleep(0.5)
+            time.sleep(0.2)
 
 
     # --------------------------------------------------------------------------
@@ -299,29 +305,19 @@ class AzureCaas():
             container_group = self._con_client.container_groups.get(self._resource_group_name,
                                                                                         group)
             containers.extend(c for c in container_group.containers)
-        
 
         for container in containers:
             tname = container.name
             events = container.instance_view.events
             task_stamps[tname] = OrderedDict()
 
-            task_stamps[tname]['Pulling_start'] = datetime.datetime.timestamp(events[0].first_timestamp)
-            task_stamps[tname]['Pulling_stop']  = datetime.datetime.timestamp(events[0].last_timestamp)
+            for event in events:
+                task_stamps[tname][event.name+'_start'] = datetime.datetime.timestamp(event.first_timestamp)
+                task_stamps[tname][event.name+'_stop']  = datetime.datetime.timestamp(event.last_timestamp)
 
-            task_stamps[tname]['Pulled_start']  = datetime.datetime.timestamp(events[1].first_timestamp)
-            task_stamps[tname]['Pulled_stop']  = datetime.datetime.timestamp(events[1].last_timestamp)
-
-            task_stamps[tname]['Created_start']  = datetime.datetime.timestamp(events[2].first_timestamp)
-            task_stamps[tname]['Created_stop']   = datetime.datetime.timestamp(events[2].last_timestamp)
-
-            task_stamps[tname]['Started_start']  = datetime.datetime.timestamp(events[3].first_timestamp)
-            task_stamps[tname]['Started_stop']   = datetime.datetime.timestamp(events[3].last_timestamp)
-
-            state = container.instance_view.current_state
-
-            task_stamps[tname][state.state+'_start'] = datetime.datetime.timestamp(state.start_time)
-            task_stamps[tname][state.state+'_stop']  = datetime.datetime.timestamp(state.finish_time)
+                state = container.instance_view.current_state
+                task_stamps[tname][state.state+'_start'] = datetime.datetime.timestamp(state.start_time)
+                task_stamps[tname][state.state+'_stop']  = datetime.datetime.timestamp(state.finish_time)
         
         return task_stamps
 
@@ -330,7 +326,7 @@ class AzureCaas():
     #
     def profiles(self):
 
-        fname = 'azure_ctasks_df_{0}.csv'.format(self.manager_id)
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(AZURE, len(self._task_ids), self.manager_id)
 
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
@@ -345,7 +341,6 @@ class AzureCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        fname = 'azure_{0}_ctasks_{1}.csv'.format(len(self._task_ids), self.manager_id)
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
 
@@ -391,8 +386,10 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _schedule(self, batch_size):
+    def _schedule(self, tasks):
 
+        task_batch = copy.deepcopy(tasks)
+        batch_size = len(task_batch)
         if not batch_size:
             raise Exception('Batch size can not be 0')
 
@@ -428,7 +425,14 @@ class AzureCaas():
                 else:
                     tasks_per_container_grp.append(pp)
         
-        return tasks_per_container_grp
+        batch_map = tasks_per_container_grp
+        
+        objs_batch = []
+        for batch in batch_map:
+           objs_batch.append(task_batch[:batch])
+           task_batch[:batch]
+           del task_batch[:batch]
+        return(objs_batch)
 
 
     # --------------------------------------------------------------------------
