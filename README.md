@@ -26,7 +26,7 @@ In [4]: tasks = []
    ...:     tasks.append(CTask)
    ...:
 
-In [5]: caas_mgr.execute_ctask_batch(tasks)
+In [5]: caas_mgr.submit_tasks(tasks)
 ```
 
 ```shell
