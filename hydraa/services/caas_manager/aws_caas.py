@@ -493,6 +493,13 @@ class AwsCaas():
         
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
+        # FIXME: this should not exist. AWS allows
+        # to specify more than 1 container_def per task_def
+        # assuming the task_def has enough vcpus and memory.
+        # currently we are not considering if we have 
+        # enough reources to run N different containers
+        # per task_def. If we remove the if then it will fail
+        # with MEMORY_ERROR. 
         if len(container_defs) > 1:
             container_defs = [container_defs[0]]
 
@@ -602,9 +609,8 @@ class AwsCaas():
 
         """
         tptd = self._schedule(ctasks, launch_type)
-
+        container = self.create_container_def(ctask)
         for batch in tptd:
-            containers = []
             for ctask in batch:
                 # build an aws container defination from the task object
                 ctask.run_id      = self.run_id
@@ -612,14 +618,13 @@ class AwsCaas():
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
                 ctask.launch_type = launch_type
-                containers.append(self.create_container_def(ctask))
                 self._task_id +=1
             
 
             # EC2 does not support Network config or platform version
             # FIXME: Pass the memory and cpu via a VM class
             if launch_type == FARGATE:
-                task_def_arn = self.create_fargate_task_def(contianers, 256, 1024)
+                task_def_arn = self.create_fargate_task_def(container, 256, 1024)
                 kwargs['platformVersion']      = 'LATEST'
                 kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
                                                                           'subnet-094da8d73899da51c',],
@@ -627,7 +632,7 @@ class AwsCaas():
                                                 'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
             if launch_type == EC2:
-                family_id, task_def_arn = self.create_ec2_task_def(containers)
+                family_id, task_def_arn = self.create_ec2_task_def(container)
 
             kwargs = {}
             kwargs['count']                = len(batch)
