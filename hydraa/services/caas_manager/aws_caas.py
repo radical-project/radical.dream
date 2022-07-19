@@ -1,6 +1,8 @@
 import os
 import sys
+import copy
 import json
+import math
 import time
 import uuid
 import boto3
@@ -9,6 +11,7 @@ import atexit
 import base64
 import typing as t
 
+from itertools import islice
 from datetime import datetime
 from dateutil.tz import tzlocal
 from collections import OrderedDict
@@ -17,11 +20,12 @@ from hydraa.services.maas_manager.aws_maas import AwsMaas
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-EC2               = 'EC2'
-BUDGET            = 0
-ACTIVE            = True
-FARGATE           = 'FARGATE'
-WAIT_TIME         = 2
+AWS       = 'aws'
+EC2       = 'EC2'
+BUDGET    = 0
+ACTIVE    = True
+FARGATE   = 'FARGATE'
+WAIT_TIME = 2
 
 CPTD = 10    # The max number of containers defs within a task def.
 TDPC = 500   # The max number of task defs per cluster.
@@ -64,6 +68,7 @@ class AwsCaas():
         self._cluster_name = None
         self._service_name = None
 
+        self.run_id        = None
         self._task_id      = 0
         
         # FIXME: rename task_ids to tasks_book
@@ -120,35 +125,26 @@ class AwsCaas():
         
     # --------------------------------------------------------------------------
     #
-    def run(self, launch_type, batch_size=1, budget=0, cpu=0, memory=0,
-                                          time=0, container_path=None):
+    def run(self, tasks, launch_type=None, service=False, budget=0, time=0):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
 
-        :param: batch_size: int 
-                         number of identical tasks that runs within the
-                         same cluster on with the same resource requirements.
+        :param: tasks:   List of Task class object 
+                         
         
         :param: budget: float
                          expected charging amount by AWS to operate within.
         
-        :param: cpu: int
-                     number of cpus per ctask
-        
-        :param: memory: int
-                        memory size in MB
-        
-        :param: timeL int
-                       expected execution time on AWS in minutes
+        :param: time: int
+                         expected execution time on AWS in minutes
 
-        :param: container_path: str
-                         if provided then upload that container to
-                         S3 storage for execution.
         """
         if self.status:
             self.__cleanup()
-
+        
+        if not launch_type:
+            launch_type = EC2
         #
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
@@ -158,7 +154,7 @@ class AwsCaas():
             if not time:
                 raise Exception('estimated runtime is required')
 
-            run_cost =  budget_calc.get_cost(launch_type, batch_size, cpu, memory, time)
+            run_cost =  budget_calc.get_cost(launch_type, tasks, time)
 
             if run_cost > budget:
                 msg = '({0} USD > {1} USD)'.format(run_cost, budget)
@@ -170,50 +166,38 @@ class AwsCaas():
                 else:
                     print('invalid input, abort')
                     return
-            
+
             print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
-            
+
             BUDGET           = budget
             self.cost        = run_cost
 
         self.status      = ACTIVE
+        self.run_id      = str(uuid.uuid4())
         self.launch_type = launch_type
 
         cluster = self.create_cluster()
         self._wait_clusters(cluster)
 
-        container_def = self.create_container_def()
-        tptd = self._schedule(batch_size, launch_type)
-
-        run_id = str(uuid.uuid4())
+        if service:
+            self.create_ecs_service()
 
         if launch_type == FARGATE:
-            for batch in tptd:
-                family_id, task_def_arn = self.create_fargate_task_def(container_def, 256, 1024)
-                tasks = self.submit_ctasks(launch_type, batch, task_def_arn, cluster)
-                self._family_ids[family_id]['batch_size'] = batch
+            self.submit_ctasks(launch_type, tasks, cluster)
 
+        # TODO: create class VM that exposes all of the EC2 VM kwargs
+        # to the user
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
-            for batch in tptd:
-                family_id, task_def_arn = self.create_ec2_task_def(container_def)
-                tasks = self.submit_ctasks(launch_type, batch, task_def_arn, cluster)
-                self._family_ids[family_id]['manager_id'] = self.manager_id
-                self._family_ids[family_id]['run_id']     = run_id
-                self._family_ids[family_id]['task_list']  = tasks
-                self._family_ids[family_id]['batch_size'] = batch
+            self.submit_ctasks(launch_type, tasks, cluster)
         
-        self.runs_tree[run_id] =  self._family_ids
+        self.runs_tree[self.run_id] =  self._family_ids
 
         if self.asynchronous:
-            return run_id
-
-        # FIXME: Enabling the service should be specified by the user
-        #
-        # self.create_ecs_service()
+            return self.run_id
 
         # wait on task completion
-        self._wait_tasks(self._tasks_arns, cluster)
+        self._wait_tasks()
 
 
     # --------------------------------------------------------------------------
@@ -230,8 +214,8 @@ class AwsCaas():
         run_status = [] 
         for key, val in self._family_ids.items():
             if val.get('run_id') == run_id:
-                statuses = self._get_task_statuses(val.get('task_list'),
-                                                     self._cluster_name)
+                tasks = [t.arn for t in val.get('task_list')]
+                statuses = self._get_task_statuses(tasks, self._cluster_name)
                 run_status.append(statuses)
         
         run_stat =  [item for sublist in run_status for item in sublist]
@@ -421,7 +405,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_container_def(self, image='ubuntu', cpu=1, memory=7):
+    def create_container_def(self, ctask):
         """ Build the internal structure of the container defination.
             
             :param: name   : container name
@@ -431,9 +415,9 @@ class AwsCaas():
 
             :return: container defination
         """
-        con_def = {'name'        : 'noop',
-                   'cpu'         : cpu,
-                   'memory'      : memory,
+        con_def = {'name'        : ctask.name,
+                   'cpu'         : ctask.vcpus,
+                   'memory'      : ctask.memory,
                    'portMappings': [],
                    'essential'   : True,
                    'environment' : [],
@@ -444,9 +428,9 @@ class AwsCaas():
                                                     "awslogs-group" : "/ecs/first-run-task-definition",
                                                     "awslogs-region": "us-east-1",
                                                     "awslogs-stream-prefix": "ecs"}},
-                   'image'       : 'screwdrivercd/noop-container',
+                   'image'       : ctask.image,
                    "entryPoint"  : [],
-                   'command'     : ["/bin/echo", "noop"]}
+                   'command'     : ctask.cmd}
 
         return con_def
 
@@ -470,7 +454,7 @@ class AwsCaas():
         task_def['volumes']                 = []
         task_def['cpu']                     = str(cpu)    # required
         task_def['memory']                  = str(memory) # required
-        task_def['containerDefinitions']    = [container_def]
+        task_def['containerDefinitions']    = container_def
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['networkMode']             = 'awsvpc'
         task_def['requiresCompatibilities'] = ['FARGATE']
@@ -490,7 +474,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_task_def(self, container_def, cpu = 0, memory = 0):
+    def create_ec2_task_def(self, container_defs, cpu = 0, memory = 0):
         """Build the internal structure of the task defination.
 
            :param: container_def: a dictionary of a container specifications.
@@ -509,9 +493,12 @@ class AwsCaas():
         
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
+        if len(container_defs) > 1:
+            container_defs = [container_defs[0]]
+
         task_def['family']                  = family_id
         task_def['volumes']                 = []
-        task_def['containerDefinitions']    = [container_def]
+        task_def['containerDefinitions']    = container_defs
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['requiresCompatibilities'] = ['EC2']
         
@@ -599,7 +586,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit_ctasks(self, launch_type, batch_size, task_def, cluster_name):
+    def submit_ctasks(self, launch_type, ctasks, cluster_name):
         """Starts a new ctask using the specified task definition. In this
            mode AWS scheduler will handle the task placement.
            submit_ctasks is a wrapper around RUN_TASK: which suitable for tasks
@@ -614,39 +601,58 @@ class AwsCaas():
            :return: submited ctasks ARNs
 
         """
-        kwargs     = {}
+        tptd = self._schedule(ctasks, launch_type)
 
-        kwargs['count']                = batch_size
-        kwargs['cluster']              = cluster_name
-        kwargs['launchType']           = launch_type
-        kwargs['overrides']            = {}
-        kwargs['taskDefinition']       = task_def
+        for batch in tptd:
+            containers = []
+            for ctask in batch:
+                # build an aws container defination from the task object
+                ctask.run_id      = self.run_id
+                ctask.id          = self._task_id
+                ctask.name        = 'ctask-{0}'.format(ctask.id)
+                ctask.provider    = AWS
+                ctask.launch_type = launch_type
+                containers.append(self.create_container_def(ctask))
+                self._task_id +=1
+            
 
-        # EC2 does not support Network config or platform version
-        if launch_type == FARGATE:
-            kwargs['platformVersion']      = 'LATEST'
-            kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
-                                                                      'subnet-094da8d73899da51c',],
-                                              'assignPublicIp'     : 'ENABLED',
-                                              'securityGroups'     : ["sg-0702f37d21c55da64"]}}
-                
-        # submit tasks of size "batch_size"
-        response = self._ecs_client.run_task(**kwargs)
+            # EC2 does not support Network config or platform version
+            # FIXME: Pass the memory and cpu via a VM class
+            if launch_type == FARGATE:
+                task_def_arn = self.create_fargate_task_def(contianers, 256, 1024)
+                kwargs['platformVersion']      = 'LATEST'
+                kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
+                                                                          'subnet-094da8d73899da51c',],
+                                                'assignPublicIp'     : 'ENABLED',
+                                                'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
-        if response['failures']:
-            raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
-                                       failure['reason']) for failure in response['failures']]))
+            if launch_type == EC2:
+                family_id, task_def_arn = self.create_ec2_task_def(containers)
 
-        for task in response['tasks']:
-            task_arn = task['taskArn']
-            self._tasks_arns.append(task_arn)
+            kwargs = {}
+            kwargs['count']                = len(batch)
+            kwargs['cluster']              = cluster_name
+            kwargs['launchType']           = launch_type
+            kwargs['overrides']            = {}
+            kwargs['taskDefinition']       = task_def_arn
+        
+            # submit tasks of size "batch_size"
+            response = self._ecs_client.run_task(**kwargs)
+            if response['failures']:
+                raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                                        failure['reason']) for failure in response['failures']]))
 
-            self._task_ids[str(task_arn)] = 'ctask.{0}'.format(self._task_id)
-            print(('submitting tasks {0}/{1}').format(self._task_id, len(self._task_ids) - 1),
-                                                                                     end='\r')
-            self._task_id +=1
-
-        return self._tasks_arns
+            # attach the unique ARN to every task
+            for i, task in enumerate(response['tasks']):
+                ctask = batch[i]
+                ctask.arn = task['taskArn']
+                self._task_ids[str(ctask.arn)] = ctask.name
+                print(('submitting tasks {0}/{1}').format(ctask.id, len(self._task_ids) - 1),
+                                                                                    end='\r')
+            self._family_ids[family_id]['manager_id'] = self.manager_id
+            self._family_ids[family_id]['run_id']     = self.run_id
+            self._family_ids[family_id]['task_list']  = batch
+            self._family_ids[family_id]['batch_size'] = len(batch)
 
 
     # --------------------------------------------------------------------------
@@ -707,7 +713,6 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    @property
     def ttx(self):
         fcsv = self.profiles()
         try:
@@ -724,31 +729,41 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, task_ids, cluster):
+    def _get_task_statuses(self, tasks, cluster):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Retrieve task statuses from ECS API
 
         Returns list of {RUNNING|PENDING|STOPPED} for each id in task_ids
         """
-        response = self._ecs_client.describe_tasks(tasks=task_ids, cluster=cluster)
+        # describe_tasks accepts only 100 arns per invokation
+        # so we split the task arns into chunks of 100
 
-        #FIXME: if we have a failure then update the task_ids 
-        #       with status/error code and print it.
-        if response['failures'] != []:
-            raise Exception('There were some failures:\n{0}'.format(
-                response['failures']))
-        status_code = response['ResponseMetadata']['HTTPStatusCode']
-        if status_code != 200:
-            msg = 'Task status request received status code {0}:\n{1}'
-            raise Exception(msg.format(status_code, response))
+        tasks    = iter(tasks)
+        statuses = []
+        for chunk in iter(lambda: tuple(islice(tasks, 100)), ()):
+            response = self._ecs_client.describe_tasks(tasks=list(chunk),
+                                                         cluster=cluster)
 
-        return [t['lastStatus'] for t in response['tasks']]
+            #FIXME: if we have a failure then update the task_ids 
+            #       with status/error code and print it.
+            if response['failures'] != []:
+                raise Exception('There were some failures:\n{0}'.format(
+                    response['failures']))
+            status_code = response['ResponseMetadata']['HTTPStatusCode']
+            if status_code != 200:
+                msg = 'Task status request received status code {0}:\n{1}'
+                raise Exception(msg.format(status_code, response))
+            
+            for task in response['tasks']:
+                statuses.append(task['lastStatus'])
+
+        return statuses
 
 
     # --------------------------------------------------------------------------
     #
-    def _wait_tasks(self, task_ids, cluster):
+    def _wait_tasks(self):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Wait for task status until STOPPED
@@ -759,9 +774,9 @@ class AwsCaas():
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
         print("\n\n")
-        tasks = [t for t in self._task_ids.values()]
+        tasks = [t for t in self._task_ids.keys()]
         while True:
-            statuses = self._get_task_statuses(task_ids, cluster)
+            statuses = self._get_task_statuses(tasks, self._cluster_name)
             pending = list(filter(lambda pending: pending == 'PENDING', statuses))
             running = list(filter(lambda pending: pending == 'RUNNING', statuses))
             stopped = list(filter(lambda pending: pending == 'STOPPED', statuses))
@@ -902,9 +917,10 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _schedule(self, batch_size, launch_type):
+    def _schedule(self, tasks, launch_type):
 
-        import math
+        task_batch = copy.deepcopy(tasks)
+        batch_size = len(task_batch)
 
         if not batch_size:
             raise Exception('Batch size can not be 0')
@@ -947,7 +963,14 @@ class AwsCaas():
                 else:
                     tasks_per_task_def.append(pp)
         
-        return tasks_per_task_def
+        batch_map = tasks_per_task_def
+        objs_batch = []
+        for batch in batch_map:
+           objs_batch.append(task_batch[:batch])
+           task_batch[:batch]
+           del task_batch[:batch]
+
+        return(objs_batch)
 
 
     # --------------------------------------------------------------------------
@@ -1001,7 +1024,8 @@ class AwsCaas():
             response = self._ecs_client.delete_service(cluster=self._cluster_name,
                                                        service=self._service_name)
         except:
-            print("no active service found")
+            #print("no active service found")
+            pass
 
         # degister all task definitions
         if self._family_ids:

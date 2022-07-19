@@ -73,17 +73,15 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def execute_ctask_batch(self, tasks: List[Task], budget=0, time=0, container_path=None):
+    def submit_tasks(self, tasks: List[Task], launch_type = None, service=False,
+                                                              budget=0, time=0):
         """
-        execute contianers and wait for it. Ideally when
-        container_path is provided it means we need to
-        upload it to aws and use it.
+        submit contianers and wait for it. Ideally when
+        container_path is in tasks.container_path then we
+        upload it to the provider and use it.
         """
-        # TODO: pass a ctask description
-        #       via the user
         if AWS in self._proxy.loaded_providers:
-            run_id = self.AwsCaas.run(launch_type, batch_size, budget, cpu, memory,
-                                                                              time)
+            run_id = self.AwsCaas.run(tasks, launch_type, service, budget, time)
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
@@ -96,8 +94,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def execute_cjob_batch(self, launch_type, batch_size, cpu, memory,
-                               budget=0, time=0, container_path=None):
+    def submit_jobs(self, jobs: List[Task], budget=0, time=0, container_path=None):
         raise NotImplementedError
     
     # --------------------------------------------------------------------------

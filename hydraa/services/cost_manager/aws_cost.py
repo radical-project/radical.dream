@@ -65,21 +65,24 @@ class AwsCost:
     
     # --------------------------------------------------------------------------
     #
-    def get_cost(self, launch_type, batch_size, runTime, cpu=0, mem=0):
+    def get_cost(self, launch_type, tasks, runtime):
 
         # TODO: provide instance type instead of hard coded it
+        batch_size = len(tasks)
+        max_vcpu = max([t.vcpus for t in tasks])
+        max_mem = max([t.memory for t in tasks])
 
         if launch_type == 'EC2':
             tasks_cost = self.cost_of_ec2task(self._region_name, batch_size,
-                                      cpu, mem, 'Linux','t2.micro', runTime)
+                              max_vcpu, max_mem, 'Linux','t2.micro', runtime)
             return tasks_cost
         
         if launch_type == 'FARGATE':
             if not cpu and not mem:
                 raise Exception('cpu and memory is required to calaculte Fargate price')
 
-            tasks_cost = self.cost_of_fgtask(self._region_name, batch_size, cpu, mem,
-                                                                    'Linux', runTime)
+            tasks_cost = self.cost_of_fgtask(self._region_name, batch_size, max_vcpu, 
+                                                           max_mem, 'Linux', runtime)
 
             return task_cost
 

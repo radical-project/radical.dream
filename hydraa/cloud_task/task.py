@@ -41,9 +41,31 @@ class Task(object):
     def provider(self, provider):
         providers = ['aws', 'azure', 'google']
         if provider not in providers:
-            raise ValueError('task provider no supported') 
+            raise ValueError('task provider not supported') 
         self.__provider = provider
-        
+    
+
+    @property
+    def launch_type(self):
+        """represents the launch_type of that task (EC2, B1)"""
+        return self.__launch_type
+
+
+    @launch_type.setter
+    def launch_type(self, launch_type):
+        launch_types = ['EC2', 'B1']
+        if launch_type not in launch_types:
+            raise ValueError('launch type not supported') 
+        self.__launch_type = launch_type
+
+
+    @property
+    def arn(self) -> str:
+        return self.__arn
+
+    @arn.setter
+    def arn(self, arn):        
+        self.__arn = arn
 
     @property
     def ip(self) -> str:
