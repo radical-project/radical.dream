@@ -122,7 +122,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def get_run_status(self, run_id):
+    def _get_run_status(self, run_id):
         #TODO: implement this
         pass
 

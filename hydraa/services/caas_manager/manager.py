@@ -63,9 +63,42 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def get_ctask_status(self, ID):
+    def get_run_status(self, run_id, provider=None):
         """
-        check if the contianer is still executing or 
+        check if the entire run is still executing or 
+        pending/done/failed
+        """
+        if not provider:
+            for provider in self._proxy.loaded_providers:
+                if provider == AWS:
+                    return self.AwsCaas._get_run_status(run_id)
+                if provider == AZURE:
+                    return self.AzureCaas._get_run_status(run_id)
+                if provider == GCLOUD:
+                    raise NotImplementedError
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_run_tree(self, run_id, provider=None):
+        """
+        get the run tree and structure
+        """
+        if not provider:
+            for provider in self._proxy.loaded_providers:
+                if provider == AWS:
+                    self.AwsCaas._get_runs_tree(run_id)
+                if provider == AZURE:
+                    self.AzureCaas._get_runs_tree(run_id)
+                if provider == GCLOUD:
+                    raise NotImplementedError
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_task_status(self, task_id):
+        """
+        check if the contianer is still executing or
         Done/failed
         """
         raise NotImplementedError
@@ -76,9 +109,7 @@ class CaasManager:
     def submit_tasks(self, tasks: List[Task], launch_type = None, service=False,
                                                               budget=0, time=0):
         """
-        submit contianers and wait for it. Ideally when
-        container_path is in tasks.container_path then we
-        upload it to the provider and use it.
+        submit contianers and wait for them or not.
         """
         if AWS in self._proxy.loaded_providers:
             run_id = self.AwsCaas.run(tasks, launch_type, service, budget, time)

@@ -167,6 +167,8 @@ class AwsCaas():
         self.run_id      = str(uuid.uuid4())
         self.launch_type = launch_type
 
+        print("starting run {0}".format(self.run_id))
+
         cluster = self.create_cluster()
         self._wait_clusters(cluster)
 
@@ -193,14 +195,13 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    @property
-    def get_runs_tree(self):
-        return self.runs_tree
+    def _get_runs_tree(self, run_id):
+        return self.runs_tree[run_id]
 
 
     # --------------------------------------------------------------------------
     #
-    def get_run_status(self, run_id):
+    def _get_run_status(self, run_id):
         
         run_status = [] 
         for key, val in self._family_ids.items():
