@@ -1,19 +1,14 @@
 import os
 import sys
 import copy
-import json
 import math
 import time
 import uuid
-import boto3
-import pprint
 import atexit
-import base64
-import typing as t
+import boto3
 
 from itertools import islice
 from datetime import datetime
-from dateutil.tz import tzlocal
 from collections import OrderedDict
 from hydraa.services.cost_manager.aws_cost import AwsCost
 from hydraa.services.maas_manager.aws_maas import AwsMaas
@@ -179,13 +174,13 @@ class AwsCaas():
             self.create_ecs_service()
 
         if launch_type == FARGATE:
-            self.submit_ctasks(launch_type, tasks, cluster)
+            self.submit(launch_type, tasks, cluster)
 
         # TODO: create class VM that exposes all of the EC2 VM kwargs
         # to the user
         if launch_type == EC2:
             self.create_ec2_instance(self._cluster_name)
-            self.submit_ctasks(launch_type, tasks, cluster)
+            self.submit(launch_type, tasks, cluster)
         
         self.runs_tree[self.run_id] =  self._family_ids
 
@@ -213,7 +208,7 @@ class AwsCaas():
                 tasks = [t.arn for t in val.get('task_list')]
                 statuses = self._get_task_statuses(tasks, self._cluster_name)
                 run_status.append(statuses)
-        
+
         run_stat =  [item for sublist in run_status for item in sublist]
         pending = list(filter(lambda pending: pending == 'PENDING', run_stat))
         running = list(filter(lambda pending: pending == 'RUNNING', run_stat))
@@ -229,7 +224,7 @@ class AwsCaas():
             print('run: {0} is finished'.format(run_id))
         
         print(msg)
-           
+
 
     # --------------------------------------------------------------------------
     #
@@ -352,7 +347,7 @@ class AwsCaas():
                 return clusters[0]
             else:
                 print('not hydraa cluster found: {0}')
-        
+
         else:
             print('no cluster found in this account')
 
@@ -454,9 +449,9 @@ class AwsCaas():
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['networkMode']             = 'awsvpc'
         task_def['requiresCompatibilities'] = ['FARGATE']
-        
+
         reg_task = self._ecs_client.register_task_definition(**task_def)
-        
+
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
         print('task {0} is registered'.format(family_id))
@@ -486,7 +481,7 @@ class AwsCaas():
             task_def['cpu'] = cpu # optional
         if memory:
             task_def['memory'] = memory    # optional
-        
+
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
         # FIXME: this should not exist. AWS allows
@@ -504,11 +499,11 @@ class AwsCaas():
         task_def['containerDefinitions']    = container_defs
         task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
         task_def['requiresCompatibilities'] = ['EC2']
-        
+
         reg_task = self._ecs_client.register_task_definition(**task_def)
-        
+
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
-        
+
         print('task {0} is registered'.format(family_id))
 
         # save the family id and its ARN
@@ -517,7 +512,7 @@ class AwsCaas():
 
         return family_id, task_def_arn
 
-    
+
     # --------------------------------------------------------------------------
     #
     def create_ecs_service(self):
@@ -533,7 +528,7 @@ class AwsCaas():
         # FIXME: check for exisitng hydraa services specifically.
 
         self._service_name = "hydraa_service_{0}".format(self.manager_id)
-        
+
         # Check if the service already exist and use it
         running_services = self._ecs_client.list_services(cluster = self._cluster_name)
 
@@ -542,7 +537,7 @@ class AwsCaas():
                 print('service {0} already exist on cluster {1}'.format(self._service_name, self._cluster_name))
 
                 return service
-        
+
         print('no exisitng service found, creating.....')
         response = self._ecs_client.create_service(cluster        = self._cluster_name,
                                                    serviceName    = self._service_name,
@@ -556,11 +551,11 @@ class AwsCaas():
                                                    # clientToken='request_identifier_string',
                                                    deploymentConfiguration={'maximumPercent': 200,
                                                                             'minimumHealthyPercent': 50})
-        
 
-        
+
+
         print('service {0} created'.format(self._service_name))
-        
+
         return response
 
 
@@ -589,13 +584,13 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit_ctasks(self, launch_type, ctasks, cluster_name):
+    def submit(self, launch_type, ctasks, cluster_name):
         """Starts a new ctask using the specified task definition. In this
            mode AWS scheduler will handle the task placement.
-           submit_ctasks is a wrapper around RUN_TASK: which suitable for tasks
+           submit is a wrapper around RUN_TASK: which suitable for tasks
            that runs for x amount of time and stops like batch jobs.
 
-           submit_ctasks supports only default task placement.
+           submit supports only default task placement.
 
            :param: batch_size  : number of tasks to submit to the cluster.
            :param: task_def    : a dictionary of a task defination specifications.
@@ -616,7 +611,7 @@ class AwsCaas():
                 ctask.launch_type = launch_type
                 containers.append(self.create_container_def(ctask))
                 self._task_id +=1
-            
+
 
             # EC2 does not support Network config or platform version
             # FIXME: Pass the memory and cpu via a VM class
@@ -637,7 +632,7 @@ class AwsCaas():
             kwargs['launchType']           = launch_type
             kwargs['overrides']            = {}
             kwargs['taskDefinition']       = task_def_arn
-        
+
             # submit tasks of size "batch_size"
             response = self._ecs_client.run_task(**kwargs)
             if response['failures']:
@@ -663,25 +658,25 @@ class AwsCaas():
         """Pull the timestamps for every task by its ARN and convert
            them to a human readable.
         """
-        
-        task_stamps = OrderedDict()
-        task_arns   = [arn for arn in tasks.keys()]
-        response    = self._ecs_client.describe_tasks(tasks=task_arns,
-                                                      cluster=cluster)
 
-        for task in response['tasks']:
-            arn = task['taskArn']
-            tid = tasks[arn]
-            task_stamps[tid] = OrderedDict()
-            try:
-                task_stamps[tid]['pullStartedAt'] = datetime.timestamp(task.get('pullStartedAt', 0.0))
-                task_stamps[tid]['pullStoppedAt'] = datetime.timestamp(task.get('pullStoppedAt', 0.0))
-                task_stamps[tid]['startedAt']     = datetime.timestamp(task.get('startedAt', 0.0))
-                task_stamps[tid]['stoppedAt']     = datetime.timestamp(task.get('stoppedAt', 0.0))
-                task_stamps[tid]['stoppingAt']    = datetime.timestamp(task.get('stoppingAt', 0.0))
-            
-            except TypeError:
-                pass
+        task_stamps  = OrderedDict()
+        task_arns    = [arn for arn in tasks.keys()]
+        tasks_chunks = self._describe_tasks(tasks, cluster)
+
+        for task_chunk in tasks_chunks:   
+            for task in task_chunk:
+                arn = task['taskArn']
+                tid = tasks[arn]
+                task_stamps[tid] = OrderedDict()
+                try:
+                    task_stamps[tid]['pullStartedAt'] = datetime.timestamp(task.get('pullStartedAt', 0.0))
+                    task_stamps[tid]['pullStoppedAt'] = datetime.timestamp(task.get('pullStoppedAt', 0.0))
+                    task_stamps[tid]['startedAt']     = datetime.timestamp(task.get('startedAt', 0.0))
+                    task_stamps[tid]['stoppedAt']     = datetime.timestamp(task.get('stoppedAt', 0.0))
+                    task_stamps[tid]['stoppingAt']    = datetime.timestamp(task.get('stoppingAt', 0.0))
+
+                except TypeError:
+                    pass
 
         return task_stamps
 
@@ -731,7 +726,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, cluster):
+    def _describe_tasks(self, tasks, cluster):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Retrieve task statuses from ECS API
@@ -741,8 +736,13 @@ class AwsCaas():
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
 
-        tasks    = iter(tasks)
-        statuses = []
+        if len(tasks) <= 100:
+            response = self._ecs_client.describe_tasks(tasks=tasks,
+                                                   cluster=cluster)
+            return [response['tasks']]
+
+        tasks         = iter(tasks)
+        tasks_chuncks = []
         for chunk in iter(lambda: tuple(islice(tasks, 100)), ()):
             response = self._ecs_client.describe_tasks(tasks=list(chunk),
                                                          cluster=cluster)
@@ -756,10 +756,26 @@ class AwsCaas():
             if status_code != 200:
                 msg = 'Task status request received status code {0}:\n{1}'
                 raise Exception(msg.format(status_code, response))
-            
-            for task in response['tasks']:
-                statuses.append(task['lastStatus'])
 
+            tasks_chuncks.append(response['tasks'])
+
+        return tasks_chuncks
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _get_task_statuses(self, tasks, cluster):
+        """
+        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
+        Retrieve task statuses from ECS API
+
+        Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
+        """
+        tasks_chunks = self._describe_tasks(tasks, cluster)
+        statuses = []
+        for task_chunk in tasks_chunks:
+            for task in task_chunk:
+                statuses.append(task['lastStatus'])
         return statuses
 
 
