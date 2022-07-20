@@ -70,13 +70,9 @@ class AwsCaas():
 
         self.run_id        = None
         self._task_id      = 0
-        
-        # FIXME: rename task_ids to tasks_book
-        #        as we save more things than just
-        #        task ids
-        self._task_ids     = OrderedDict()
+
+        self._tasks_book   = OrderedDict()
         self._family_ids   = OrderedDict()
-        self._tasks_arns   = []
 
         self.launch_type  =  None
         self._region_name =  cred['region_name']
@@ -608,8 +604,8 @@ class AwsCaas():
            :return: submited ctasks ARNs
 
         """
-        tptd = self._schedule(ctasks, launch_type)
-        container = self.create_container_def(ctask)
+        tptd       = self._schedule(ctasks, launch_type)
+        containers = []
         for batch in tptd:
             for ctask in batch:
                 # build an aws container defination from the task object
@@ -618,13 +614,14 @@ class AwsCaas():
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
                 ctask.launch_type = launch_type
+                containers.append(self.create_container_def(ctask))
                 self._task_id +=1
             
 
             # EC2 does not support Network config or platform version
             # FIXME: Pass the memory and cpu via a VM class
             if launch_type == FARGATE:
-                task_def_arn = self.create_fargate_task_def(container, 256, 1024)
+                task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
                 kwargs['platformVersion']      = 'LATEST'
                 kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
                                                                           'subnet-094da8d73899da51c',],
@@ -632,7 +629,7 @@ class AwsCaas():
                                                 'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
             if launch_type == EC2:
-                family_id, task_def_arn = self.create_ec2_task_def(container)
+                family_id, task_def_arn = self.create_ec2_task_def(containers)
 
             kwargs = {}
             kwargs['count']                = len(batch)
@@ -651,8 +648,8 @@ class AwsCaas():
             for i, task in enumerate(response['tasks']):
                 ctask = batch[i]
                 ctask.arn = task['taskArn']
-                self._task_ids[str(ctask.arn)] = ctask.name
-                print(('submitting tasks {0}/{1}').format(ctask.id, len(self._task_ids) - 1),
+                self._tasks_book[str(ctask.arn)] = ctask.name
+                print(('submitting tasks {0}/{1}').format(ctask.id, len(self._tasks_book) - 1),
                                                                                     end='\r')
             self._family_ids[family_id]['manager_id'] = self.manager_id
             self._family_ids[family_id]['run_id']     = self.run_id
@@ -662,19 +659,19 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_stamps(self, task_ids, cluster):
+    def _get_task_stamps(self, tasks, cluster):
         """Pull the timestamps for every task by its ARN and convert
            them to a human readable.
         """
         
         task_stamps = OrderedDict()
-        task_arns   = [arn for arn in task_ids.keys()]
+        task_arns   = [arn for arn in tasks.keys()]
         response    = self._ecs_client.describe_tasks(tasks=task_arns,
                                                       cluster=cluster)
 
         for task in response['tasks']:
             arn = task['taskArn']
-            tid = task_ids[arn]
+            tid = tasks[arn]
             task_stamps[tid] = OrderedDict()
             try:
                 task_stamps[tid]['pullStartedAt'] = datetime.timestamp(task.get('pullStartedAt', 0.0))
@@ -699,7 +696,7 @@ class AwsCaas():
             print('profiles already exist {0}'.format(fname))
             return fname
 
-        task_stamps = self._get_task_stamps(self._task_ids, self._cluster_name)
+        task_stamps = self._get_task_stamps(self._tasks_book, self._cluster_name)
 
         try:
             import pandas as pd
@@ -708,7 +705,7 @@ class AwsCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(self.launch_type, len(self._task_ids),
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(self.launch_type, len(self._tasks_book),
                                                                       self.manager_id)
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
@@ -739,7 +736,7 @@ class AwsCaas():
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Retrieve task statuses from ECS API
 
-        Returns list of {RUNNING|PENDING|STOPPED} for each id in task_ids
+        Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
         """
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
@@ -750,7 +747,7 @@ class AwsCaas():
             response = self._ecs_client.describe_tasks(tasks=list(chunk),
                                                          cluster=cluster)
 
-            #FIXME: if we have a failure then update the task_ids 
+            #FIXME: if we have a failure then update the tasks_book 
             #       with status/error code and print it.
             if response['failures'] != []:
                 raise Exception('There were some failures:\n{0}'.format(
@@ -779,7 +776,7 @@ class AwsCaas():
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
         print("\n\n")
-        tasks = [t for t in self._task_ids.keys()]
+        tasks = [t for t in self._tasks_book.keys()]
         while True:
             statuses = self._get_task_statuses(tasks, self._cluster_name)
             pending = list(filter(lambda pending: pending == 'PENDING', statuses))
@@ -805,7 +802,7 @@ class AwsCaas():
         3- COST_CANCELED : Task must be kill due to exceeding cost
                            limit (set by user)
         """
-        task_arn = self.task_ids[task_id]
+        task_arn = self.tasks_book[task_id]
 
         response = self._ecs_client.stop_task(cluster = cluster_name,
                                               task    = task_arn,
@@ -984,11 +981,9 @@ class AwsCaas():
 
         caller = sys._getframe().f_back.f_code.co_name
         self._task_id     = 0
-        self.launch_type  =  None
-        self._task_ids.clear()
-        self._tasks_arns.clear()
-
+        self.launch_type  = None
         self._run_cost    = 0
+        self._tasks_book.clear()
 
         if caller == '_shutdown':
             self.manager_id = None
