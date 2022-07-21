@@ -1,6 +1,7 @@
 ## Usage:
 #### Amazon AWS Asynchronous mode:
 ```python
+from hydraa.cloud_vm import vm
 from hydraa import providers, services
 from hydraa.cloud_task.task import Task
 
@@ -11,6 +12,9 @@ service_mgr = services.manager
 caas_mgr = service_mgr.CaasManager(provider_mgr, asynchronous=True)
 
 tasks = []
+vm    = vm.AwsVM('ami-061c10a2cb32f3491',
+                  1, 1, "t2.micro", None,
+                  {"Arn" : 'arn:aws:iam::xxxx:instance-profile/ecsInstanceRole',})
 for i in range(50):
     CTask = Task()
     CTask.memory = 7
@@ -26,7 +30,7 @@ Login to aws succeed
 ```
 
 ```python
-caas_mgr.submit_tasks(tasks, launch_type='EC2', budget = 0.0000016, time = 20)
+caas_mgr.submit_tasks(vm, tasks, launch_type='EC2', budget = 0.0000016, time = 20)
 ```
 
 ```shell
