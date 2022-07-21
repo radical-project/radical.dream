@@ -57,6 +57,7 @@ class AzureCaas():
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
+        self._resource_group        = None
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
 
@@ -84,7 +85,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run(self, ctasks, budget=0, time=0, container_path=None):
+    def run(self, launch_type, tasks, budget=0, time=0, container_path=None):
         
         if self.status:
             self.__cleanup()
@@ -93,24 +94,15 @@ class AzureCaas():
 
         self.run_id = str(uuid.uuid4())
 
-        cpcg = self._schedule(ctasks)
+        self._resource_group = self.create_resource_group()
+        self.submit(launch_type, tasks)
 
-        res_group = self.create_resource_group()
-
-        for batch in cpcg:
-            containers, tasks = self.submit_ctasks(batch)
-            contaier_group_name = self.create_container_group(res_group, containers)
-            self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
-            self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
-            self._container_group_names[contaier_group_name]['task_list']     = tasks
-            self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
-        
         self.runs_tree[self.run_id] =  self._container_group_names
 
         if self.asynchronous:
             return self.run_id
         
-        self._wait_tasks(ctasks)
+        self._wait_tasks()
 
 
     # --------------------------------------------------------------------------
@@ -122,7 +114,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _get_run_status(self, run_id):
+    def get_run_status(self, run_id):
         #TODO: implement this
         pass
 
@@ -210,36 +202,46 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit_ctasks(self, ctasks_batch):
+    def submit(self, launch_type, ctasks):
 
-        tasks          = []
-        container_list = []
+        cpcg = self._schedule(ctasks)
+        for batch in cpcg:
+            containers = []
+            for ctask in batch:
+                ctask.run_id      = self.run_id
+                ctask.id          = self._task_id
+                ctask.name        = 'ctask-{0}'.format(self._task_id)
+                ctask.provider    = AZURE
+                ctask.launch_type = launch_type
 
-        for ctask in ctasks_batch:
-            ctask.run_id   = self.run_id
-            ctask.id       = self._task_id
-            ctask.name     = 'ctask-{0}'.format(self._task_id)
-            ctask.provider = AZURE
+                container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
+                                                                         cpu=ctask.vcpus)
+                container_resource_requirements = ResourceRequirements(
+                                            requests=container_resource_requests)
 
-            container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
-                                                                     cpu=ctask.vcpus)
-            container_resource_requirements = ResourceRequirements(
-                                          requests=container_resource_requests)
+                container = Container(name=ctask.name,
+                                      image=ctask.image,
+                                      resources=container_resource_requirements,
+                                      command=ctask.cmd)
+                containers.append(container)
+                
+                self._task_ids[str(ctask.id)] = ctask.name
+                print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
+                                                                            end='\r')
 
-            container = Container(name=ctask.name,
-                                  image=ctask.image,
-                                  resources=container_resource_requirements,
-                                  command=ctask.cmd)
+                self._task_id +=1
 
-            tasks.append(ctask)
-            container_list.append(container)
-            self._task_ids[str(ctask.id)] = ctask.name
-            print(('submitting tasks {0}/{1}').format(ctask.id, len(self._task_ids) - 1),
-                                                                                end='\r')
+            if not self._resource_group:
+                raise TypeError('resource group can not be empty')
 
-            self._task_id +=1
+            contaier_group_name = self.create_container_group(self._resource_group, containers)
+            self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
+            self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
+            self._container_group_names[contaier_group_name]['task_list']     = batch
+            self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
 
-        return container_list, tasks
+            
+
 
 
     # --------------------------------------------------------------------------
@@ -256,10 +258,11 @@ class AzureCaas():
 
             try:
                 for i in range(len(ctasks)):
-                    ctasks[i].events = container_group.containers[i].instance_view.events
-                    ctasks[i].state  = container_group.containers[i].instance_view.current_state.state
+                    ctasks[i].events    = container_group.containers[i].instance_view.events
+                    ctasks[i].state     = container_group.containers[i].instance_view.current_state.state
+                    ctasks[i].exit_code = container_group.containers[0].instance_view.current_state.exit_code
                 statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
-            
+
             except AttributeError:
                 time.sleep(0.2)
 
@@ -268,7 +271,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _wait_tasks(self, ctasks):
+    def _wait_tasks(self):
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
@@ -278,19 +281,19 @@ class AzureCaas():
         print("\n\n")
 
         while True:
-
             statuses = self._get_task_statuses()
+            if statuses:
+                pending = list(filter(lambda pending: pending == 'Waiting', statuses))
+                running = list(filter(lambda pending: pending == 'Running', statuses))
+                stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
 
-            pending = list(filter(lambda pending: pending == 'Waiting', statuses))
-            running = list(filter(lambda pending: pending == 'Running', statuses))
-            stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
+                if all([status == 'Terminated' for status in statuses]):
+                    print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
+                    break
 
-            if all([status == 'Terminated' for status in statuses]):
-                print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
-                break
+                print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
+                            len(pending), CLR, len(running), CLR, len(stopped), CLR))
 
-            print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
-                        len(pending), CLR, len(running), CLR, len(stopped), CLR))
             time.sleep(0.2)
 
 

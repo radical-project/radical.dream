@@ -107,7 +107,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def submit_tasks(self, VM: AwsVM, tasks: List[Task], launch_type = None,
+    def submit_tasks(self, VM, tasks: List[Task], launch_type = None,
                                            service=False, budget=0, time=0):
         """
         submit contianers and wait for them or not.
@@ -117,7 +117,7 @@ class CaasManager:
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
-            run_id = self.AzureCaas.run(tasks, budget, time)
+            run_id = self.AzureCaas.run(launch_type, tasks, budget, time)
             return run_id
         
         if GCLOUD in self._proxy.loaded_providers:
