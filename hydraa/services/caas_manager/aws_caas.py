@@ -116,7 +116,7 @@ class AwsCaas():
         
     # --------------------------------------------------------------------------
     #
-    def run(self, tasks, launch_type=None, service=False, budget=0, time=0):
+    def run(self, VM, tasks, launch_type=None, service=False, budget=0, time=0):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
@@ -181,7 +181,7 @@ class AwsCaas():
         # TODO: create class VM that exposes all of the EC2 VM kwargs
         # to the user
         if launch_type == EC2:
-            self.create_ec2_instance(self._cluster_name)
+            self.create_ec2_instance(VM)
             self.submit(launch_type, tasks, cluster)
         
         self.runs_tree[self.run_id] =  self._family_ids
@@ -370,7 +370,7 @@ class AwsCaas():
         while True:
             statuses = self._get_cluster_statuses(cluster_name)
             if all([status == 'ACTIVE' for status in statuses]):
-                print('ECS cluster {0} is ACTIVE'.format(cluster_name))
+                print('cluster {0} is active'.format(cluster_name))
                 break
             time.sleep(WAIT_TIME)
             print('ECS status for cluster {0}: {1}'.format(cluster_name, statuses))
@@ -860,7 +860,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_instance(self, cluster_name, InstanceType = None):
+    def create_ec2_instance(self, VM):
             """
             ImageId: An AMI ID is required to launch an instance and must be
                     specified here or in a launch template.
@@ -873,65 +873,46 @@ class AwsCaas():
 
             UserData: accept any linux commnad (acts as a bootstraper for the instance)
             """
-            instance_id = None
+            vm = VM(self._cluster_name)
 
             # FIXME: check for exisitng EC2 hydraa instances specifically.
             
             # check if we have an already running instance
             reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
-                                                                        "Values": ["running"]},]).get("Reservations")
+                                                                         "Values": ["running"]},]).get("Reservations")
             
             # if we have a running instance(s) return the first one 
             if reservations:
-                print("found running instances:")
                 for reservation in reservations:
                     for instance in reservation["Instances"]:
-                        instance_id   = instance["InstanceId"]
-                        instance_type = instance["InstanceType"]
-                        print(instance_id)
-                
-                return instance_id
-            
-            print("No existing EC2 instance found")
-            
-            command        = "#!/bin/bash \n echo ECS_CLUSTER={0} >> /etc/ecs/ecs.config".format(cluster_name)
-            ecs_opt_ami    = 'ami-061c10a2cb32f3491'
-            instance_type  = "t2.micro"
+                        # TODO: maybe we should ask the users if they
+                        # wasnt to use that instance or not.
+                        if instance["InstanceType"] == VM.InstanceType:
+                            print("found running instances of type {0}".format(instance["InstanceType"]))
+                            VM.InstanceID = instance.id
+                            return instance["InstanceId"]
 
-            kwargs = {}
-            kwargs['ImageId']           = ecs_opt_ami
-            kwargs['MinCount']          = 1
-            kwargs['MaxCount']          = 1
-            kwargs['InstanceType']      = instance_type
-            kwargs['UserData']          = command
-            kwargs['TagSpecifications'] = [{'ResourceType'   : 'instance',
-                                            'Tags': [{'Key'  : 'Name',
-                                                      'Value': 'my-ec2-instance'}
-                                                       ]
-                                                       }]
+            print("no existing EC2 instance found")
 
-            instances = self._ec2_resource.create_instances(**kwargs)
+            instances = self._ec2_resource.create_instances(**vm)
 
             for instance in instances:
-                print(f'EC2 instance "{instance.id}" of type "{instance_type}" is being launched')
-
+                print("launching EC2 instance {0}".format(instance.id))
                 instance.wait_until_running()
-                
-                self._ec2_client.associate_iam_instance_profile(IamInstanceProfile={"Arn" : 'arn:aws:iam::626113121967:instance-profile/ecsInstanceRole',},
-                                                                InstanceId=instance.id,)
-
-                print(f'EC2 instance "{instance.id}" has been started')
+                print("instance {0} has been started".format(instance.id))
+            
+            VM.InstanceID = instance.id
 
             # wait for the instance to connect to the targeted cluster
             while True:
                 res = self._ecs_client.describe_clusters(clusters = [self._cluster_name])
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
-                    print('EC2 instance registered')
+                    print("instance {0} has been registered".format(instance.id))
                     break
                 print('waiting for instance {0} to register'.format(instance.id), end = '\r')
                 time.sleep(WAIT_TIME)
 
-            return instance_id
+            return instance.id
 
 
     # --------------------------------------------------------------------------

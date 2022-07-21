@@ -1,5 +1,6 @@
 import uuid
 from typing import List
+from hydraa.cloud_vm.vm import AwsVM
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
 from hydraa.services.caas_manager.aws_caas   import AwsCaas
@@ -106,13 +107,13 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def submit_tasks(self, tasks: List[Task], launch_type = None, service=False,
-                                                              budget=0, time=0):
+    def submit_tasks(self, VM: AwsVM, tasks: List[Task], launch_type = None,
+                                           service=False, budget=0, time=0):
         """
         submit contianers and wait for them or not.
         """
         if AWS in self._proxy.loaded_providers:
-            run_id = self.AwsCaas.run(tasks, launch_type, service, budget, time)
+            run_id = self.AwsCaas.run(VM, tasks, launch_type, service, budget, time)
             return run_id
         
         if AZURE in self._proxy.loaded_providers:
