@@ -65,6 +65,7 @@ class AzureCaas():
         self._task_id     = 0
         self._task_ids    = OrderedDict()
 
+        self.launch_type  = None
         self._region_name = cred['region_name']
         self._run_cost    = 0
 
@@ -85,23 +86,25 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run(self, launch_type, tasks, budget=0, time=0, container_path=None):
+    def run(self, VM, tasks, budget=0, time=0):
         
         if self.status:
             self.__cleanup()
 
-        self.status = ACTIVE
+        self.status      = ACTIVE
+        self.run_id      = str(uuid.uuid4())
+        self.launch_type = VM.LaunchType 
 
-        self.run_id = str(uuid.uuid4())
+        print("starting run {0}".format(self.run_id))
 
         self._resource_group = self.create_resource_group()
-        self.submit(launch_type, tasks)
+        self.submit(self.launch_type, tasks)
 
         self.runs_tree[self.run_id] =  self._container_group_names
 
         if self.asynchronous:
             return self.run_id
-        
+
         self._wait_tasks()
 
 
@@ -114,9 +117,25 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def get_run_status(self, run_id):
-        #TODO: implement this
-        pass
+    def _get_run_status(self, run_id):
+
+        run_groups_names = self.runs_tree[run_id]
+        statuses = self._get_task_statuses(run_groups_names)
+
+        pending = list(filter(lambda pending: pending == 'Waiting', statuses))
+        running = list(filter(lambda pending: pending == 'Running', statuses))
+        stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
+
+        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending),
+                                                                 len(running),
+                                                                 len(stopped)))
+        if running or pending:
+            print('run: {0} is running'.format(run_id))
+
+        if all([status == 'Terminated' for status in statuses]):
+            print('run: {0} is finished'.format(run_id))
+
+        print(msg)
 
 
     # --------------------------------------------------------------------------
@@ -155,9 +174,9 @@ class AzureCaas():
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
                                              {'location': self._region_name})
-        
+
         resource_group = self.res_client.resource_groups.get(self._resource_group_name)
-        
+
         return resource_group
 
 
@@ -240,21 +259,20 @@ class AzureCaas():
             self._container_group_names[contaier_group_name]['task_list']     = batch
             self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
 
-            
-
-
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self):
+    def _get_task_statuses(self, container_group_names):
 
+        # FIXME: this function should performs a general task info pulling
+        # (not only tasks statuses)
         statuses = []
-        groups = [g for g in self._container_group_names.keys()]
+        groups = [g for g in container_group_names.keys()]
         for group in groups:
             container_group = self._con_client.container_groups.get(self._resource_group_name,
                                                                                         group)
-            
-            ctasks = self._container_group_names[group]['task_list']
+
+            ctasks = container_group_names[group]['task_list']
 
             try:
                 for i in range(len(ctasks)):
@@ -281,7 +299,7 @@ class AzureCaas():
         print("\n\n")
 
         while True:
-            statuses = self._get_task_statuses()
+            statuses = self._get_task_statuses(self._container_group_names)
             if statuses:
                 pending = list(filter(lambda pending: pending == 'Waiting', statuses))
                 running = list(filter(lambda pending: pending == 'Running', statuses))

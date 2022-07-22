@@ -2,13 +2,15 @@ import uuid
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
+LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2']
+
 
 # --------------------------------------------------------------------
 #
 class AwsVM:
     def __init__(self, image_id: str, min_count: int, max_count: int,
-                       instance_type: str, user_data: str, profile: dict,
-                                                         **input_kwargs):
+                   instance_type: str, user_data: str, profile: dict,
+                                                     **input_kwargs):
 
         self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
         self.ImageId            = image_id
@@ -21,7 +23,14 @@ class AwsVM:
         self.TagSpecifications  = [{'ResourceType': 'instance',
                                     'Tags'        : [{'Key'  :'Name',
                                                       'Value': self.VmName}]}]
-                            
+        if not self.InstanceType:
+            raise Exception('InstanceType must be set')
+
+        if self.InstanceType in LTYPE[:2]:
+            self.LaunchType = 'FARGATE'
+        else:
+            self.LaunchType = 'EC2'
+
         self.input_kwargs       = input_kwargs
 
     # --------------------------------------------------------------------------
@@ -84,5 +93,14 @@ class AwsVM:
 
 
 class AzureVM:
-    def __init__(self):
-        pass
+    def __init__(self, launch_type, **input_kwargs):
+
+        self.VmName             = 'AZURE_VM-{0}'.format(uuid.uuid4())
+        self.LaunchType         = launch_type
+        self.input_kwargs       = input_kwargs
+
+    def __call__(self, cluster):
+
+        self.required_kwargs = {}
+        kwargs = {**self.required_kwargs, **self.input_kwargs}
+        return kwargs

@@ -116,7 +116,7 @@ class AwsCaas():
         
     # --------------------------------------------------------------------------
     #
-    def run(self, VM, tasks, launch_type=None, service=False, budget=0, time=0):
+    def run(self, VM, tasks, service=False, budget=0, time=0):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
@@ -133,9 +133,7 @@ class AwsCaas():
         """
         if self.status:
             self.__cleanup()
-        
-        if not launch_type:
-            launch_type = EC2
+
         #
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
@@ -165,7 +163,7 @@ class AwsCaas():
 
         self.status      = ACTIVE
         self.run_id      = str(uuid.uuid4())
-        self.launch_type = launch_type
+        self.launch_type = VM.LaunchType
 
         print("starting run {0}".format(self.run_id))
 

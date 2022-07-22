@@ -107,19 +107,18 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def submit_tasks(self, VM, tasks: List[Task], launch_type = None,
-                                           service=False, budget=0, time=0):
+    def submit_tasks(self, VM, tasks: List[Task], service=False, budget=0, time=0):
         """
         submit contianers and wait for them or not.
         """
         if AWS in self._proxy.loaded_providers:
-            run_id = self.AwsCaas.run(VM, tasks, launch_type, service, budget, time)
+            run_id = self.AwsCaas.run(VM, tasks, service, budget, time)
             return run_id
-        
+
         if AZURE in self._proxy.loaded_providers:
-            run_id = self.AzureCaas.run(launch_type, tasks, budget, time)
+            run_id = self.AzureCaas.run(VM, tasks, budget, time)
             return run_id
-        
+
         if GCLOUD in self._proxy.loaded_providers:
             raise NotImplementedError 
 
