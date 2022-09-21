@@ -36,6 +36,8 @@ class AwsCaas():
        services, tasks and instances.:
        :param cred: AWS credentials (access key, secert key, region)
 
+       :pram asynchronous: wait for the tasks to finish or run in the
+                           background.
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
@@ -66,6 +68,8 @@ class AwsCaas():
         self.run_id        = None
         self._task_id      = 0
 
+        # tasks_book is a datastructure that keeps most of the 
+        # cloud tasks info during the current run.
         self._tasks_book   = OrderedDict()
         self._family_ids   = OrderedDict()
 
@@ -173,14 +177,12 @@ class AwsCaas():
         if service:
             self.create_ecs_service()
 
-        if launch_type == FARGATE:
-            self.submit(launch_type, tasks, cluster)
+        if self.launch_type == FARGATE:
+            self.submit(self.launch_type, tasks, cluster)
 
-        # TODO: create class VM that exposes all of the EC2 VM kwargs
-        # to the user
-        if launch_type == EC2:
+        if self.launch_type == EC2:
             self.create_ec2_instance(VM)
-            self.submit(launch_type, tasks, cluster)
+            self.submit(self.launch_type, tasks, cluster)
         
         self.runs_tree[self.run_id] =  self._family_ids
 
@@ -483,10 +485,11 @@ class AwsCaas():
 
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
-        # FIXME: this should not exist. AWS allows
-        # to specify more than 1 container_def per task_def
-        # assuming the task_def has enough vcpus and memory.
-        # currently we are not considering if we have 
+        # FIXME: the `if` below should not exist. AWS allows
+        # to specify more than 1 container_def per task_def 
+        # (containers with depndecies) and can work as a workflow
+        # assuming that the task_def has enough vcpus and memory.
+        # Currently we are not considering if we have 
         # enough reources to run N different containers
         # per task_def. If we remove the if then it will fail
         # with MEMORY_ERROR. 

@@ -63,7 +63,10 @@ class AzureCaas():
 
         self.run_id       = None 
         self._task_id     = 0
-        self._task_ids    = OrderedDict()
+
+        # tasks_book is a datastructure that keeps most of the 
+        # cloud tasks info during the current run.
+        self._tasks_book  = OrderedDict()
 
         self.launch_type  = None
         self._region_name = cred['region_name']
@@ -166,14 +169,14 @@ class AzureCaas():
             if 'hydraa-rg' in resource_group.name:
                 print('hydraa resource group exist')
                 return resource_group
-        
+
         # Create (and then get) a resource group into which the container groups
         # are to be created
         self._resource_group_name = 'hydraa-resource-group-{0}'.format(self.manager_id)
 
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
-                                             {'location': self._region_name})
+                                                   {'location': self._region_name})
 
         resource_group = self.res_client.resource_groups.get(self._resource_group_name)
 
@@ -244,7 +247,7 @@ class AzureCaas():
                                       command=ctask.cmd)
                 containers.append(container)
                 
-                self._task_ids[str(ctask.id)] = ctask.name
+                self._tasks_book[str(ctask.id)] = ctask.name
                 print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
                                                                             end='\r')
 
@@ -347,7 +350,7 @@ class AzureCaas():
     #
     def profiles(self):
 
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(AZURE, len(self._task_ids), self.manager_id)
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(AZURE, len(self._tasks_book), self.manager_id)
 
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
@@ -464,7 +467,7 @@ class AzureCaas():
         self._container_group_names = OrderedDict()
 
         self._task_id     = 0
-        self._task_ids.clear()
+        self._tasks_book.clear()
         self._run_cost    = 0
 
         if caller == '_shutdown':
