@@ -96,12 +96,12 @@ class AzureCaas():
 
         self.status      = ACTIVE
         self.run_id      = str(uuid.uuid4())
-        self.launch_type = VM.LaunchType 
+        self.launch_type = VM.LaunchType
 
         print("starting run {0}".format(self.run_id))
 
         self._resource_group = self.create_resource_group()
-        self.submit(self.launch_type, tasks)
+        self.submit(tasks)
 
         self.runs_tree[self.run_id] =  self._container_group_names
 
@@ -224,7 +224,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, launch_type, ctasks):
+    def submit(self, ctasks):
 
         cpcg = self._schedule(ctasks)
         for batch in cpcg:
@@ -234,16 +234,15 @@ class AzureCaas():
                 ctask.id          = self._task_id
                 ctask.name        = 'ctask-{0}'.format(self._task_id)
                 ctask.provider    = AZURE
-                ctask.launch_type = launch_type
+                ctask.launch_type = self.launch_type
 
                 container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
                                                                          cpu=ctask.vcpus)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
                 
-
+                az_vars =[]
                 if ctask.env_var:
-                    az_vars =[]
                     for var in ctask.env_var:
                         tmp_var = var.split('=')
                         tmp_var = EnvironmentVariable(name=tmp_var[0], value=tmp_var[1])

@@ -138,6 +138,7 @@ class AwsCaas():
         if self.status:
             self.__cleanup()
 
+        self.launch_type = VM.LaunchType
         #
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
@@ -147,7 +148,7 @@ class AwsCaas():
             if not time:
                 raise Exception('estimated runtime is required')
 
-            run_cost =  budget_calc.get_cost(launch_type, tasks, time)
+            run_cost =  budget_calc.get_cost(self.launch_type, tasks, time)
 
             if run_cost > budget:
                 msg = '({0} USD > {1} USD)'.format(run_cost, budget)
@@ -167,7 +168,6 @@ class AwsCaas():
 
         self.status      = ACTIVE
         self.run_id      = str(uuid.uuid4())
-        self.launch_type = VM.LaunchType
 
         print("starting run {0}".format(self.run_id))
 
@@ -178,11 +178,11 @@ class AwsCaas():
             self.create_ecs_service()
 
         if self.launch_type == FARGATE:
-            self.submit(self.launch_type, tasks, cluster)
+            self.submit(tasks, cluster)
 
         if self.launch_type == EC2:
             self.create_ec2_instance(VM)
-            self.submit(self.launch_type, tasks, cluster)
+            self.submit(tasks, cluster)
         
         self.runs_tree[self.run_id] =  self._family_ids
 
@@ -586,7 +586,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, launch_type, ctasks, cluster_name):
+    def submit(self, ctasks, cluster_name):
         """Starts a new ctask using the specified task definition. In this
            mode AWS scheduler will handle the task placement.
            submit is a wrapper around RUN_TASK: which suitable for tasks
@@ -601,7 +601,7 @@ class AwsCaas():
            :return: submited ctasks ARNs
 
         """
-        tptd       = self._schedule(ctasks, launch_type)
+        tptd       = self._schedule(ctasks)
         containers = []
         for batch in tptd:
             for ctask in batch:
@@ -610,14 +610,14 @@ class AwsCaas():
                 ctask.id          = self._task_id
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
-                ctask.launch_type = launch_type
+                ctask.launch_type = self.launch_type
                 containers.append(self.create_container_def(ctask))
                 self._task_id +=1
 
 
             # EC2 does not support Network config or platform version
             # FIXME: Pass the memory and cpu via a VM class
-            if launch_type == FARGATE:
+            if self.launch_type == FARGATE:
                 task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
                 kwargs['platformVersion']      = 'LATEST'
                 kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
@@ -625,13 +625,13 @@ class AwsCaas():
                                                 'assignPublicIp'     : 'ENABLED',
                                                 'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
-            if launch_type == EC2:
+            if self.launch_type == EC2:
                 family_id, task_def_arn = self.create_ec2_task_def(containers)
 
             kwargs = {}
             kwargs['count']                = len(batch)
             kwargs['cluster']              = cluster_name
-            kwargs['launchType']           = launch_type
+            kwargs['launchType']           = self.launch_type
             kwargs['overrides']            = {}
             kwargs['taskDefinition']       = task_def_arn
 
@@ -919,7 +919,7 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def _schedule(self, tasks, launch_type):
+    def _schedule(self, tasks):
 
         task_batch = copy.deepcopy(tasks)
         batch_size = len(task_batch)
@@ -927,7 +927,7 @@ class AwsCaas():
         if not batch_size:
             raise Exception('Batch size can not be 0')
 
-        if launch_type == FARGATE:
+        if self.launch_type == FARGATE:
             # NOTE: submitting more than 50 conccurent tasks might fail
             #       due to user ECS/Fargate quota
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
