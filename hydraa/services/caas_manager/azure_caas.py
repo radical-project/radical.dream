@@ -333,7 +333,7 @@ class AzureCaas():
 
             time.sleep(0.2)
 
-        print('Finished, {0} tasks stopped with status: "{1}"'.format(len(statuses), statuses))
+        print('Finished, {0} tasks stopped with status: {1}'.format(len(statuses), statuses))
 
     # --------------------------------------------------------------------------
     #

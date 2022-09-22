@@ -808,7 +808,7 @@ class AwsCaas():
                            len(pending), CLR, len(running), CLR, len(stopped), CLR))
             time.sleep(0.5)
 
-        print('Finished, {0} tasks stopped with status: "Done"'.format(len(tasks)))
+        print('Finished, {0} tasks stopped with status: {1}'.format(len(tasks), statuses))
 
 
     # --------------------------------------------------------------------------
