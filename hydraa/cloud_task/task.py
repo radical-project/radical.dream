@@ -1,17 +1,22 @@
 import sys
+import socket
 from typing import OrderedDict
 
 class Task(object):
     """
     Base class for a cloud Task instance.
     """
-    def __init(self):
-        self.id       = None
-        self.name     = None
+    def __init__(self):
+        self.id       = int
+        self.name     = str
         self.run_id   = None
         self.provider = None
-        self.memory   = 0.0
-        self.vcpus    = 0.0
+        self.memory   = 0.1
+        self.vcpus    = 0.1
+        self.env_var  = None
+        self.ip       = None
+        self.port     = None
+        self.arn      = None
 
         self.cmd      = None
         self.image    = None
@@ -30,8 +35,22 @@ class Task(object):
     def run_id(self):
         """represents the run id that the task belongs to"""
         return self.run_id
-
     
+    def port(self):
+        """represents the port of a task"""
+        return self.port
+
+
+    @property
+    def ip(self):
+        """represents the ip of a task"""
+        return self.__ip
+    
+    @ip.setter
+    def ip(self, ip):
+        self.__ip = ip
+
+
     @property
     def provider(self):
         """represents the ptovider of that task (AZURE, AWS, G-CLOUD)"""
@@ -39,9 +58,6 @@ class Task(object):
     
     @provider.setter
     def provider(self, provider):
-        providers = ['aws', 'azure', 'google']
-        if provider not in providers:
-            raise ValueError('task provider not supported') 
         self.__provider = provider
     
 
@@ -58,6 +74,14 @@ class Task(object):
             raise ValueError('launch type not supported') 
         self.__launch_type = launch_type
 
+    @property
+    def env_var(self):
+        return self.__env_var
+    
+    @env_var.setter
+    def env_var(self, env_var):
+        self.__env_var = env_var
+
 
     @property
     def arn(self) -> str:
@@ -66,10 +90,6 @@ class Task(object):
     @arn.setter
     def arn(self, arn):        
         self.__arn = arn
-
-    @property
-    def ip(self) -> str:
-        return self.ip
 
 
     @property
@@ -94,8 +114,6 @@ class Task(object):
 
     @memory.setter
     def memory(self, memory) -> float:
-        if memory <= 0.0:
-            raise ValueError('memory per ctask must be > 0.0')
         self.__memory = memory
 
 
@@ -105,8 +123,6 @@ class Task(object):
 
     @vcpus.setter
     def vcpus(self, vcpus) -> float:
-        if vcpus <= 0.0:
-            raise ValueError('vcpus per ctask must be > 0.0')
         self.__vcpus = vcpus
 
 
@@ -138,8 +154,6 @@ class Task(object):
 
     @cmd.setter
     def cmd(self, cmd) -> list:
-        if not cmd:
-            raise ValueError('cmd per ctask must be set')
         self.__cmd = cmd
     
     @property
@@ -149,8 +163,6 @@ class Task(object):
 
     @image.setter
     def image(self, image) -> list:
-        if not image:
-            raise ValueError('image per ctask must be set')
         self.__image = image
 
     @property

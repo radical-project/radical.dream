@@ -196,7 +196,7 @@ class AzureCaas():
                         -- The name of the container group to create.
             container_image_name {str}
                         -- The container image name and tag, for example:
-                        microsoft\aci-helloworld:latest
+                        mcr.microsoft\aci-helloworld:latest
             command = ['/bin/sh', '-c', 'echo FOO BAR && tail -f /dev/null']
         """
         self._container_group_name = 'hydraa-contianer-group-{0}'.format(str(uuid.uuid4()))
@@ -240,11 +240,21 @@ class AzureCaas():
                                                                          cpu=ctask.vcpus)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
+                
 
+                if ctask.env_var:
+                    az_vars =[]
+                    for var in ctask.env_var:
+                        tmp_var = var.split('=')
+                        tmp_var = EnvironmentVariable(name=tmp_var[0], value=tmp_var[1])
+                        az_vars.append(tmp_var)
+                
+                
                 container = Container(name=ctask.name,
                                       image=ctask.image,
                                       resources=container_resource_requirements,
-                                      command=ctask.cmd)
+                                      command=ctask.cmd,
+                                      environment_variables=az_vars)
                 containers.append(container)
                 
                 self._tasks_book[str(ctask.id)] = ctask.name
@@ -279,8 +289,16 @@ class AzureCaas():
 
             try:
                 for i in range(len(ctasks)):
-                    ctasks[i].events    = container_group.containers[i].instance_view.events
-                    ctasks[i].state     = container_group.containers[i].instance_view.current_state.state
+                    ctasks[i].events = container_group.containers[i].instance_view.events
+                    ctasks[i].state  = container_group.containers[i].instance_view.current_state.state
+                    if ctasks[i].events:
+                        # detect if the task is hanging in wait but already failed
+                        for event in ctasks[i].events:
+                            if event.name == "Failed" and ctasks[i].state == "Waiting":
+                                ctasks[i].state = event.name
+                                container_group.containers[i].instance_view.current_state.state = event.name
+                            else:
+                                pass
                     ctasks[i].exit_code = container_group.containers[0].instance_view.current_state.exit_code
                 statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
 
@@ -300,23 +318,22 @@ class AzureCaas():
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
         print("\n\n")
-
         while True:
             statuses = self._get_task_statuses(self._container_group_names)
             if statuses:
-                pending = list(filter(lambda pending: pending == 'Waiting', statuses))
-                running = list(filter(lambda pending: pending == 'Running', statuses))
-                stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
+                pending = list(filter(lambda pending: pending == 'Waiting'   , statuses))
+                running = list(filter(lambda running: running == 'Running'   , statuses))
+                stopped = list(filter(lambda stopped: stopped == 'Terminated', statuses))
 
-                if all([status == 'Terminated' for status in statuses]):
-                    print('Finished, {0} tasks stopped with status: "Done"'.format(len(statuses)))
+                if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
                     break
 
                 print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
-                            len(pending), CLR, len(running), CLR, len(stopped), CLR))
+                        len(pending), CLR, len(running), CLR, len(stopped), CLR))
 
             time.sleep(0.2)
 
+        print('Finished, {0} tasks stopped with status: "{1}"'.format(len(statuses), statuses))
 
     # --------------------------------------------------------------------------
     #

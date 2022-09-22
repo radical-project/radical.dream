@@ -798,16 +798,17 @@ class AwsCaas():
         while True:
             statuses = self._get_task_statuses(tasks, self._cluster_name)
             pending = list(filter(lambda pending: pending == 'PENDING', statuses))
-            running = list(filter(lambda pending: pending == 'RUNNING', statuses))
-            stopped = list(filter(lambda pending: pending == 'STOPPED', statuses))
+            running = list(filter(lambda running: running == 'RUNNING', statuses))
+            stopped = list(filter(lambda stopped: stopped == 'STOPPED', statuses))
             
             if all([status == 'STOPPED' for status in statuses]):
-                print('Finished, {0} tasks stopped with status: "Done"'.format(len(tasks)))
                 break
 
             print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
                            len(pending), CLR, len(running), CLR, len(stopped), CLR))
             time.sleep(0.5)
+
+        print('Finished, {0} tasks stopped with status: "Done"'.format(len(tasks)))
 
 
     # --------------------------------------------------------------------------

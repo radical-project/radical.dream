@@ -130,12 +130,12 @@ class CaasManager:
     
     # --------------------------------------------------------------------------
     #
-    def shutdown(self, provider):
+    def shutdown(self):
         """
         shudown the manager(s) by deleting all the 
         previously created components by the user
         """
-        if provider:
+        for provider in self._proxy.loaded_providers:
             if provider == AWS:
                 self.AwsCaas._shutdown()
             
