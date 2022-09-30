@@ -17,6 +17,7 @@ class Task(object):
         self.ip       = None
         self.port     = None
         self.arn      = None
+        self.arch     = None
 
         self.cmd      = None
         self.image    = None
@@ -130,12 +131,20 @@ class Task(object):
     def state(self) -> str:
         return self.__state
 
-
+   
     @state.setter
     def state(self, state):
         self.__state = state
 
 
+    @property
+    def arch(self) -> str:
+        return self.__arch
+    
+
+    @arch.setter
+    def arch(self, arch):
+        self.__arch = arch
     
     @property
     def events(self) -> OrderedDict:

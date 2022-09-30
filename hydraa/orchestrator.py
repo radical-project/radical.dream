@@ -1,0 +1,207 @@
+import time
+import queue
+import atexit
+import networkx as nx
+import threading       as mt
+import multiprocessing as mp
+
+from random import randint
+from multiprocessing import Manager
+from hydraa.cloud_task.task import Task
+
+
+
+Waiting  = 'waiting'
+Running  = 'running'
+Finished = 'finished'
+
+HPC      = 'hpc'
+CLOUD    = 'cloud'
+
+class HybridWorkflow:
+    def __init__(self) -> None:
+        
+        self.workflow = nx.DiGraph()
+        # use mp.Queue instances to proxy tasks to the worker processes
+        self.work_queue    = mp.Queue()
+        self.work2_queue   = mp.Queue()
+        self._task_counter = 0
+
+        manager = Manager()
+        self.waiting  = manager.dict()
+        self.running  = manager.dict()
+        self.finished = manager.dict()
+
+        self.submission_lock = mp.Lock()
+
+        # start threads to feed / drain the workers
+        self.stop_event  = mt.Event()
+        self.get_works   = mt.Thread(target=self.get_work, name="WorkFunction")
+
+        self.get_works.daemon    = True
+
+        self.get_works.start()
+
+        # start one worker per core
+        nw = mp.cpu_count() - 2
+        self.workers = list()
+
+        for _ in range(nw):
+            proc = mp.Process(target=self.execute)
+            proc.daemon = True
+            proc.start()
+            self.workers.append(proc)
+
+        atexit.register(self.stop_background, self.workers, self.stop_event, [self.get_works])
+    
+
+    def add_task(self, task: Task):
+        tid = self._task_counter
+        self.workflow.add_node(tid, task = task)
+        self._task_counter +=1
+        return True
+
+    def remove_task(self, task_id):
+        self.workflow.remove_node(task_id)
+        self._task_counter -=1
+        return True
+
+
+    def add_cloud_dependency(self, cloud_dependee: Task, hpc_depnder: Task):
+        self.workflow.add_edge(cloud_dependee, hpc_depnder)
+        if nx.is_directed_acyclic_graph(self.workflow):
+            self.workflow.remove_edge(cloud_dependee, hpc_depnder)
+            raise Exception('adding cloud dependecy will create infinite cycle')
+        
+        hpc_depnder.arch    = HPC
+        cloud_dependee.arch = CLOUD
+
+        return True
+
+
+    def add_hpc_dependency(self, hpc_dependee: Task, cloud_depnder: Task):
+        self.workflow.add_edge(hpc_dependee, cloud_depnder)
+        if nx.is_directed_acyclic_graph(self.workflow):
+            self.workflow.remove_edge(hpc_dependee, cloud_depnder)
+            raise Exception('Adding hpc dependecy will create infinite cycle')
+        
+        hpc_dependee.arch  = HPC
+        cloud_depnder.arch = CLOUD
+
+        return True
+    
+
+    def remove_dependency(self, dependee, depnder):
+        self.workflow.remove_edge(dependee,depnder)
+        return True
+
+    # stop the background task gracefully before exit
+    def stop_background(self, workers, stop_event, threads):
+        # request the background thread stop
+        stop_event.set()
+        # wait for the background thread to stop
+        for thread in threads:
+            thread.join()
+        
+        for worker in workers:
+            worker.terminate()
+
+
+    def get_work(self):
+        '''
+        thread feeding tasks pulled from the ZMQ work queue to worker processes
+        '''
+        # FIXME: This drains the qork queue with no regard of load balancing.
+        #        For example, the first <n_cores> tasks may stall this executer
+        #        for a long time, but new tasks are pulled nonetheless, even if
+        #        other executors are not stalling and could execute them timely.
+        #        We should at most fill a cache of limited size.
+
+        while True:
+            try:
+                task = self.work2_queue.get(block=True, timeout=0.1)
+            except queue.Empty:
+                continue
+            if task:
+                # send task individually to load balance workers
+                self.work_queue.put(task)
+
+
+    def execute(self):
+        while True:
+            try:
+                task = self.work_queue.get(block=True, timeout=0.1)
+                if task:
+                    result = task['task'].cmd()
+                    self.submission_lock.acquire()
+                    self.running.pop(task['id'])
+                    self.finished[task['id']] = Finished
+                    self.submission_lock.release()
+
+                    
+            except queue.Empty:
+                continue
+            print('Running tasks from execute: {0}'.format(self.running))
+            print('Finished Tasks from execute: {0}'.format(self.finished))
+
+
+    def orchestrate(self):
+        while True:
+            counter = 0
+            # iterate on the sorted DAG
+            for node in nx.topological_sort(self.workflow):
+
+                # get each not dependecies via predecessor
+                node_obj = G.nodes[node]
+                node_dep = list(self.workflow.predecessors(node))
+
+                # (1) check if the node is finished
+                if node in self.finished:
+                    continue
+    
+                elif node in self.running:
+                    continue
+
+                # (1) check if the node is waiting to be executed
+                elif node in self.waiting:
+                    # (3) if all dependecies of this node is in finished then send it to execution
+                    if(all(key in self.finished.keys() for key in node_dep)):
+                        print('Node {0} was in wait_list, all dep. solved, sending to execute'.format(node))
+                        self.running[node] = Running
+                        self.work2_queue.put(node_obj)
+                        counter = counter +1
+
+                    # (4) if not then we can not do anything beside waiting
+                    else:
+                        continue
+
+                # (5) if this node has depndencies
+                if node_dep:
+                    # if all of the dep. in task_finished then execute it
+                    if(all(key in node_dep for key in self.finished.keys())):
+                        print('Node {0} will be sent to execute because dep {1} is in task_finished {2}'.format(node, node_dep, self.finished))
+                        self.running[node] = Running
+                        self.work2_queue.put(node_obj)
+                        counter = counter +1
+                        continue
+                    
+                    elif (all(key in node_dep for key in self.running.keys())):
+                        print('Node {0} will be skipped as all dep {1} are in task_should run'.format(node, node_dep))
+                        if node not in self.waiting: 
+                            self.waiting[node] = Waiting
+                            continue
+
+                    # all of the dependecies has other depndecies so just skip it and wait
+                    elif (all(x in node_dep for x in self.waiting)):
+                        continue
+
+                # if this node has no predecssors then we can execute it
+                else:
+                    print('Node {0} will be sent to execute because it has no dep'.format(node))
+                    self.running[node] = Running
+                    self.work2_queue.put(node_obj)
+                    counter = counter +1
+
+            if self.workflow.size() == counter:
+                print('Done')
+                break
