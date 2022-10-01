@@ -1,6 +1,7 @@
 import time
 import queue
 import atexit
+from xml.etree.ElementTree import TreeBuilder
 import networkx as nx
 import threading       as mt
 import multiprocessing as mp
@@ -19,8 +20,14 @@ HPC      = 'hpc'
 CLOUD    = 'cloud'
 
 class HybridWorkflow:
-    def __init__(self) -> None:
+    def __init__(self, cloud_manager=None, hpc_manager=None) -> None:
+
+        if not cloud_manager and not hpc_manager:
+            raise Exception('The workflow component must be initialized with at least one manager')
         
+        self.hpc_manager   = hpc_manager
+        self.cloud_manager = cloud_manager
+
         self.workflow = nx.DiGraph()
         # use mp.Queue instances to proxy tasks to the worker processes
         self.work_queue    = mp.Queue()
@@ -32,32 +39,35 @@ class HybridWorkflow:
         self.running  = manager.dict()
         self.finished = manager.dict()
 
-        self.submission_lock = mp.Lock()
+        self.submission_lock = mt.Lock()
 
         # start threads to feed / drain the workers
         self.stop_event  = mt.Event()
-        self.get_works   = mt.Thread(target=self.get_work, name="WorkFunction")
+        self.get_works   = mt.Thread(target=self.get_work, name="GatWorkFunction")
+        self.distributer = mt.Thread(target=self.distribute, name="SendWorkFunction")
 
-        self.get_works.daemon    = True
+        self.get_works.daemon   = True
+        self.distributer.daemon = True
 
         self.get_works.start()
+        self.distributer.start()
 
         # start one worker per core
-        nw = mp.cpu_count() - 2
-        self.workers = list()
+        #nw = mp.cpu_count() - 2
+        #self.workers = list()
 
-        for _ in range(nw):
-            proc = mp.Process(target=self.execute)
-            proc.daemon = True
-            proc.start()
-            self.workers.append(proc)
+        #for _ in range(nw):
+        #    proc = mp.Process(target=self.execute)
+        #    proc.daemon = True
+        #    proc.start()
+        #    self.workers.append(proc)
 
-        atexit.register(self.stop_background, self.workers, self.stop_event, [self.get_works])
+        atexit.register(self.stop_background, self.stop_event, [self.get_works, self.distributer])
     
 
     def add_task(self, task: Task):
         tid = self._task_counter
-        self.workflow.add_node(tid, task = task)
+        self.workflow.add_node(tid, tid=tid, task=task)
         self._task_counter +=1
         return True
 
@@ -105,6 +115,10 @@ class HybridWorkflow:
         
         for worker in workers:
             worker.terminate()
+    
+
+    def size(self):
+        return self.workflow.size()
 
 
     def get_work(self):
@@ -125,19 +139,45 @@ class HybridWorkflow:
             if task:
                 # send task individually to load balance workers
                 self.work_queue.put(task)
+    
 
+    def task_callbacks(self, task):
+        """
+        a thread to check on the task done/failed callback
+        all the time **this is just an EXAMPLE
+        """
+        while not self.stop_event:
+            if task.done:
+                self.submission_lock.acquire()
+                self.running.pop(task['tid'])
+                self.finished[task['tid']] = Finished
+                self.submission_lock.release()
+            if task.failed:
+                pass
 
-    def execute(self):
+            elif task.wait:
+                pass
+            else:
+                pass
+
+    def distribute(self):
         while True:
             try:
                 task = self.work_queue.get(block=True, timeout=0.1)
                 if task:
-                    result = task['task'].cmd()
+                    if task['task'].arch == HPC:
+                        print('task {0} sent to HPC manager'.format(task['tid']))
+                        result = task['task'].cmd()
+                        #self.hpc_manager.submit(task)
+                    if task['task'].arch == CLOUD:
+                        print('task {0} sent to CLOUD manager'.format(task['tid']))
+                        result = task['task'].cmd()
+                        #self.cloud_manager.submit(task)
+    
                     self.submission_lock.acquire()
-                    self.running.pop(task['id'])
-                    self.finished[task['id']] = Finished
+                    self.running.pop(task['tid'])
+                    self.finished[task['tid']] = Finished
                     self.submission_lock.release()
-
                     
             except queue.Empty:
                 continue
@@ -152,7 +192,7 @@ class HybridWorkflow:
             for node in nx.topological_sort(self.workflow):
 
                 # get each not dependecies via predecessor
-                node_obj = G.nodes[node]
+                node_obj = self.workflow.nodes[node]
                 node_dep = list(self.workflow.predecessors(node))
 
                 # (1) check if the node is finished

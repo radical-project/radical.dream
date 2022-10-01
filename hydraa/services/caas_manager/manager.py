@@ -26,7 +26,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, proxy_mgr, asynchronous):
+    def __init__(self, proxy_mgr, cloud_vm, asynchronous):
         
         _id = str(uuid.uuid4())
         self._registered_managers = []
@@ -39,10 +39,10 @@ class CaasManager:
         for provider in self._proxy.loaded_providers:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                self.AwsCaas = AwsCaas(_id, cred, asynchronous)
+                self.AwsCaas = AwsCaas(_id, cred, cloud_vm, asynchronous)
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                self.AzureCaas = AzureCaas(_id, cred, asynchronous)
+                self.AzureCaas = AzureCaas(_id, cred, cloud_vm, asynchronous)
             if provider == GCLOUD:
                 raise NotImplementedError
             

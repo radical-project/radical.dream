@@ -41,7 +41,7 @@ class AwsCaas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
+    def __init__(self, manager_id, cred, cloud_vm, asynchronous, DryRun=False):
 
         self.manager_id = manager_id
 
@@ -51,6 +51,7 @@ class AwsCaas():
         #       verify permissions before starting
         #       the actual run.
         self.DryRun = DryRun
+        self.VM     = cloud_vm
         
         self._ecs_client    = self._create_ecs_client(cred)
         self._ec2_client    = self._create_ec2_client(cred)
@@ -120,7 +121,7 @@ class AwsCaas():
         
     # --------------------------------------------------------------------------
     #
-    def run(self, VM, tasks, service=False, budget=0, time=0):
+    def run(self, tasks, service=False, budget=0, time=0):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
@@ -138,7 +139,7 @@ class AwsCaas():
         if self.status:
             self.__cleanup()
 
-        self.launch_type = VM.LaunchType
+        self.launch_type = self.VM.LaunchType
         #
         # TODO: In our scheduling mechanism we need to consider:
         #       memory, cpu and number of instances besides tasks
@@ -181,7 +182,7 @@ class AwsCaas():
             self.submit(tasks, cluster)
 
         if self.launch_type == EC2:
-            self.create_ec2_instance(VM)
+            self.create_ec2_instance(self.VM)
             self.submit(tasks, cluster)
         
         self.runs_tree[self.run_id] =  self._family_ids

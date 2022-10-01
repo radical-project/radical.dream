@@ -43,7 +43,7 @@ CGPRG = 60  # Number of container groups per resource group
 
 
 class AzureCaas():
-    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
+    def __init__(self, manager_id, cred, cloud_vm, asynchronous, DryRun=False):
         
         self.manager_id = manager_id
 
@@ -53,6 +53,7 @@ class AzureCaas():
         #       verify permissions before starting
         #       the actual run.
         self.DryRun = DryRun
+        self.VM     = cloud_vm
         
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
@@ -89,14 +90,14 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run(self, VM, tasks, budget=0, time=0):
+    def run(self, tasks, budget=0, time=0):
         
         if self.status:
             self.__cleanup()
 
         self.status      = ACTIVE
         self.run_id      = str(uuid.uuid4())
-        self.launch_type = VM.LaunchType
+        self.launch_type = self.VM.LaunchType
 
         print("starting run {0}".format(self.run_id))
 
