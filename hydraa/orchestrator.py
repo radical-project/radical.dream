@@ -172,36 +172,30 @@ class HybridWorkflow:
             try:
                 task = self.work_queue.get(block=True, timeout=0.1)
                 if task:
-                    with self.submission_lock:
-                        task_input = self.finished.get(task['tid'])
-                        if task['task'].arch == HPC:
-                            print('task {0} sent to HPC manager'.format(task['tid']))
+                    
+                    task_input = self.finished.get(task['tid'])
+                    if task['task'].arch == HPC:
+                        print('task {0} sent to HPC manager'.format(task['tid']))
 
-                            if task_input:
-                                result = task['task'].cmd(*tuple(task_input))
-                            else:
-                                result = task['task'].cmd()
-    
-                            #self.hpc_manager.submit(task)
-                        if task['task'].arch == CLOUD:
-                            print('task {0} sent to CLOUD manager'.format(task['tid']))
-                            if task_input:
-                                result = task['task'].cmd(*tuple(task_input))
-                            else:
-                                result = task['task'].cmd()
-                            
-                            #self.cloud_manager.submit(task)
-                        while True:
-                            if result:
-                                #self.submission_lock.acquire()
-                                self.running.pop(task['tid'])
-                                task['task'].result = result
-                                print(task['task'].result)
-                                self.finished[task['tid']] = result
-                                #self.submission_lock.release()
-                                break
-                            else:
-                                time.sleep(1)
+                        if task_input:
+                            result = task['task'].cmd(*tuple(task_input))
+                        else:
+                            result = task['task'].cmd()
+
+                        #self.hpc_manager.submit(task)
+                    if task['task'].arch == CLOUD:
+                        print('task {0} sent to CLOUD manager'.format(task['tid']))
+                        if task_input:
+                            result = task['task'].cmd(*tuple(task_input))
+                        else:
+                            result = task['task'].cmd()
+                        
+                        #self.cloud_manager.submit(task)
+
+                    if result:
+                        with self.submission_lock:
+                            self.running.pop(task['tid'])
+                            self.finished[task['tid']] = [result]
                     
             except queue.Empty:
                 continue
@@ -231,21 +225,22 @@ class HybridWorkflow:
                     # (3) if all dependecies of this node is in finished then send it to execution
                     if(all(key in self.finished.keys() for key in node_dep)):
                         node_input = tuple(self.finished[key] for key in node_dep)
-                        print(node_input)
                         self.finished[node_obj['tid']] = node_input
-
-                        print('task {0} was in wait_list, all dep. solved, sending to execute'.format(node))
+    
                         # mark this task as running
                         self.running[node] = Running
 
                         # remove this task from waiting
                         self.waiting.pop(node)
 
+                        print('task {0} moved from waiting to running as all depndencies are solved'.format(node))
+
                         # send this task to distribuation
                         self.work2_queue.put(node_obj)
 
                         # increase the internal running tasks counters by 1
                         counter = counter +1
+                        continue
 
                     # (4) if not then we can not do anything beside waiting
                     else:
@@ -258,12 +253,13 @@ class HybridWorkflow:
                         print('task {0} will be sent to execute because dep {1} is finished {2}'.format(node, node_dep, self.finished))
                         
                         node_input = tuple(self.finished[key] for key in node_dep)
-                        print(node_input)
                         
                         self.finished[node_obj['tid']] = node_input
 
                         self.running[node] = Running
+
                         self.work2_queue.put(node_obj)
+    
                         counter = counter +1
                         continue
                     
@@ -271,7 +267,7 @@ class HybridWorkflow:
                         print('task {0} will be skipped as all dep {1} are running'.format(node, node_dep))
                         if node not in self.waiting:
                             self.waiting[node] = Waiting
-                        continue
+                            continue
 
                     # all of the dependecies has other depndecies so just skip it and wait
                     elif (all(key in node_dep for key in self.waiting.keys())):
@@ -281,8 +277,11 @@ class HybridWorkflow:
                 else:
                     print('task {0} will be sent to execute because it has no dep'.format(node))
                     self.running[node] = Running
+    
                     self.work2_queue.put(node_obj)
+    
                     counter = counter +1
 
             if self.workflow.size() == counter:
+                print(self.workflow.size(), counter)
                 break
