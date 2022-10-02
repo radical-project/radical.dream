@@ -1,12 +1,10 @@
 import time
 import queue
 import atexit
-from xml.etree.ElementTree import TreeBuilder
 import networkx as nx
 import threading       as mt
 import multiprocessing as mp
 
-from random import randint
 from multiprocessing import Manager
 from hydraa.cloud_task.task import Task
 
@@ -52,24 +50,16 @@ class HybridWorkflow:
         self.get_works.start()
         self.distributer.start()
 
-        # start one worker per core
-        #nw = mp.cpu_count() - 2
-        #self.workers = list()
-
-        #for _ in range(nw):
-        #    proc = mp.Process(target=self.execute)
-        #    proc.daemon = True
-        #    proc.start()
-        #    self.workers.append(proc)
-
         atexit.register(self.stop_background, self.stop_event, [self.get_works, self.distributer])
     
 
     def add_task(self, task: Task):
         tid = self._task_counter
+        task.id = tid
         self.workflow.add_node(tid, tid=tid, task=task)
         self._task_counter +=1
         return True
+
 
     def remove_task(self, task_id):
         self.workflow.remove_node(task_id)
@@ -78,9 +68,20 @@ class HybridWorkflow:
 
 
     def add_cloud_dependency(self, cloud_dependee: Task, hpc_depnder: Task):
-        self.workflow.add_edge(cloud_dependee, hpc_depnder)
-        if nx.is_directed_acyclic_graph(self.workflow):
-            self.workflow.remove_edge(cloud_dependee, hpc_depnder)
+
+        # check that both tasks are already in the DAG to prevent
+        # duplications
+        try:
+            dependee = self.workflow.nodes[cloud_dependee.id]
+            depender = self.workflow.nodes[hpc_depnder.id]
+            self.workflow.add_edge(cloud_dependee.id, hpc_depnder.id)
+
+        except KeyError:
+            raise Exception('cloud or hpc task is not in the DAG')
+
+        # check if this dependcy won't create a cycle!
+        if not nx.is_directed_acyclic_graph(self.workflow):
+            self.workflow.remove_edge(cloud_dependee.id, hpc_depnder.id)
             raise Exception('adding cloud dependecy will create infinite cycle')
         
         hpc_depnder.arch    = HPC
@@ -90,9 +91,17 @@ class HybridWorkflow:
 
 
     def add_hpc_dependency(self, hpc_dependee: Task, cloud_depnder: Task):
-        self.workflow.add_edge(hpc_dependee, cloud_depnder)
-        if nx.is_directed_acyclic_graph(self.workflow):
-            self.workflow.remove_edge(hpc_dependee, cloud_depnder)
+
+        try:
+            dependee = self.workflow.nodes[hpc_dependee.id]
+            depender = self.workflow.nodes[cloud_depnder.id]
+            self.workflow.add_edge(hpc_dependee.id, cloud_depnder.id)
+        
+        except KeyError:
+            raise Exception('cloud or hpc task is not in the DAG')
+
+        if not nx.is_directed_acyclic_graph(self.workflow):
+            self.workflow.remove_edge(hpc_dependee.id, cloud_depnder.id)
             raise Exception('Adding hpc dependecy will create infinite cycle')
         
         hpc_dependee.arch  = HPC
@@ -106,19 +115,17 @@ class HybridWorkflow:
         return True
 
     # stop the background task gracefully before exit
-    def stop_background(self, workers, stop_event, threads):
+    def stop_background(self, stop_event, threads):
         # request the background thread stop
         stop_event.set()
         # wait for the background thread to stop
         for thread in threads:
             thread.join()
-        
-        for worker in workers:
-            worker.terminate()
     
 
     def size(self):
         return self.workflow.size()
+
 
 
     def get_work(self):
@@ -165,19 +172,36 @@ class HybridWorkflow:
             try:
                 task = self.work_queue.get(block=True, timeout=0.1)
                 if task:
-                    if task['task'].arch == HPC:
-                        print('task {0} sent to HPC manager'.format(task['tid']))
-                        result = task['task'].cmd()
-                        #self.hpc_manager.submit(task)
-                    if task['task'].arch == CLOUD:
-                        print('task {0} sent to CLOUD manager'.format(task['tid']))
-                        result = task['task'].cmd()
-                        #self.cloud_manager.submit(task)
+                    with self.submission_lock:
+                        task_input = self.finished.get(task['tid'])
+                        if task['task'].arch == HPC:
+                            print('task {0} sent to HPC manager'.format(task['tid']))
+
+                            if task_input:
+                                result = task['task'].cmd(*tuple(task_input))
+                            else:
+                                result = task['task'].cmd()
     
-                    self.submission_lock.acquire()
-                    self.running.pop(task['tid'])
-                    self.finished[task['tid']] = Finished
-                    self.submission_lock.release()
+                            #self.hpc_manager.submit(task)
+                        if task['task'].arch == CLOUD:
+                            print('task {0} sent to CLOUD manager'.format(task['tid']))
+                            if task_input:
+                                result = task['task'].cmd(*tuple(task_input))
+                            else:
+                                result = task['task'].cmd()
+                            
+                            #self.cloud_manager.submit(task)
+                        while True:
+                            if result:
+                                #self.submission_lock.acquire()
+                                self.running.pop(task['tid'])
+                                task['task'].result = result
+                                print(task['task'].result)
+                                self.finished[task['tid']] = result
+                                #self.submission_lock.release()
+                                break
+                            else:
+                                time.sleep(1)
                     
             except queue.Empty:
                 continue
@@ -206,9 +230,21 @@ class HybridWorkflow:
                 elif node in self.waiting:
                     # (3) if all dependecies of this node is in finished then send it to execution
                     if(all(key in self.finished.keys() for key in node_dep)):
-                        print('Node {0} was in wait_list, all dep. solved, sending to execute'.format(node))
+                        node_input = tuple(self.finished[key] for key in node_dep)
+                        print(node_input)
+                        self.finished[node_obj['tid']] = node_input
+
+                        print('task {0} was in wait_list, all dep. solved, sending to execute'.format(node))
+                        # mark this task as running
                         self.running[node] = Running
+
+                        # remove this task from waiting
+                        self.waiting.pop(node)
+
+                        # send this task to distribuation
                         self.work2_queue.put(node_obj)
+
+                        # increase the internal running tasks counters by 1
                         counter = counter +1
 
                     # (4) if not then we can not do anything beside waiting
@@ -218,30 +254,35 @@ class HybridWorkflow:
                 # (5) if this node has depndencies
                 if node_dep:
                     # if all of the dep. in task_finished then execute it
-                    if(all(key in node_dep for key in self.finished.keys())):
-                        print('Node {0} will be sent to execute because dep {1} is in task_finished {2}'.format(node, node_dep, self.finished))
+                    if(all(key in self.finished.keys() for key in node_dep)):
+                        print('task {0} will be sent to execute because dep {1} is finished {2}'.format(node, node_dep, self.finished))
+                        
+                        node_input = tuple(self.finished[key] for key in node_dep)
+                        print(node_input)
+                        
+                        self.finished[node_obj['tid']] = node_input
+
                         self.running[node] = Running
                         self.work2_queue.put(node_obj)
                         counter = counter +1
                         continue
                     
-                    elif (all(key in node_dep for key in self.running.keys())):
-                        print('Node {0} will be skipped as all dep {1} are in task_should run'.format(node, node_dep))
-                        if node not in self.waiting: 
+                    elif (all(key in self.running.keys() for key in node_dep)):
+                        print('task {0} will be skipped as all dep {1} are running'.format(node, node_dep))
+                        if node not in self.waiting:
                             self.waiting[node] = Waiting
-                            continue
+                        continue
 
                     # all of the dependecies has other depndecies so just skip it and wait
-                    elif (all(x in node_dep for x in self.waiting)):
+                    elif (all(key in node_dep for key in self.waiting.keys())):
                         continue
 
                 # if this node has no predecssors then we can execute it
                 else:
-                    print('Node {0} will be sent to execute because it has no dep'.format(node))
+                    print('task {0} will be sent to execute because it has no dep'.format(node))
                     self.running[node] = Running
                     self.work2_queue.put(node_obj)
                     counter = counter +1
 
             if self.workflow.size() == counter:
-                print('Done')
                 break

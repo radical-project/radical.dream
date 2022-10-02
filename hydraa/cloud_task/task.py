@@ -23,6 +23,9 @@ class Task(object):
         self.image    = None
 
         self.state    = None
+        
+        self.input    = None
+        self.result   = None
 
 
     def name(self):
@@ -176,7 +179,22 @@ class Task(object):
 
     @property
     def result(self):
-        pass
+        return self.__result
+    
+
+    @result.setter
+    def result(self, result):
+        self.__result = result
+
+
+    @property
+    def input(self):
+        return self.__input
+    
+
+    @result.setter
+    def input(self, input):
+        self.__input = input
 
     
     def exit_code(self):
