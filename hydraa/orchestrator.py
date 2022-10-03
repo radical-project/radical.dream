@@ -132,13 +132,9 @@ class HybridWorkflow:
         '''
         thread feeding tasks pulled from the ZMQ work queue to worker processes
         '''
-        # FIXME: This drains the qork queue with no regard of load balancing.
-        #        For example, the first <n_cores> tasks may stall this executer
-        #        for a long time, but new tasks are pulled nonetheless, even if
-        #        other executors are not stalling and could execute them timely.
-        #        We should at most fill a cache of limited size.
 
-        while True:
+        while not self.stop_event.is_set():
+            #print('get_work still running')
             try:
                 task = self.work2_queue.get(block=True, timeout=0.1)
             except queue.Empty:
@@ -168,7 +164,8 @@ class HybridWorkflow:
                 pass
 
     def distribute(self):
-        while True:
+        while not self.stop_event.is_set():
+            #print('distribute still running')
             try:
                 task = self.work_queue.get(block=True, timeout=0.1)
                 if task:
@@ -282,6 +279,6 @@ class HybridWorkflow:
     
                     counter = counter +1
 
-            if self.workflow.size() == counter:
-                print(self.workflow.size(), counter)
+            if self.workflow.size() == len(self.finished):
+                self.stop_event.set()
                 break
