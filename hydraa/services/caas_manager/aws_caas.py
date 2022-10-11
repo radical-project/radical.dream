@@ -739,8 +739,8 @@ class AwsCaas():
         # so we split the task arns into chunks of 100
 
         if len(tasks) <= 100:
-            response = self._ecs_client.describe_tasks(tasks=tasks,
-                                                   cluster=cluster)
+            response = self._ecs_client.describe_tasks(tasks=list(tasks),
+                                                         cluster=cluster)
             return [response['tasks']]
 
         tasks         = iter(tasks)
