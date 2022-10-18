@@ -1,6 +1,7 @@
 import os
 import json
 import boto3
+import openstack
 
 from botocore.exceptions import NoCredentialsError
 from botocore.exceptions import InvalidConfigError
@@ -9,8 +10,10 @@ from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource.resources import ResourceManagementClient
 
 AWS    = 'aws'
+JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
+
 
 class proxy(object):
     """ 
@@ -22,19 +25,20 @@ class proxy(object):
         3- Check: https://docs.aws.amazon.com/general/latest/gr/aws-access-keys-best-practices.html
     """
 
-    def __init__(self):
-
-        self.loaded_providers     = []
+    def __init__(self, providers: list):
+        self._providers           = providers
+        self._loaded_providers    = []
         self._loaded_credentials  = {}
+        self._supported_providers = [AWS, AZURE, GCLOUD, JET2]
+        self._login()
 
 
-    def login(self, providers: list):
-
-        for provider in providers:
-            if provider in  [AWS, AZURE, GCLOUD]:
+    def _login(self):
+        for provider in self._providers:
+            if provider in self._supported_providers:
                 self._verify_credentials(provider)
-                self.loaded_providers.append(provider)
-                print('Login to {0} succeed'.format(provider))
+                self._loaded_providers.append(provider)
+                print('login to {0} succeed'.format(provider))
             else:
                 print('{0} provider not supported'.format(provider))
 
@@ -43,7 +47,7 @@ class proxy(object):
         '''
         check if the provided credentials are valid.
         '''
-        print('Verifying {0} credentials'.format(provider))
+        print('verifying {0} credentials'.format(provider))
         if provider == AWS:
             try:
                 # get AWS credentials
@@ -63,11 +67,20 @@ class proxy(object):
             credential = DefaultAzureCredential()
             azu_client = ResourceManagementClient(credential=credential, 
                                                   subscription_id=azu_creds['az_sub_id'])
-            for resource_group in azu_client.resource_groups.list():
+            for _ in azu_client.resource_groups.list():
                 pass
+        
+        if provider == JET2:
+            jet2_creds  = self._load_credentials(provider)
+            jet2_client = openstack.connect(**jet2_creds)
+            try:
+                jet2_client.list_flavors()
+            except Exception as e:
+                print('failed to login to {0}: {1}'.format(provider, e))
             
         if provider == GCLOUD:
             raise NotImplementedError
+
 
     def _load_credentials(self, provider):
         """
@@ -99,8 +112,19 @@ class proxy(object):
             except KeyError:
                 raise
 
+        if provider == JET2:
+            try:
+                jet2_creds = {'auth_url'                   : os.environ['OS_AUTH_URL'],
+                            'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
+                            'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
+                
+                return jet2_creds
+            except KeyError:
+                raise
+
         if provider == GCLOUD:
              raise NotImplementedError
+                
 
     
         

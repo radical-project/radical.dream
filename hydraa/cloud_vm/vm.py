@@ -104,3 +104,26 @@ class AzureVM:
         self.required_kwargs = {}
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs
+
+
+class Jet2VM:
+    def __init__(self, flavor_id: str, image_id: str,  **input_kwargs):
+
+        self.VmName         = 'JET2_VM-{0}'.format(uuid.uuid4())
+        self.LaunchType     = flavor_id
+        self.ImageId        = image_id
+        self.SecurityGroups = input_kwargs.get('security_groups', '')
+        self.Network        = input_kwargs.get('networks', '')
+        self.KeyPair        = input_kwargs.get('keypair', 'id_rsa')
+        self.Subnet         = input_kwargs.get('subnet', '')
+        self.Port           = input_kwargs.get('port', None)
+        self.input_kwargs   = input_kwargs
+
+
+    def __call__(self):
+
+        self.required_kwargs = {}
+        self.required_kwargs['image_id']  = self.ImageId
+        self.required_kwargs['flavor_id'] = self.LaunchType
+        kwargs = {**self.required_kwargs, **self.input_kwargs}
+        return kwargs
