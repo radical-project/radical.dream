@@ -106,10 +106,10 @@ class AzureVM:
         return kwargs
 
 
-class Jet2VM:
+class OpenStackVM:
     def __init__(self, flavor_id: str, image_id: str,  **input_kwargs):
 
-        self.VmName         = 'JET2_VM-{0}'.format(uuid.uuid4())
+        self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
         self.LaunchType     = flavor_id
         self.ImageId        = image_id
         self.SecurityGroups = input_kwargs.get('security_groups', '')
