@@ -214,7 +214,7 @@ class ChiCaas:
         deploy kubernetes cluster K8s on chi
         via Ansible.
         """
-        with self.remote(self.ip) as conn:
+        with self.remote as conn:
             # Upload the script
             conn.put("deploy_kuberentes_local.sh")
             conn.run("chmod +x deploy_kuberentes_local.sh")
@@ -267,7 +267,7 @@ class ChiCaas:
 
     def _submit_to_kuberentes(self, pods):
         
-        with self.remote(self.ip) as conn:
+        with self.remote as conn:
             conn.put(pods)
             conn.run('sudo microk8s kubectl apply -f {0}'.format(pods))
         
