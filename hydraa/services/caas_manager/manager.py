@@ -1,13 +1,18 @@
 import uuid
 from typing import List
-from hydraa.cloud_vm.vm import AwsVM
+
+from hydraa.cloud_vm.vm     import AwsVM
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
+
+from hydraa.services.caas_manager.chi_caas   import ChiCaas
 from hydraa.services.caas_manager.aws_caas   import AwsCaas
-from hydraa.services.caas_manager.jet2_caas import Jet2Caas
+from hydraa.services.caas_manager.jet2_caas  import Jet2Caas
 from hydraa.services.caas_manager.azure_caas import AzureCaas
 
+
 AWS    = 'aws'
+CHI    = 'chameleon'
 JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
@@ -50,6 +55,9 @@ class CaasManager:
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
                 self.Jet2Caas = Jet2Caas(_id, cred, asynchronous)
+            if provider == CHI:
+                cred = self._proxy._load_credentials(CHI)
+                self.ChiCaas = ChiCaas(_id, cred, asynchronous)
                 
     # --------------------------------------------------------------------------
     #
@@ -130,7 +138,10 @@ class CaasManager:
         if JET2 in self._proxy._loaded_providers:
             run_id = self.Jet2Caas.run(VM, tasks, service, budget, time)
             return run_id
-
+        
+        if CHI in self._proxy._loaded_providers:
+            run_id = self.ChiCaas.run(VM, tasks, service, budget, time)
+            return run_id
 
     # --------------------------------------------------------------------------
     #

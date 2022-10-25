@@ -1,0 +1,142 @@
+description: Deploy Ansible cluster
+heat_template_version: 2017-09-01
+# The parameters section gathers configuration from the user.
+parameters:
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instance
+    default: default
+    constraints:
+    - custom_constraint: nova.keypair
+  image_name: 
+    type: string
+    description: Image to use for instances
+    constraints:
+    - custom_constraint: glance.image
+    default: CC-CentOS7
+  num_workers:
+    type: number
+    description: Number of worker nodes to create
+    default: 2
+  reservation_id:
+    constraints:
+    - custom_constraint: blazar.reservation
+    description: ID of the reservation to use for launching compute instances
+    type: string
+outputs:
+  head_ip:
+    description: The IP address of the head node
+    value: { get_attr: [ head_floating_ip, floating_ip_address ] }
+  ansible:
+    description: Ansible inventory file
+    value: { get_attr: [ ansible_inventory, value ] }
+resources:
+  head_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: public
+  ansible_key:
+    type: OS::Nova::KeyPair
+    properties:
+      name: ansible-worker-key
+      save_private_key: true
+  head:
+    type: OS::Nova::Server
+    properties:
+      flavor: baremetal
+      image: { get_param: image_name }
+      key_name: { get_param: key_name }
+      networks:
+        - { port: { get_resource: "head_port" } }
+      scheduler_hints: { reservation: { get_param: reservation_id } }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __sshprivkey__  : { get_attr: [ansible_key,private_key] }
+            __keyprivfile__ : /home/cc/.ssh/id_rsa
+            __sshpubkey__   : { get_attr: [ansible_key,public_key] }
+            __inv__         : { get_attr: [ansible_inventory,value] }
+          template: |
+            #!/bin/bash
+            
+            # install dependencies
+            dnf install -y ansible-core
+            python -m pip install ipaddress
+            # install SSH private key
+            cat >__keyprivfile__ <<EOF
+            __sshprivkey__
+            EOF
+            chown cc: __keyprivfile__
+            chmod 600 __keyprivfile__
+            echo "__sshpubkey__" >> /home/cc/.ssh/authorized_keys
+            cat >/home/cc/.ssh/config <<EOF
+            Host *
+              StrictHostKeyChecking no
+              UserKnownHostsFile=/dev/null
+            EOF
+            cat >/tmp/inventory <<EOF
+            __inv__
+            EOF
+  head_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      name: head_port
+      network: 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1
+      security_groups:
+        - default
+  ansible_head_ip_association:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: {get_resource: head_floating_ip}
+      port_id: {get_attr: [head, addresses, 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1, 0, port]}
+  head_inventory:
+    type: OS::Heat::Value
+    properties:
+      type: string
+      value:
+        str_replace:
+          params:
+            <%name%> : head
+            <%ip%>   : { get_attr: [ head_port, fixed_ips, 0, ip_address ] }
+            <%pubip%>: { get_attr: [ head_floating_ip, floating_ip_address ] }
+          template: "<%name%> ansible_host=<%ip%> ansible_user=cc pubip=<%pubip%>"
+  worker:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: num_workers }
+      resource_def:
+        type: OS::Nova::Server
+        properties:
+          flavor: baremetal
+          image: { get_param: image_name }
+          key_name: { get_resource: ansible_key }
+          networks:
+            - network: 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1
+          scheduler_hints: { reservation: { get_param: reservation_id } }
+  worker_inventory:
+    type: OS::Heat::Value
+    properties:
+      type: comma_delimited_list
+      value:
+        repeat:
+          for_each:
+            <%name%>: { get_attr: [ worker, name ] }
+            <%ip%>  : { get_attr: [ worker, addresses, 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1, 0, addr ] }
+          template: "<%name%> ansible_host=<%ip%> ansible_user=cc"
+          permutations: false
+  ansible_inventory:
+    type: OS::Heat::Value
+    properties:
+      type: string
+      value:
+        str_replace:
+          params:
+            __workers__: { list_join: ["\n", get_attr: [worker_inventory, value ] ] }
+            __heads__  : { get_attr : [ head_inventory, value ]}
+          template: |
+            [heads]
+            __heads__
+            [workers]
+            __workers__

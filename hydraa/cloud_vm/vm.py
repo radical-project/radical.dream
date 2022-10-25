@@ -110,6 +110,7 @@ class OpenStackVM:
     def __init__(self, flavor_id: str, image_id: str,  **input_kwargs):
 
         self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
+        self.VmId           = None
         self.LaunchType     = flavor_id
         self.ImageId        = image_id
         self.SecurityGroups = input_kwargs.get('security_groups', '')

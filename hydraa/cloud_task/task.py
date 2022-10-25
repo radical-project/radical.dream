@@ -69,9 +69,6 @@ class Task(object):
 
     @launch_type.setter
     def launch_type(self, launch_type):
-        launch_types = ['EC2', 'B1']
-        if launch_type not in launch_types:
-            raise ValueError('launch type not supported') 
         self.__launch_type = launch_type
 
     @property

@@ -10,6 +10,7 @@ from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource.resources import ResourceManagementClient
 
 AWS    = 'aws'
+CHI    = 'chameleon'
 JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
@@ -29,7 +30,7 @@ class proxy(object):
         self._providers           = providers
         self._loaded_providers    = []
         self._loaded_credentials  = {}
-        self._supported_providers = [AWS, AZURE, GCLOUD, JET2]
+        self._supported_providers = [AWS, AZURE, GCLOUD, JET2, CHI]
         self._login()
 
 
@@ -121,6 +122,10 @@ class proxy(object):
                 return jet2_creds
             except KeyError:
                 raise
+        
+        if provider == CHI:
+            chi_creds = {}
+            return chi_creds
 
         if provider == GCLOUD:
              raise NotImplementedError
