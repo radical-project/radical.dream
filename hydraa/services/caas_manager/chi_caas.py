@@ -64,9 +64,6 @@ class ChiCaas:
         self.server = self._create_server(self.lease)
         self.ip     = self._create_and_assign_floating_ip(self.server)
         self.remote = self.open_remote_connection(self.ip)
-
-        self._bootstrap_local_kb_cluster()
-
         self.submit(tasks)
 
 
@@ -199,7 +196,7 @@ class ChiCaas:
                 while True:
                     cpu_usage = self.remote.run(cmd, hide=True)
                     print(cpu_usage)
-                    sleep(4)
+                    time.sleep(4)
             except KeyboardInterrupt:
                 return
 
@@ -227,10 +224,15 @@ class ChiCaas:
         deploy kubernetes cluster K8s on chi
         """
         with self.remote as conn:
-            # Upload the script
-            conn.put("hydraa/services/caas_manager/config/chi/deploy_kuberentes_local.sh")
+            print('booting K8s cluster on the remote machine')
+            loc = "HYDRAA/hydraa/services/caas_manager/config/chi/deploy_kuberentes_local.sh"
+            cwd = os.getcwd()
+            file_path = '{0}/{1}'.format(cwd, loc)
+            conn.put(file_path)
             conn.run("chmod +x deploy_kuberentes_local.sh")
             conn.run("./deploy_kuberentes_local.sh")
+
+            print('booting successfull')
 
     
     def _build_pod_object(self, ctasks):
@@ -278,10 +280,22 @@ class ChiCaas:
 
 
     def _submit_to_kuberentes(self, pods):
+
+        # upload the pods file before bootstrapping
+        # FIXME: we get socket closed if we did it
+        # in the reverse order, because we modify 
+        # the firewall of the node
+
+        # upload the pods.json
+        self.remote.put(pods)
         
-        with self.remote as conn:
-            conn.put(pods)
-            conn.run('sudo microk8s kubectl apply -f {0}'.format(pods))
+        # bootup the cluster K8s
+        self._bootstrap_local_kb_cluster()
+
+        # deploy the pods.json on the cluster
+        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pods))
+
+        #FIXME: create a monitering of the pods/containers
         
         return True
 
