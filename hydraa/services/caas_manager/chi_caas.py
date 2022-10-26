@@ -245,9 +245,12 @@ class ChiCaas:
                 for env in env_vars:
                     pod_env  = client.V1EnvVar(name = env[0], value = env[1])
                     envs.append(pod_env)
-    
-            resources=client.V1ResourceRequirements(requests={"cpu": ctask.vcpus, "memory": ctask.memory},
-                                                      limits={"cpu": ctask.vcpus, "memory": ctask.memory})
+
+            pod_cpu = "{0}m".format(ctask.vcpus * 1000)
+            pod_mem = "{0}Mi".format(ctask.memory)
+
+            resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
+                                                      limits={"cpu": pod_cpu, "memory": pod_mem})
 
             pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                         resources = resources, command = ctask.cmd, env = envs)
