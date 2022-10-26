@@ -62,8 +62,6 @@ class ChiCaas:
             self.lease  = self._lease_resources(lease_id=str(user_in))
             
         self.server = self._create_server(self.lease)
-
-        if self.vm
         self.ip     = self._create_and_assign_floating_ip(self.server)
         self.remote = self.open_remote_connection(self.ip)
 
@@ -180,8 +178,7 @@ class ChiCaas:
             else:
                 ip = chi.server.associate_floating_ip(server.id)
                 return ip
-        #FIXME : find out which ip for now we hard
-        # coded it
+
         except exc.exceptions.BadRequestException as e:
             raise Exception(e)
 
