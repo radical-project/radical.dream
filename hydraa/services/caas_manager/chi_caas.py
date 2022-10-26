@@ -246,7 +246,7 @@ class ChiCaas:
                              metadata=pod_metadata, spec=pod_spec)
         
         with open(pods_file, 'w') as f:
-            json.dumps(client.ApiClient().sanitize_for_serialization(pods))
+            json.dump(client.ApiClient().sanitize_for_serialization(pods), f)
         
         return pods_file
 
@@ -277,10 +277,4 @@ class ChiCaas:
     def _shutdown(self):
 
         lease.delete(self.lease['id'])
-
-
-
-
-
-        
             
