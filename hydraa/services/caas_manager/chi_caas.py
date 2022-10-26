@@ -65,6 +65,8 @@ class ChiCaas:
         self.ip     = self._create_and_assign_floating_ip(self.server)
         self.remote = self.open_remote_connection(self.ip)
 
+        self._bootstrap_local_kb_cluster()
+
         self.submit(tasks)
 
 
@@ -120,7 +122,7 @@ class ChiCaas:
             print("An unexpected error happened.")
             print(e)
 
-        if not res_lease
+        if not res_lease:
             return
 
         return res_lease
@@ -211,7 +213,7 @@ class ChiCaas:
                     print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
     
 
-    def __bootstrap(self):
+    def _bootstrap_local_kb_cluster(self):
 
         """
         deploy kubernetes cluster K8s on chi
