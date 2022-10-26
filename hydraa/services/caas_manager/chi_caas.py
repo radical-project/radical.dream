@@ -59,7 +59,7 @@ class ChiCaas:
         if user_in == 'no' or user_in == 'No':
             self.lease  = self._lease_resources()
         else:
-            self.lease  = self._lease_resources(str(user_in))
+            self.lease  = self._lease_resources(lease_id=str(user_in))
             
         self.server = self._create_server(self.lease)
         self.ip     = self._create_and_assign_floating_ip(self.server)
@@ -119,6 +119,9 @@ class ChiCaas:
         except Exception as e:
             print("An unexpected error happened.")
             print(e)
+
+        if not res_lease
+            return
 
         return res_lease
 
