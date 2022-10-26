@@ -62,6 +62,8 @@ class ChiCaas:
             self.lease  = self._lease_resources(lease_id=str(user_in))
             
         self.server = self._create_server(self.lease)
+
+        if self.vm
         self.ip     = self._create_and_assign_floating_ip(self.server)
         self.remote = self.open_remote_connection(self.ip)
 
@@ -167,8 +169,17 @@ class ChiCaas:
     def _create_and_assign_floating_ip(self, server):
 
         try:
-            ip = chi.server.associate_floating_ip(server.id)
-            return ip
+            if self.vm.VmId:
+                addresses = server.addresses.get('sharednet1', None)
+                if addresses:
+                    for address in addresses:
+                        ip_type = address.get('OS-EXT-IPS:type')
+                        if ip_type == 'floating':
+                            ip = address.get('addr')
+                            return ip
+            else:
+                ip = chi.server.associate_floating_ip(server.id)
+                return ip
         #FIXME : find out which ip for now we hard
         # coded it
         except exc.exceptions.BadRequestException as e:
@@ -217,11 +228,10 @@ class ChiCaas:
 
         """
         deploy kubernetes cluster K8s on chi
-        via Ansible.
         """
         with self.remote as conn:
             # Upload the script
-            conn.put("deploy_kuberentes_local.sh")
+            conn.put("hydraa/services/caas_manager/config/chi/deploy_kuberentes_local.sh")
             conn.run("chmod +x deploy_kuberentes_local.sh")
             conn.run("./deploy_kuberentes_local.sh")
 
