@@ -21,7 +21,7 @@ ACTIVE = True
 class ChiCaas:
     """Represents a collection of clusters (resources) with a collection of
        services, tasks and instances.:
-       :param cred: AWS credentials (access key, secert key, region)
+       :param cred: CHI credentials (source ~/chi_cred.sh)
 
        :pram asynchronous: wait for the tasks to finish or run in the
                            background.
