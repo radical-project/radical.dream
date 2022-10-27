@@ -258,7 +258,16 @@ class ChiCaas:
             containers.append(pod_container)
         
         pod_metadata  = client.V1ObjectMeta(name = "hydraa-pods")
-        pod_spec      = client.V1PodSpec(containers=containers)
+
+        # check if we need to restart the task
+        if ctask.restart:
+            restart_policy = ctask.restart
+        else:
+            restart_policy = 'Never'
+
+        pod_spec      = client.V1PodSpec(containers=containers,
+                                 restart_policy=restart_policy)
+
         pods          = client.V1Pod(api_version="v1", kind="Pod",
                              metadata=pod_metadata, spec=pod_spec)
         

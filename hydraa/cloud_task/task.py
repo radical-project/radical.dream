@@ -23,6 +23,8 @@ class Task(object):
 
         self.state    = None
 
+        self.restart  = None
+
 
     def name(self):
         return self.name
@@ -95,13 +97,12 @@ class Task(object):
 
 
     @property
-    def retry(self) -> bool:
-        pass
-
-
-    @property
-    def retry_number(self) -> bool:
-        pass
+    def restart(self) -> str:
+        return self.__restart
+    
+    @restart.setter
+    def restart(self, restart):
+        self.__restart = restart
 
 
     @property
@@ -176,3 +177,4 @@ class Task(object):
            if True then self.retry() must be True
         """
         pass
+
