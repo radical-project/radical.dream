@@ -291,19 +291,21 @@ class ChiCaas:
             ctask.launch_type = self.launch_type
             self._task_id +=1
 
-        pod, _ = self._generate_pod(ctasks)
+        pod, pod_id = self._generate_pod(ctasks)
 
         self._submit_to_kuberentes(pod)
 
-        self.watch()
+        self.watch(pod_id)
         
     
-    def watch(self):
-        try:
-            self.remote.run('sudo microk8s kubectl get pods --watch')
-        except KeyboardInterrupt:
-                return
+    def watch(self, pod_id):
         
+        try:
+            self.remote.run('sudo microk8s kubectl get pods {0} --watch'.format(pod_id))
+        except KeyboardInterrupt:
+            break
+        return
+
 
 
     def _submit_to_kuberentes(self, pods):
@@ -327,12 +329,15 @@ class ChiCaas:
         return True
     
 
-    def get_pods_info(self):
+    def _get_run_status(self):
 
+        #FIXME: get the ifno of a specifc pod by allowing 
+        # this function to get pod_id
         cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
         out = self.remote.run(cmd).stdout
         response = eval(out)
 
+        # FIXME: generate profiles as pd dataframe
         if response:
             # iterate on pods
             for pod in response['items']:
@@ -354,15 +359,29 @@ class ChiCaas:
         else:
             print('pods did not finish yet or failed')
 
-        return response
 
 
-    
     def _get_kb_worker_nodes(self):
          pass
 
 
     def _shutdown(self):
 
-        lease.delete(self.lease['id'])
+        if self.status == False:
+            return
+        
+        try:
+            print("Shutting down.....")
+            print('deleteing instance {0}'.format(self.server.id))
+            server.delete(self.server.id)
+            msg = "would you like to delete the lease? yes/no:"
+            user_in = input(msg)
+            if user_in == 'Yes' or user_in == 'yes':
+                lease.delete(self.lease['id'])
+            else:
+                pass
+
+        except Exception as e:
+            raise Exception(e)
+
             
