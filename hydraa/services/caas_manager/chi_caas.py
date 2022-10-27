@@ -291,7 +291,7 @@ class ChiCaas:
             ctask.launch_type = self.launch_type
             self._task_id +=1
 
-        _, pod = self._generate_pod(ctasks)
+        pod, _ = self._generate_pod(ctasks)
 
         self._submit_to_kuberentes(pod)
 
