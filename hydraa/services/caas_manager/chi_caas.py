@@ -21,6 +21,7 @@ false  = False
 null   = None
 CHI    = 'chameleon'
 ACTIVE = True
+BOOTSTRAP_PATH = None
 
 class ChiCaas:
     """Represents a collection of clusters (resources) with a collection of
@@ -230,8 +231,8 @@ class ChiCaas:
             print('booting K8s cluster on the remote machine')
             loc = "HYDRAA/hydraa/services/caas_manager/config/chi/deploy_kuberentes_local.sh"
             cwd = os.getcwd()
-            file_path = '{0}/{1}'.format(cwd, loc)
-            conn.put(file_path)
+            BOOTSTRAP_PATH = '{0}/{1}'.format(cwd, loc)
+            conn.put(BOOTSTRAP_PATH)
             conn.run("chmod +x deploy_kuberentes_local.sh")
             conn.run("./deploy_kuberentes_local.sh")
 
@@ -380,6 +381,11 @@ class ChiCaas:
                 lease.delete(self.lease['id'])
             else:
                 pass
+
+            if os.path.isfile(BOOTSTRAP_PATH):
+                os.remove(BOOTSTRAP_PATH)
+            else:
+                print("File {0} does not exist".format(BOOTSTRAP_PATH))
 
         except Exception as e:
             raise Exception(e)
