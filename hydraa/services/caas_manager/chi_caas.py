@@ -235,9 +235,9 @@ class ChiCaas:
             print('booting successfull')
 
     
-    def _build_pod_object(self, ctasks):
+    def _generate_pod(self, ctasks):
 
-        pods_file  = 'pods.json'
+        pod_file  = 'hydraa_pod.json'
         containers = []
         for ctask in ctasks:
             envs = []
@@ -257,7 +257,7 @@ class ChiCaas:
             
             containers.append(pod_container)
         
-        pod_metadata  = client.V1ObjectMeta(name = "hydraa-pods")
+        pod_metadata  = client.V1ObjectMeta(name = "hydraa-pod-{0}".format(self.run_id))
 
         # check if we need to restart the task
         if ctask.restart:
@@ -268,13 +268,14 @@ class ChiCaas:
         pod_spec      = client.V1PodSpec(containers=containers,
                                  restart_policy=restart_policy)
 
-        pods          = client.V1Pod(api_version="v1", kind="Pod",
+        pod           = client.V1Pod(api_version="v1", kind="Pod",
                              metadata=pod_metadata, spec=pod_spec)
-        
-        with open(pods_file, 'w') as f:
-            json.dump(client.ApiClient().sanitize_for_serialization(pods), f)
-        
-        return pods_file
+
+        with open(pod_file, 'w') as f:
+            sanitized_pod = client.ApiClient().sanitize_for_serialization(pod)
+            json.dump(sanitized_pod, f)
+
+        return pod_file
 
     
     def submit(self, ctasks):
@@ -286,9 +287,9 @@ class ChiCaas:
             ctask.launch_type = self.launch_type
             self._task_id +=1
 
-        pods = self._build_pod_object(ctasks)
+        pod = self._generate_pod(ctasks)
 
-        self._submit_to_kuberentes(pods)
+        self._submit_to_kuberentes(pod)
 
 
     def _submit_to_kuberentes(self, pods):
