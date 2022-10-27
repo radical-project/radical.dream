@@ -111,14 +111,12 @@ class ChiCaas:
             print('resource {0} is active'.format(res_lease['id']))
 
         except keystoneauth1.exceptions.http.Unauthorized as e:
-            print("Unauthorized.\nDid set your project name and site?")
+            raise Exception("Unauthorized.\nDid set your project name and site?")
+
         except blazarclient.exception.BlazarClientException as e:
-            print(f"There is an issue making the reservation. Check the calendar to make sure a {lease_node_type} node is available.")
-            print("https://chi.uc.chameleoncloud.org/project/leases/calendar/host/")
-            print(e)
+            raise Exception(f"There is an issue making the reservation: {0}.".format(e))
         except Exception as e:
-            print("An unexpected error happened.")
-            print(e)
+            raise Exception(e)
 
         if not res_lease:
             return
