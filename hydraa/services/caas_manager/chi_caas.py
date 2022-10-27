@@ -15,6 +15,10 @@ from chi.ssh import Remote
 from openstack.cloud import exc
 from kubernetes import client, config
 
+
+true   = True
+false  = False
+null   = None
 CHI    = 'chameleon'
 ACTIVE = True
 
@@ -256,7 +260,8 @@ class ChiCaas:
             
             containers.append(pod_container)
         
-        pod_metadata  = client.V1ObjectMeta(name = "hydraa-pod-{0}".format(self.run_id))
+        pod_name      = "hydraa-pod-{0}".format(self.run_id)
+        pod_metadata  = client.V1ObjectMeta(name = pod_name)
 
         # check if we need to restart the task
         if ctask.restart:
@@ -274,7 +279,7 @@ class ChiCaas:
             sanitized_pod = client.ApiClient().sanitize_for_serialization(pod)
             json.dump(sanitized_pod, f)
 
-        return pod_file
+        return pod_file, pod_name
 
     
     def submit(self, ctasks):
@@ -289,6 +294,16 @@ class ChiCaas:
         pod = self._generate_pod(ctasks)
 
         self._submit_to_kuberentes(pod)
+
+        self.watch()
+        
+    
+    def watch(self):
+        try:
+            self.remote.run('sudo microk8s kubectl get pods --watch')
+        except KeyboardInterrupt:
+                return
+        
 
 
     def _submit_to_kuberentes(self, pods):
@@ -310,6 +325,41 @@ class ChiCaas:
         #FIXME: create a monitering of the pods/containers
         
         return True
+    
+
+    def get_pods_info(self):
+
+        cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
+        out = self.remote.run(cmd).stdout
+        response = eval(out)
+
+        if response:
+            # iterate on pods
+            for pod in response['items']:
+                # get the status of each pod
+                phase = pod['status']['phase']
+                print('pod has phase:{0}'.format(phase))
+                # iterate on containers
+                for container in pod['status']['containerStatuses']:
+                    c_name = container.get('name')
+                    for k, v in  container['state'].items():
+                        state = container.get('state', None)
+                        if state:
+                            for kk, vv in container['state'].items():
+                                start_time = os.popen("date -d {0} +%s".format(v.get('startedAt', 0.0)))
+                                stop_time  = os.popen("date -d {0} +%s".format(v.get('finishedAt', 0.0)))
+                                print('container {0} state:  {1} becasue its {2}'.format(c_name, kk, v.get('reason', None)))
+                                print('container {0} start:  {1}'.format(c_name, start_time.readline().split('\n')[0]))
+                                print('container {0} stop :  {1}'.format(c_name, stop_time.readline().split('\n')[0]))
+        else:
+            print('pods did not finish yet or failed')
+
+        return response
+
+
+    
+    def _get_kb_worker_nodes(self):
+         pass
 
 
     def _shutdown(self):
