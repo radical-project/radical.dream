@@ -70,6 +70,7 @@ class ChiCaas:
 
     def _lease_resources(self, lease_id=None, reservations=None, lease_node_type=None, duration=0, nodes=0):
         
+        res_lease = None
         if lease_id:
             print('using user provided lease')
             res_lease = lease.get_lease(lease_id)
@@ -110,7 +111,7 @@ class ChiCaas:
             print('resource {0} is active'.format(res_lease['id']))
 
         except keystoneauth1.exceptions.http.Unauthorized as e:
-            print("Unauthorized.\nDid set your project name and and site?")
+            print("Unauthorized.\nDid set your project name and site?")
         except blazarclient.exception.BlazarClientException as e:
             print(f"There is an issue making the reservation. Check the calendar to make sure a {lease_node_type} node is available.")
             print("https://chi.uc.chameleoncloud.org/project/leases/calendar/host/")
