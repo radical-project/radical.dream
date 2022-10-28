@@ -304,8 +304,7 @@ class ChiCaas:
         try:
             self.remote.run('sudo microk8s kubectl get pods {0} --watch'.format(pod_id))
         except KeyboardInterrupt:
-            break
-        return
+            return
 
 
 

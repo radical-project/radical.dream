@@ -7,16 +7,16 @@ import uuid
 import errno
 import atexit
 import openstack
+
+from pathlib import Path
 from openstack.cloud import exc
 
 from collections import OrderedDict
-
-
+ 
+HOME      = str(Path.home())
 JET2      = 'jetstream2'
 ACTIVE    = True
 WAIT_TIME = 2
-KEYPAIR_NAME = 'id_rsa'
-PRIVATE_KEYPAIR_FILE = 'jet_ssh'
 
 # --------------------------------------------------------------------------
 #
@@ -42,6 +42,7 @@ class Jet2Caas():
         self.network  = None
         self.security = None
         self.server   = None
+        self.ip       = None 
 
         self.run_id   = None
         self._task_id = 0      
@@ -63,7 +64,7 @@ class Jet2Caas():
     def run(self, VM, tasks, service=False, budget=0, time=0):
         if self.status:
             pass
-            #self.__cleanup()
+            self.__cleanup()
 
         self.vm          = VM
         self.status      = ACTIVE
@@ -74,19 +75,15 @@ class Jet2Caas():
 
         self.image    = self.create_or_find_image()
         self.flavor   = self.client.compute.find_flavor(self.launch_type)
-        self.security = self.create_or_find_security_group()
-        self.network  = self.create_or_find_network()
-        self.key_pair = self.create_or_find_keypair()
+        self.security = self.create_security_with_rule()
+        self.keypair  = self.create_or_find_keypair()
 
         self.server = self._start_server(self.image, self.flavor,
-                      self.key_pair, self.network, self.security)
-        
-        # wait for the server to become active
-        self.client.compute.wait_for_server(self.server)
+                                         self.keypair, self.security)
 
-        self.create_and_assign_floating_ip()
+        self.ip = self.create_and_assign_floating_ip()
 
-        print("ssh -i {key} root@{ip}".format(key=PRIVATE_KEYPAIR_FILE,ip=self.server.access_ipv4))
+        print("ssh -i {0} root@{1}".format(self.vm.KeyPair[0], self.ip))
 
         print('{0} is started'.format(self.server.id))
 
@@ -97,39 +94,87 @@ class Jet2Caas():
         return jet2_client
     
 
-    def create_or_find_security_group(self):
+    def create_security_with_rule(self):
 
-        security = None
-        if self.vm.SecurityGroups:
-            security = self.client.network.find_security_group(self.vm.SecurityGroups)
-            if security and security.id:
-                print('security-group {0} found'.format(security.name))
-                return security
+        # we are using the default security group for now
+        security_group_name = 'default'
+        security_rule_exist = 'ConflictException: 409'
 
-        security = self.client.network.create_security_group()
-        print('security-group {0} created'.format(security.name)) 
+        security = self.client.network.find_security_group(security_group_name)
+
+        # FIXME: check if these rules already exist, if so pass
+        self.vm.Rules = []
+        try:
+            if security.id:
+                print('creating ssh and ping rules')
+                ssh_rule = self.client.create_security_group_rule(security.id,
+                                                                  port_range_min=22,
+                                                                  port_range_max=22,
+                                                                  protocol='tcp',
+                                                                  direction='ingress',
+                                                                  remote_ip_prefix='0.0.0.0/0')
+                
+                ping_rule = self.client.create_security_group_rule(security.id,
+                                                                   port_range_max=None,
+                                                                   port_range_min=None,
+                                                                   protocol='icmp',
+                                                                   direction='ingress',
+                                                                   remote_ip_prefix='0.0.0.0/0',
+                                                                   ethertype='IPv4')
+                self.vm.Rules = [ssh_rule.id, ping_rule.id]
+
+        except Exception as e:
+            # FIXME: check rules exist by id not by exceptions type
+            if security_rule_exist in e.args:
+                print('security rules exist')
+                pass
+            else:
+                raise Exception(e)
+
         return security
+
 
 
     def create_or_find_keypair(self):
 
-        keypair = self.client.compute.find_keypair(self.vm.KeyPair)
+        keypair = None
+        if self.vm.KeyPair:
+            print('Checking user provided ssh keypair')
+            keypair = self.client.compute.find_keypair(self.vm.KeyPair)
 
         if not keypair:
             print("creating ssh key Pair")
+            key_name = 'id_rsa'
+            keypair  = self.client.create_keypair(name=key_name)
 
-            keypair = self.client.compute.create_keypair(name=self.vm.KeyPair)
+            # FIXME: move this to utils
+            work_dir_path    = '{0}/hydraa_sandbox_{1}'.format(HOME, self.run_id)
+            ssh_dir_path     = '{0}/.ssh'.format(work_dir_path)
+            #auth_k_dir_path  = '{0}/authorized_keys'.format(ssh_dir_path)
 
-            try:
-                os.mkdir('.')
-            except OSError as e:
-                if e.errno != errno.EEXIST:
-                    raise e
+            os.mkdir(work_dir_path, 0o777)
+            os.mkdir(ssh_dir_path, 0o700)
+            #os.mkdir(auth_k_dir_path, 0o644)
 
-            with open(PRIVATE_KEYPAIR_FILE, 'w') as f:
+            # download both private and public keys
+            keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
+            keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
+
+            # save pub/pri keys in .ssh
+            with open(keypair_pri, 'w') as f:
                 f.write("%s" % keypair.private_key)
 
-            os.chmod(PRIVATE_KEYPAIR_FILE, 0o400)
+            with open(keypair_pub, 'w') as f:
+                f.write("%s" % keypair.public_key)
+
+            self.vm.KeyPair = [keypair_pri, keypair_pub]
+
+            # modify the permission
+            os.chmod(keypair_pri, 0o600)
+            os.chmod(keypair_pub, 0o644)
+
+        if not keypair:
+            raise Exception('keypair creation failed')
 
         return keypair
     
@@ -155,8 +200,13 @@ class Jet2Caas():
                 print('network {0} found'.format(network.name))
                 return network
         
+        
+        network = self.client.network.find_network('auto_allocated_network')
+        return network
+        
         # if we could not find it, then let's create a network with
         # subnet
+        '''
         else:
             network_name = 'hydraa-newtwork-{0}'.format(self.run_id)
             subnet_name  = 'hydraa-subnet-{0}'.format(self.run_id)
@@ -171,46 +221,73 @@ class Jet2Caas():
                                               cidr='10.0.2.0/24',
                                               gateway_ip='10.0.2.1')
 
-            print(network)
             return network
+        '''
     
 
     def create_and_assign_floating_ip(self):
         
-        # create a public ip
-        floating_ip = self.client.create_floating_ip()
-        ports       = self.client.list_ports()
-        for p in ports:
-            if self.network.name == "public" or self.network.name == "auto_allocated_network":
-                avoid_this = self.network.id
-            if not p.network_id == avoid_this:
-                # get the first port and break
-                os.system('openstack floating ip set --port {0} {1}'.format(p.id, floating_ip.floating_ip_address))
-                break
-            else:
-                pass
+        ip = self.client.create_floating_ip()
+        # FIXME: some error about an ip from the floating ip list
+        # that can not be added.
+        try:
+            self.client.add_ip_list(self.server, [ip.floating_ip_address])
+        except exc.exceptions.ConflictException:
+            pass
+
+        return ip.floating_ip_address
 
 
-    def _start_server(self, image, flavor, key_pair, networks, security):
+
+    def _start_server(self, image, flavor, key_pair, security):
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
 
-        with open("user_data.file","a+") as f:
-            f.write('password: mypasswd\n')
-            f.write('chpasswd: { expire: False }\n')
-            f.write('ssh_pwauth: True\n')
+        #user_data = self._build_bootstrap()
 
-        server = self.client.compute.create_server(auto_ip=True,
-                                                   name=server_name,
-                                                   image_id=image.id,
-                                                   flavor_id=flavor.id,
-                                                   key_name=key_pair.name,
-                                                   networks=[{"uuid": networks.id}],
-                                                   user_data='user_data.file')
-        
         print('creating {0}'.format(server_name))
+        server = self.client.create_server(name=server_name,
+                                           image=image.id,
+                                           flavor=flavor.id,
+                                           key_name=key_pair.name)
+        
+        # Wait for a server to reach ACTIVE status.
+        self.client.wait_for_server(server)
+
+        if not security.name == 'default':
+            self.client.add_server_security_groups(server, [security.name])
+        
+        print('server is ACTIVE')
+        
         return server
     
+
+
+    def _build_bootstrap(self):
+
+        boostrap_path = 'user_data.txt'
+        bootstrap =  """
+        #cloud-config
+        users:
+        - default
+        - name: exouser
+            shell: /bin/bash
+            groups: sudo, admin
+            sudo: ['ALL=(ALL) NOPASSWD:ALL']{ssh-authorized-keys}
+        password: mypasswd
+        ssh_pwauth: true
+        chpasswd: {expire: False }
+        package_update: true
+        package_upgrade: {install-os-updates}
+        packages:
+        - python3-virtualenv
+        - git{write-files}        
+        """
+        with open(boostrap_path,"a+") as f:
+            f.write(bootstrap)
+
+        return boostrap_path
+
 
     # --------------------------------------------------------------------------
     #
@@ -237,33 +314,38 @@ class Jet2Caas():
 
     def _shutdown(self):
 
-        if not self.network and not self.server:
+        if not self.server:
             return
-
-        # delete the keypair
-        keypair = self.client.compute.find_keypair(KEYPAIR_NAME)
-
-        try:
-            os.remove(PRIVATE_KEYPAIR_FILE)
-        except OSError as e:
-            if e.errno != errno.ENOENT:
-                raise e
-
-        if keypair:
-            self.client.compute.delete_keypair(keypair)
         
+        if self.vm.KeyPair:
+            print('deleting ssh keys')
+            for k in self.vm.KeyPair:
+                try:
+                    os.remove(k)
+                except OSError as e:
+                    if e.errno != errno.ENOENT:
+                        raise e
+
+            if self.keypair.id:
+                print('deleting key-name from cloud storage')
+                self.client.delete_keypair(self.keypair.id)
+
         # delete all subnet
-        if not self.network.name == "auto_allocated_network":
-            for subnet in self.network.subnet_ids:
-                self.client.network.delete_subnet(subnet, ignore_missing=False)
+        if self.network:
+            if not self.network.name == "auto_allocated_network":
+                print('deleting subnets')
+                for subnet in self.network.subnet_ids:
+                    self.client.network.delete_subnet(subnet, ignore_missing=False)
         
         # deleting the server
         if self.server:
-            self.client.compute.delete_server(self.server)
+            print('deleting server')
+            self.client.delete_server(self.server)
 
         # delete the networks
         # FIXME: unassigne and delete the public IP
         if self.network:
+            print('deleting networks')
             if not self.network.name == "auto_allocated_network":
                 while True:
                     try:
@@ -272,19 +354,18 @@ class Jet2Caas():
                     except exc.exceptions.ConflictException:
                         time.sleep(0.1)
                 print('network is deleted')
-        
-        # deleting security groups
-        # FIXME: without try/except it will raise ConflictException 
-        # "Insufficient rights for removing default security group."
-        # FIXME: delete only security groups that we created
 
+        # FIXME: delete only security groups that we created
         if self.security:
+            print('deleting security groups')
             for sec in self.client.list_security_groups():
-                if not sec.name == "default":
+                if not self.security.name == 'default':
                     self.client.delete_security_group(self.security.id)
+            
+            if self.vm.Rules:
+                print('deleting security rules')
+                for rule in self.vm.Rules:
+                    self.client.delete_security_group_rule(rule)
         
         print('shutting down')
         self.__cleanup()
-
-        
-

@@ -115,7 +115,8 @@ class OpenStackVM:
         self.ImageId        = image_id
         self.SecurityGroups = input_kwargs.get('security_groups', '')
         self.Network        = input_kwargs.get('networks', '')
-        self.KeyPair        = input_kwargs.get('keypair', 'id_rsa')
+        self.KeyPair        = input_kwargs.get('keypair', [])
+        self.Rules          = input_kwargs.get('rules', [])
         self.Subnet         = input_kwargs.get('subnet', '')
         self.Port           = input_kwargs.get('port', None)
         self.input_kwargs   = input_kwargs
