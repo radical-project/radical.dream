@@ -97,15 +97,16 @@ class Jet2Caas():
     def create_security_with_rule(self):
 
         # we are using the default security group for now
-        security_group_name = 'default'
+        security_group_name = 'SSH and ICMP enabled'
         security_rule_exist = 'ConflictException: 409'
 
-        security = self.client.network.find_security_group(security_group_name)
+        security = self.client.get_security_group(security_group_name)
 
         # FIXME: check if these rules already exist, if so pass
         self.vm.Rules = []
         try:
             if security.id:
+                return security
                 print('creating ssh and ping rules')
                 ssh_rule = self.client.create_security_group_rule(security.id,
                                                                   port_range_min=22,
@@ -357,12 +358,14 @@ class Jet2Caas():
 
         # FIXME: delete only security groups that we created
         if self.security:
+            return
             print('deleting security groups')
             for sec in self.client.list_security_groups():
                 if not self.security.name == 'default':
                     self.client.delete_security_group(self.security.id)
             
             if self.vm.Rules:
+                return
                 print('deleting security rules')
                 for rule in self.vm.Rules:
                     self.client.delete_security_group_rule(rule)
