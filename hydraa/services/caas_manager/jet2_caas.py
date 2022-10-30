@@ -6,6 +6,7 @@ import time
 import uuid
 import errno
 import atexit
+import paramiko
 import openstack
 
 from pathlib import Path
@@ -43,6 +44,7 @@ class Jet2Caas():
         self.security = None
         self.server   = None
         self.ip       = None 
+        self.remote   = None
 
         self.run_id   = None
         self._task_id = 0      
@@ -51,9 +53,9 @@ class Jet2Caas():
         # cloud tasks info during the current run.
         self._tasks_book   = OrderedDict()
         self._family_ids   = OrderedDict()
-        self.launch_type  =  None
-        self._run_cost    = 0
-        self.runs_tree = OrderedDict()
+        self.launch_type   =  None
+        self._run_cost     = 0
+        self.runs_tree     = OrderedDict()
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
@@ -82,6 +84,8 @@ class Jet2Caas():
                                          self.keypair, self.security)
 
         self.ip = self.create_and_assign_floating_ip()
+
+        self.remote = Remote(self.vm.KeyPair, 'ubuntu', self.ip)
 
         print("ssh -i {0} root@{1}".format(self.vm.KeyPair[0], self.ip))
 
@@ -149,13 +153,11 @@ class Jet2Caas():
             keypair  = self.client.create_keypair(name=key_name)
 
             # FIXME: move this to utils
-            work_dir_path    = '{0}/hydraa_sandbox_{1}'.format(HOME, self.run_id)
+            work_dir_path    = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
             ssh_dir_path     = '{0}/.ssh'.format(work_dir_path)
-            #auth_k_dir_path  = '{0}/authorized_keys'.format(ssh_dir_path)
 
             os.mkdir(work_dir_path, 0o777)
             os.mkdir(ssh_dir_path, 0o700)
-            #os.mkdir(auth_k_dir_path, 0o644)
 
             # download both private and public keys
             keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
@@ -236,7 +238,12 @@ class Jet2Caas():
         except exc.exceptions.ConflictException:
             pass
 
-        return ip.floating_ip_address
+        assigned_ips = self.client.list_floating_ips()
+
+        for assigned_ip in assigned_ips:
+            if assigned_ip.status == 'ACTIVE':
+                attached_ip = assigned_ip.name
+                return attached_ip
 
 
 
@@ -261,33 +268,6 @@ class Jet2Caas():
         print('server is ACTIVE')
         
         return server
-    
-
-
-    def _build_bootstrap(self):
-
-        boostrap_path = 'user_data.txt'
-        bootstrap =  """
-        #cloud-config
-        users:
-        - default
-        - name: exouser
-            shell: /bin/bash
-            groups: sudo, admin
-            sudo: ['ALL=(ALL) NOPASSWD:ALL']{ssh-authorized-keys}
-        password: mypasswd
-        ssh_pwauth: true
-        chpasswd: {expire: False }
-        package_update: true
-        package_upgrade: {install-os-updates}
-        packages:
-        - python3-virtualenv
-        - git{write-files}        
-        """
-        with open(boostrap_path,"a+") as f:
-            f.write(bootstrap)
-
-        return boostrap_path
 
 
     # --------------------------------------------------------------------------
@@ -372,3 +352,41 @@ class Jet2Caas():
         
         print('shutting down')
         self.__cleanup()
+
+
+class Remote:
+    def __init__(self, vm_keys, user, fip):
+
+        self.ip   = fip        # public ip
+        self.user = user       # user name
+        self.key  = vm_keys[0] # path to the private key
+        self.conn = self.__connect()
+    
+
+    def __connect(self):
+        ssh  = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        pkey = paramiko.RSAKey.from_private_key_file(self.key)
+        conn =  ssh.connect(hostname=self.ip,username=self.user, port=22,
+                                                               pkey=pkey)
+        return conn
+
+
+    def run(self, cmd):
+
+        if isinstance(cmd, str):
+            stdin,stdout,stderr=self.conn.exec_command(cmd)
+            return stdin, stdout, stderr
+        else:
+            raise Exception('command must be an str')
+    
+
+    def put(self, file):
+        tunnel = paramiko.Transport((self.ip, self.port))
+        tunnel.connect(username=self.user, pkey=self.key)
+        sftp = paramiko.SFTPClient.from_transport(tunnel)
+
+        if os.path.isfile(file):
+            sftp.put(file, file)
+            sftp_client.close()
+            return True
