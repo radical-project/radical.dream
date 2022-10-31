@@ -390,16 +390,18 @@ class Remote:
         self.key  = vm_keys[0] # path to the private key
         self.conn = self.__connect()
         self.sftp = self.__sftp()
-    
+
 
     def __connect(self):
         ssh  = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.check_ssh_connection(self.ip)
-        ssh.connect(hostname=self.ip,username=self.user, port=22, key_filename=self.key)
+        ssh.connect(hostname=self.ip,username=self.user, port=22,
+         key_filename=self.key)
         
         return ssh
-    
+
+
     def __sftp(self):
         
         tunnel = paramiko.Transport((self.ip, 22))
@@ -422,14 +424,14 @@ class Remote:
                 return stdout.readline()
         else:
             raise Exception('command must be an str')
-    
+
 
     def put(self, file):
         if os.path.isfile(file):
             file_name = os.path.basename(file)
             self.sftp.put(file, file_name)
-            print('file {0} is uploaded'.format(file_name))
-    
+            return True
+
 
     def check_ssh_connection(self, ip):
         
@@ -446,6 +448,6 @@ class Remote:
                 time.sleep(10)
                 if time.perf_counter() - start_time >= timeout:
                     print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
-    
+
     def close(self):
         self.sftp.close()
