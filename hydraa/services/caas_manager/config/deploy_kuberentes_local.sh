@@ -36,4 +36,3 @@ if [  -n "$(uname -a | grep Ubuntu)" ]; then
 else
     echo "non ubuntu OS is not supported yet"
 fi
-

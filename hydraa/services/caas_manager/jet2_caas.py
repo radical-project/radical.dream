@@ -14,6 +14,7 @@ from pathlib import Path
 from openstack.cloud import exc
 
 from collections import OrderedDict
+from hydraa.services.caas_manager.utils import kubernetes
  
 HOME      = str(Path.home())
 JET2      = 'jetstream2'
@@ -46,6 +47,7 @@ class Jet2Caas():
         self.server   = None
         self.ip       = None 
         self.remote   = None
+        self.cluster  = None
 
         self.run_id   = None
         self._task_id = 0      
@@ -82,15 +84,20 @@ class Jet2Caas():
         self.keypair  = self.create_or_find_keypair()
 
         self.server = self._start_server(self.image, self.flavor,
-                                         self.keypair, self.security)
+                                     self.keypair, self.security)
 
         self.ip = self.create_and_assign_floating_ip()
 
         self.remote = Remote(self.vm.KeyPair, 'ubuntu', self.ip)
-
         print("ssh -i {0} root@{1}".format(self.vm.KeyPair[0], self.ip))
 
-        print('{0} is started'.format(self.server.id))
+        self.cluster = kubernetes.Cluster(self.run_id, self.remote)
+
+        self.cluster.bootstrap_local()
+
+        self.submit(tasks)
+
+        
 
     
     def _create_client(self, cred):
@@ -273,6 +280,22 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
+
+    def submit(self, ctasks):
+        for ctask in ctasks:
+            ctask.run_id      = self.run_id
+            ctask.id          = self._task_id
+            ctask.name        = 'ctask-{0}'.format(self._task_id)
+            ctask.provider    = JET2
+            ctask.launch_type = self.launch_type
+            self._task_id +=1
+
+        pod, pod_id = self.cluster.generate_pod(ctasks)
+
+        self.cluster.submit_pod(pod)
+
+        self.cluster.watch(pod_id)
+
     def __cleanup(self):
 
         caller = sys._getframe().f_back.f_code.co_name
@@ -324,6 +347,10 @@ class Jet2Caas():
             print('deleting server')
             self.client.delete_server(self.server.id)
 
+            if self.ip:
+                print('deleting allocated ip')
+                self.client.delete_floating_ip(self.ip)
+
         # delete the networks
         # FIXME: unassigne and delete the public IP
         if self.network:
@@ -362,6 +389,7 @@ class Remote:
         self.user = user       # user name
         self.key  = vm_keys[0] # path to the private key
         self.conn = self.__connect()
+        self.sftp = self.__sftp()
     
 
     def __connect(self):
@@ -369,7 +397,17 @@ class Remote:
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.check_ssh_connection(self.ip)
         ssh.connect(hostname=self.ip,username=self.user, port=22, key_filename=self.key)
+        
         return ssh
+    
+    def __sftp(self):
+        
+        tunnel = paramiko.Transport((self.ip, 22))
+        pkey = paramiko.RSAKey.from_private_key_file(self.key)
+        tunnel.connect(username=self.user, pkey=pkey)
+        sftp = paramiko.SFTPClient.from_transport(tunnel)
+
+        return sftp
 
 
     def run(self, cmd):
@@ -387,16 +425,10 @@ class Remote:
     
 
     def put(self, file):
-        tunnel = paramiko.Transport((self.ip, 22))
-        pkey = paramiko.RSAKey.from_private_key_file(self.key)
-        tunnel.connect(username=self.user, pkey=pkey)
-        sftp = paramiko.SFTPClient.from_transport(tunnel)
-
         if os.path.isfile(file):
-            sftp.put(file, file)
-            sftp.close()
-            print('file {0} is uploaded'.format(file))
-            return True
+            file_name = os.path.basename(file)
+            self.sftp.put(file, file_name)
+            print('file {0} is uploaded'.format(file_name))
     
 
     def check_ssh_connection(self, ip):
@@ -414,3 +446,6 @@ class Remote:
                 time.sleep(10)
                 if time.perf_counter() - start_time >= timeout:
                     print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
+    
+    def close(self):
+        self.sftp.close()

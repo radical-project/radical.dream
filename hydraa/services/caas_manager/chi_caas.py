@@ -229,7 +229,7 @@ class ChiCaas:
         """
         with self.remote as conn:
             print('booting K8s cluster on the remote machine')
-            loc = "HYDRAA/hydraa/services/caas_manager/config/chi/deploy_kuberentes_local.sh"
+            loc = "HYDRAA/hydraa/services/caas_manager/config/deploy_kuberentes_local.sh"
             cwd = os.getcwd()
             BOOTSTRAP_PATH = '{0}/{1}'.format(cwd, loc)
             conn.put(BOOTSTRAP_PATH)
