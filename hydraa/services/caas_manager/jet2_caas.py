@@ -6,6 +6,7 @@ import time
 import uuid
 import errno
 import atexit
+import socket
 import paramiko
 import openstack
 
@@ -321,7 +322,7 @@ class Jet2Caas():
         # deleting the server
         if self.server:
             print('deleting server')
-            self.client.delete_server(self.server)
+            self.client.delete_server(self.server.id)
 
         # delete the networks
         # FIXME: unassigne and delete the public IP
@@ -366,27 +367,50 @@ class Remote:
     def __connect(self):
         ssh  = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        pkey = paramiko.RSAKey.from_private_key_file(self.key)
-        conn =  ssh.connect(hostname=self.ip,username=self.user, port=22,
-                                                               pkey=pkey)
-        return conn
+        self.check_ssh_connection(self.ip)
+        ssh.connect(hostname=self.ip,username=self.user, port=22, key_filename=self.key)
+        return ssh
 
 
     def run(self, cmd):
 
         if isinstance(cmd, str):
             stdin,stdout,stderr=self.conn.exec_command(cmd)
-            return stdin, stdout, stderr
+            if stderr:
+                print(stderr.readline())
+            
+            if stdout:
+                print(stdout.readline())
+                return stdout.readline()
         else:
             raise Exception('command must be an str')
     
 
     def put(self, file):
-        tunnel = paramiko.Transport((self.ip, self.port))
-        tunnel.connect(username=self.user, pkey=self.key)
+        tunnel = paramiko.Transport((self.ip, 22))
+        pkey = paramiko.RSAKey.from_private_key_file(self.key)
+        tunnel.connect(username=self.user, pkey=pkey)
         sftp = paramiko.SFTPClient.from_transport(tunnel)
 
         if os.path.isfile(file):
             sftp.put(file, file)
-            sftp_client.close()
+            sftp.close()
+            print('file {0} is uploaded'.format(file))
             return True
+    
+
+    def check_ssh_connection(self, ip):
+        
+        print(f"Waiting for SSH connectivity on {ip} ...")
+        timeout = 60*2
+        start_time = time.perf_counter() 
+        # Repeatedly try to connect via SSH.
+        while True:
+            try:
+                with socket.create_connection((ip, 22), timeout=timeout):
+                    print("Connection successful")
+                    break
+            except OSError as ex:
+                time.sleep(10)
+                if time.perf_counter() - start_time >= timeout:
+                    print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
