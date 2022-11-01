@@ -1,5 +1,5 @@
-
 import os
+import time
 import json
 from pathlib import Path
 from kubernetes import client, config
@@ -20,11 +20,18 @@ class Cluster:
         print('booting K8s cluster on the remote machine')
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
         boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
-        print(boostrapper)
         self.remote.put(boostrapper)
         self.remote.run("chmod +x deploy_kuberentes_local.sh")
         self.remote.run("./deploy_kuberentes_local.sh")
-        print('booting successfull')
+        while True:
+            stream = self.remote.run('sudo microk8s status --wait-ready')
+            # check if the cluster is ready to submit the pod
+            if "microk8s is running" in stream.stdout:
+                print('booting Kuberentes cluster successful')
+                break
+            else:
+                print('waiting for Kuberentes cluster to be running')
+                time.sleep(1)
 
 
     def watch(self, pod_id):
@@ -97,7 +104,38 @@ class Cluster:
         #FIXME: create a monitering of the pods/containers
         
         return True
-    
+
+
+    def get_pod_status(self, pod_id):
+
+        #FIXME: get the ifno of a specifc pod by allowing 
+        # this function to get pod_id
+        cmd = 'sudo microk8s kubectl get pod {0} --field-selector=status.phase=Succeeded -o json'.format(pod_id)
+        out = self.remote.run(cmd).stdout
+        response = eval(out)
+
+        # FIXME: generate profiles as pd dataframe
+        if response:
+            # iterate on pods
+            for pod in response['items']:
+                # get the status of each pod
+                phase = pod['status']['phase']
+                print('pod has phase:{0}'.format(phase))
+                # iterate on containers
+                for container in pod['status']['containerStatuses']:
+                    c_name = container.get('name')
+                    for k, v in  container['state'].items():
+                        state = container.get('state', None)
+                        if state:
+                            for kk, vv in container['state'].items():
+                                start_time = os.popen("date -d {0} +%s".format(v.get('startedAt', 0.0)))
+                                stop_time  = os.popen("date -d {0} +%s".format(v.get('finishedAt', 0.0)))
+                                print('container {0} state:  {1} becasue its {2}'.format(c_name, kk, v.get('reason', None)))
+                                print('container {0} start:  {1}'.format(c_name, start_time.readline().split('\n')[0]))
+                                print('container {0} stop :  {1}'.format(c_name, stop_time.readline().split('\n')[0]))
+        else:
+            print('pods did not finish yet or failed')
+
 
     
     def _get_kb_worker_nodes(self):

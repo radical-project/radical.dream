@@ -6,15 +6,15 @@ import time
 import uuid
 import errno
 import atexit
-import socket
-import paramiko
 import openstack
 
 from pathlib import Path
 from openstack.cloud import exc
 
 from collections import OrderedDict
+from hydraa.services.caas_manager.utils import ssh
 from hydraa.services.caas_manager.utils import kubernetes
+
  
 HOME      = str(Path.home())
 JET2      = 'jetstream2'
@@ -88,22 +88,25 @@ class Jet2Caas():
 
         self.ip = self.create_and_assign_floating_ip()
 
-        self.remote = Remote(self.vm.KeyPair, 'ubuntu', self.ip)
-        print("ssh -i {0} root@{1}".format(self.vm.KeyPair[0], self.ip))
+        print("server created with public ip: {0}".format(self.ip))
 
+        #FIXME: VM should have a username instead of hard coding ubuntu
+        self.remote  = ssh.Remote(self.vm.KeyPair, 'ubuntu', self.ip)
         self.cluster = kubernetes.Cluster(self.run_id, self.remote)
-
         self.cluster.bootstrap_local()
 
         self.submit(tasks)
 
-        
 
     
     def _create_client(self, cred):
         jet2_client = openstack.connect(**cred)
         
         return jet2_client
+    
+
+    def _get_run_status(self, pod_id):
+        self.cluster.get_pod_status(pod_id)
     
 
     def create_security_with_rule(self):
@@ -290,10 +293,13 @@ class Jet2Caas():
             ctask.launch_type = self.launch_type
             self._task_id +=1
 
+        # generate a json file with the pod setup
         pod, pod_id = self.cluster.generate_pod(ctasks)
 
+        # submit to kubernets cluster
         self.cluster.submit_pod(pod)
 
+        # watch the pod in the cluster
         self.cluster.watch(pod_id)
 
     def __cleanup(self):
@@ -381,73 +387,3 @@ class Jet2Caas():
         print('shutting down')
         self.__cleanup()
 
-
-class Remote:
-    def __init__(self, vm_keys, user, fip):
-
-        self.ip   = fip        # public ip
-        self.user = user       # user name
-        self.key  = vm_keys[0] # path to the private key
-        self.conn = self.__connect()
-        self.sftp = self.__sftp()
-
-
-    def __connect(self):
-        ssh  = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.check_ssh_connection(self.ip)
-        ssh.connect(hostname=self.ip,username=self.user, port=22,
-         key_filename=self.key)
-        
-        return ssh
-
-
-    def __sftp(self):
-        
-        tunnel = paramiko.Transport((self.ip, 22))
-        pkey = paramiko.RSAKey.from_private_key_file(self.key)
-        tunnel.connect(username=self.user, pkey=pkey)
-        sftp = paramiko.SFTPClient.from_transport(tunnel)
-
-        return sftp
-
-
-    def run(self, cmd):
-
-        if isinstance(cmd, str):
-            stdin,stdout,stderr=self.conn.exec_command(cmd)
-            if stderr:
-                print(stderr.readline())
-            
-            if stdout:
-                print(stdout.readline())
-                return stdout.readline()
-        else:
-            raise Exception('command must be an str')
-
-
-    def put(self, file):
-        if os.path.isfile(file):
-            file_name = os.path.basename(file)
-            self.sftp.put(file, file_name)
-            return True
-
-
-    def check_ssh_connection(self, ip):
-        
-        print(f"Waiting for SSH connectivity on {ip} ...")
-        timeout = 60*2
-        start_time = time.perf_counter() 
-        # Repeatedly try to connect via SSH.
-        while True:
-            try:
-                with socket.create_connection((ip, 22), timeout=timeout):
-                    print("Connection successful")
-                    break
-            except OSError as ex:
-                time.sleep(10)
-                if time.perf_counter() - start_time >= timeout:
-                    print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
-
-    def close(self):
-        self.sftp.close()
