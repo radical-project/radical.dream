@@ -3,7 +3,9 @@ import chi
 import json
 import time
 import uuid
+import shutil
 import socket
+import atexit
 import chi.lease
 import chi.server
 import keystoneauth1, blazarclient
@@ -11,9 +13,12 @@ import keystoneauth1, blazarclient
 from chi import ssh
 from chi import lease
 from chi import server
-from pathlib import Path
 from chi.ssh import Remote
+
+from pathlib import Path
 from openstack.cloud import exc
+
+from collections import OrderedDict
 from hydraa.services.caas_manager.utils import kubernetes
 
 
@@ -65,7 +70,7 @@ class ChiCaas:
         chi.set('project_domain_id', 'e6de2391926f42c6be4ebaa3d9ef3974')
         chi.use_site('CHI@TACC')
 
-       atexit.register(self._shutdown)
+        atexit.register(self._shutdown)
 
 
 
@@ -186,7 +191,7 @@ class ChiCaas:
         print('waiting for the instance to become ACTIVE')
         server.wait_for_active(instance.id)
 
-        server.add_security_group(security)
+        instance.add_security_group(security)
 
         print('server is ACTIVE')
 
