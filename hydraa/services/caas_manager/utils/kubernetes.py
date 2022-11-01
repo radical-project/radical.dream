@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 from kubernetes import client, config
 
+true   = True
+false  = False
+null   = None
+
 class Cluster:
 
     def __init__(self, run_id, remote):

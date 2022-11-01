@@ -83,8 +83,8 @@ class Jet2Caas():
         self.security = self.create_security_with_rule()
         self.keypair  = self.create_or_find_keypair()
 
-        self.server = self._start_server(self.image, self.flavor,
-                                     self.keypair, self.security)
+        self.server = self._create_server(self.image, self.flavor,
+                                      self.keypair, self.security)
 
         self.ip = self.create_and_assign_floating_ip()
 
@@ -98,7 +98,7 @@ class Jet2Caas():
         self.submit(tasks)
 
 
-    
+
     def _create_client(self, cred):
         jet2_client = openstack.connect(**cred)
         
@@ -258,7 +258,7 @@ class Jet2Caas():
 
 
 
-    def _start_server(self, image, flavor, key_pair, security):
+    def _create_server(self, image, flavor, key_pair, security):
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
 

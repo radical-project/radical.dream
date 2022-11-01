@@ -11,18 +11,18 @@ import keystoneauth1, blazarclient
 from chi import ssh
 from chi import lease
 from chi import server
+from pathlib import Path
 from chi.ssh import Remote
 from openstack.cloud import exc
-from kubernetes import client, config
+from hydraa.services.caas_manager.utils import kubernetes
 
 
-true   = True
-false  = False
-null   = None
+HOME   = str(Path.home())
 CHI    = 'chameleon'
 ACTIVE = True
-BOOTSTRAP_PATH = None
 
+# --------------------------------------------------------------------------
+#
 class ChiCaas:
     """Represents a collection of clusters (resources) with a collection of
        services, tasks and instances.:
@@ -41,13 +41,31 @@ class ChiCaas:
         self.status = False
         self.DryRun = DryRun
 
+        self.network  = None
+        self.security = None
+        self.server   = None
+        self.ip       = None 
+        self.remote   = None
+        self.cluster  = None
+
         self.run_id   = None
         self._task_id = 0
+    
+
+        self._tasks_book  = OrderedDict()
+        self._family_ids  = OrderedDict()
         self.launch_type  = None
+        self._run_cost    = 0
+        self.runs_tree    = OrderedDict()
+
+        # wait or do not wait for the tasks to finish 
+        self.asynchronous = asynchronous
 
         chi.set('project_name', 'CHI-221047')
         chi.set('project_domain_id', 'e6de2391926f42c6be4ebaa3d9ef3974')
         chi.use_site('CHI@TACC')
+
+       atexit.register(self._shutdown)
 
 
 
@@ -66,9 +84,14 @@ class ChiCaas:
         else:
             self.lease  = self._lease_resources(lease_id=str(user_in))
             
-        self.server = self._create_server(self.lease)
-        self.ip     = self._create_and_assign_floating_ip(self.server)
-        self.remote = self.open_remote_connection(self.ip)
+        self.security = self.create_security_with_rule()
+        self.server   = self._create_server(self.lease, self.security)
+        self.ip       = self._create_and_assign_floating_ip(self.server)
+        self.remote   = self.open_remote_connection(self.ip)
+
+        self.cluster = kubernetes.Cluster(self.run_id, self.remote)
+        self.cluster.bootstrap_local()
+
         self.submit(tasks)
 
 
@@ -129,8 +152,19 @@ class ChiCaas:
         return res_lease
 
 
+    def create_security_with_rule(self):
 
-    def _create_server(self, user_lease):
+            # we are using the default security group for now
+            security_group_name = 'SSH and ICMP enabled'
+
+            # FIXME: check if these rules already exist, if so pass
+            self.vm.Rules = []
+
+            return security_group_name
+
+
+
+    def _create_server(self, user_lease, security):
 
         if self.vm.VmId:
             print('using user provided instance')
@@ -145,21 +179,38 @@ class ChiCaas:
         instance    = server.create_server(server_name, reservation_id=lease_id,
                                             image_name=self.vm.ImageId, count=1,
                                             key_name=key)
-        
+
 
         # It will take approximately 10 minutes for the bare metal
         #  node to be successfully provisioned.
         print('waiting for the instance to become ACTIVE')
         server.wait_for_active(instance.id)
-        print('instance {0} is active'.format(instance.id))
+
+        server.add_security_group(security)
+
+        print('server is ACTIVE')
 
         return instance
     
 
     def _create_keypair(self):
-        key_name = 'hydraa-keypair-{0}'.format(self.run_id)
+        keypair = None
+        print("creating ssh key Pair")
+        key_name = 'id_rsa'
         os.system('openstack keypair create {0}>{1}'.format(key_name, key_name))
-        os.system('chmod 600 {0}'.format(key_name))
+        # FIXME: move this to utils
+        work_dir_path    = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
+        ssh_dir_path     = '{0}/.ssh'.format(work_dir_path)
+
+        os.mkdir(work_dir_path, 0o777)
+        os.mkdir(ssh_dir_path, 0o700)
+        os.chmod(key_name, 0o600)
+
+        keypair_pri_path = "{0}/{1}".format(ssh_dir_path, key_name)
+
+        os.replace(key_name, keypair_pri_path)
+
+        self.vm.KeyPair = [keypair_pri_path, None]
 
         return key_name
 
@@ -186,7 +237,7 @@ class ChiCaas:
 
     def open_remote_connection(self, ip):
         try:
-            self.check_ssh_connection(ip)
+            self.cluster.check_ssh_connection(ip)
             remote = Remote(ip)
             return remote
         except Exception as e:
@@ -204,84 +255,6 @@ class ChiCaas:
             except KeyboardInterrupt:
                 return
 
-
-    def check_ssh_connection(self, ip):
-        
-        print(f"Waiting for SSH connectivity on {ip} ...")
-        timeout = 60*2
-        start_time = time.perf_counter() 
-        # Repeatedly try to connect via SSH.
-        while True:
-            try:
-                with socket.create_connection((ip, 22), timeout=timeout):
-                    print("Connection successful")
-                    break
-            except OSError as ex:
-                time.sleep(10)
-                if time.perf_counter() - start_time >= timeout:
-                    print(f"After {timeout} seconds, could not connect via SSH. Please try again.")
-    
-
-    def _bootstrap_local_kb_cluster(self):
-
-        """
-        deploy kubernetes cluster K8s on chi
-        """
-        with self.remote as conn:
-            print('booting K8s cluster on the remote machine')
-            loc = "HYDRAA/hydraa/services/caas_manager/config/deploy_kuberentes_local.sh"
-            cwd = os.getcwd()
-            BOOTSTRAP_PATH = '{0}/{1}'.format(cwd, loc)
-            conn.put(BOOTSTRAP_PATH)
-            conn.run("chmod +x deploy_kuberentes_local.sh")
-            conn.run("./deploy_kuberentes_local.sh")
-
-            print('booting successfull')
-
-    
-    def _generate_pod(self, ctasks):
-
-        pod_file  = 'hydraa_pod.json'
-        containers = []
-        for ctask in ctasks:
-            envs = []
-            if ctask.env_var:
-                for env in env_vars:
-                    pod_env  = client.V1EnvVar(name = env[0], value = env[1])
-                    envs.append(pod_env)
-
-            pod_cpu = "{0}m".format(ctask.vcpus * 1000)
-            pod_mem = "{0}Mi".format(ctask.memory)
-
-            resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                      limits={"cpu": pod_cpu, "memory": pod_mem})
-
-            pod_container = client.V1Container(name = ctask.name, image = ctask.image,
-                        resources = resources, command = ctask.cmd, env = envs)
-            
-            containers.append(pod_container)
-        
-        pod_name      = "hydraa-pod-{0}".format(self.run_id)
-        pod_metadata  = client.V1ObjectMeta(name = pod_name)
-
-        # check if we need to restart the task
-        if ctask.restart:
-            restart_policy = ctask.restart
-        else:
-            restart_policy = 'Never'
-
-        pod_spec      = client.V1PodSpec(containers=containers,
-                                 restart_policy=restart_policy)
-
-        pod           = client.V1Pod(api_version="v1", kind="Pod",
-                             metadata=pod_metadata, spec=pod_spec)
-
-        with open(pod_file, 'w') as f:
-            sanitized_pod = client.ApiClient().sanitize_for_serialization(pod)
-            json.dump(sanitized_pod, f)
-
-        return pod_file, pod_name
-
     
     def submit(self, ctasks):
         for ctask in ctasks:
@@ -292,45 +265,14 @@ class ChiCaas:
             ctask.launch_type = self.launch_type
             self._task_id +=1
 
-        pod, pod_id = self._generate_pod(ctasks)
+        # generate a json file with the pod setup
+        pod, pod_id = self.cluster.generate_pod(ctasks)
 
-        self._submit_to_kuberentes(pod)
+        # submit to kubernets cluster
+        self.cluster.submit_pod(pod)
 
-        self.watch(pod_id)
-        
-    
-    def watch(self, pod_id):
-        
-        try:
-            self.remote.run('sudo microk8s kubectl get pods {0} --watch'.format(pod_id))
-        except KeyboardInterrupt:
-            return
-
-
-
-    def _submit_to_kuberentes(self, pods):
-
-        # upload the pods file before bootstrapping
-        # FIXME: we get socket closed if we did it
-        # in the reverse order, because we modify 
-        # the firewall of the node
-
-        # upload the pods.json
-        self.remote.put(pods)
-        
-        # bootup the cluster K8s
-        self._bootstrap_local_kb_cluster()
-
-        # deploy the pods.json on the cluster
-        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pods))
-
-        #FIXME: create a monitering of the pods/containers
-        
-        return True
-
-
-    def _get_kb_worker_nodes(self):
-         pass
+        # watch the pod in the cluster
+        self.cluster.watch(pod_id)
 
 
     def _shutdown(self):
