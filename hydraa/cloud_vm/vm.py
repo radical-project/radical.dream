@@ -107,11 +107,12 @@ class AzureVM:
 
 
 class OpenStackVM:
-    def __init__(self, flavor_id: str, image_id: str,  **input_kwargs):
+    def __init__(self, launch_type, flavor_id: str, image_id: str,  **input_kwargs):
 
         self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
         self.VmId           = None
-        self.LaunchType     = flavor_id
+        self.LaunchType     = launch_type
+        self.FlavorId       = flavor_id
         self.ImageId        = image_id
         self.SecurityGroups = input_kwargs.get('security_groups', '')
         self.Network        = input_kwargs.get('networks', '')
@@ -125,7 +126,8 @@ class OpenStackVM:
     def __call__(self):
 
         self.required_kwargs = {}
-        self.required_kwargs['image_id']  = self.ImageId
-        self.required_kwargs['flavor_id'] = self.LaunchType
+        self.required_kwargs['image_id']     = self.ImageId
+        self.required_kwargs['flavor_id']    = self.FlavorId
+        self.required_kwargs['launch_type']  = self.LaunchType
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs

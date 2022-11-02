@@ -79,7 +79,7 @@ class Jet2Caas():
         print("starting run {0}".format(self.run_id))
 
         self.image    = self.create_or_find_image()
-        self.flavor   = self.client.compute.find_flavor(self.launch_type)
+        self.flavor   = self.client.compute.find_flavor(VM.FlavorId)
         self.security = self.create_security_with_rule()
         self.keypair  = self.create_or_find_keypair()
 
@@ -261,8 +261,6 @@ class Jet2Caas():
     def _create_server(self, image, flavor, key_pair, security):
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
-
-        #user_data = self._build_bootstrap()
 
         print('creating {0}'.format(server_name))
         server = self.client.create_server(name=server_name,
