@@ -7,11 +7,11 @@ import errno
 import shutil
 import socket
 import atexit
+import openstack
 import chi.lease
 import chi.server
 import keystoneauth1, blazarclient
 
-from chi import ssh
 from chi import lease
 from chi import server
 from chi.ssh import Remote
@@ -48,6 +48,8 @@ class ChiCaas:
         self.status = False
         self.DryRun = DryRun
 
+        self.client   = self._create_client(cred)
+        self.lease    = None
         self.network  = None
         self.security = None
         self.server   = None
@@ -68,9 +70,6 @@ class ChiCaas:
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
-
-        chi.set('project_name', 'CHI-221047')
-        chi.set('project_domain_id', 'e6de2391926f42c6be4ebaa3d9ef3974')
         atexit.register(self._shutdown)
 
 
@@ -82,16 +81,19 @@ class ChiCaas:
         if not self.launch_type:
             raise Exception('CHI requires to specify KVM or Baremetal')
 
-        print("starting run {0}".format(self.run_id))
         self.run_id      = str(uuid.uuid4())
         self.status      = ACTIVE
-
+        print("starting run {0}".format(self.run_id))
         
+        self.image   = self.create_or_find_image()
+        self.flavor  = self.client.compute.find_flavor(VM.FlavorId)
         self.keypair = self.create_or_find_keypair()
+        self.security = self._create_security_with_rule()
+
         if self.launch_type == 'KVM':
             chi.use_site('KVM@TACC')
-            self.server   = self._create_server(self.keypair)
-            self.security = self._create_security_with_rule(self.server)
+            self.server   = self._create_server(self.image, self.flavor, self.keypair,
+                                                                        self.security)
 
         elif self.launch_type == 'Baremetal':
             chi.use_site('CHI@TACC')
@@ -102,13 +104,12 @@ class ChiCaas:
 
             if user_in == 'no' or user_in == 'No':
                 self.lease  = self._lease_resources()
-
             else:
                 self.lease  = self._lease_resources(lease_id=str(user_in))
-            self.security = self._create_security_with_rule()
-            self.server   = self._create_server(self.keypair, self.lease, self.security)
+            self.server   = self._create_server(self.image, self.flavor, self.keypair,
+                                                            self.lease, self.security)
 
-        self.ip      = self._create_and_assign_floating_ip(self.server)
+        self.ip      = self.create_and_assign_floating_ip()
         self.remote  = ssh.Remote(self.vm.KeyPair, 'cc', self.ip)
         self.cluster = kubernetes.Cluster(self.run_id, self.remote)
         
@@ -116,6 +117,19 @@ class ChiCaas:
 
         self.submit(tasks)
 
+
+    def _create_client(self, cred):
+        """
+        1-user must create an application credentials for each site here:
+        https://auth.chameleoncloud.org/auth/realms/chameleon/account
+        
+        2- The user must download the cred.sc file
+        and source it: source ~/cred.sc
+        """
+        jet2_client = openstack.connect(**cred)
+        
+        return jet2_client
+    
 
     def _lease_resources(self, lease_id=None, reservations=None, lease_node_type=None,
                                                                  duration=0, nodes=0):
@@ -180,18 +194,18 @@ class ChiCaas:
             security_group_name = 'default'
 
             if self.launch_type == 'KVM':
-                ssh_group = 'Allow SSH'
-                self.vm.Rules = [security_group_name, ssh_group]
-                return ssh_group
+                security = self.client.get_security_group('Allow SSH')
+                self.vm.Rules = [security_group_name, security.name]
+                return security
             
             if self.launch_type == 'Baremetal':
-                # FIXME: check if these rules already exist, if so pass
-                self.vm.Rules = [security_group_name]
-                return security_group_name
+                security = self.client.get_security_group(security_group_name)
+                self.vm.Rules = [security.name]
+                return security
 
 
 
-    def _create_server(self, key_pair, user_lease=None, security=None):
+    def _create_server(self, image, flavor, keypair, security, user_lease=None):
 
         if self.vm.VmId:
             # we assume that the instance has a keypair
@@ -201,15 +215,16 @@ class ChiCaas:
 
         server_name = 'hydraa-chi-{0}'.format(self.run_id)
         instance    = None
+        print('creating {0}'.format(server_name))
         if self.launch_type == 'KVM':
             import chi.server
 
-            instance = chi.server.create_server(server_name, 
-                                            image_name=self.vm.ImageId, 
-                                            flavor_name=self.vm.FlavorId,
-                                            key_name=key_pair.name)
+            instance = self.client.create_server(name=server_name, 
+                                                 image=image, 
+                                                 flavor=flavor,
+                                                 key_name=keypair.name)
 
-            chi.server.wait_for_active(instance.id)
+            self.client.wait_for_server(instance)
 
         if self.launch_type == 'Baremetal':
             # Launch your compute node instances
@@ -217,9 +232,10 @@ class ChiCaas:
                 raise Exception('baremetal requires both active lease and security group')
 
             lease_id    = lease.get_node_reservation(user_lease["id"])
-            instance    = server.create_server(server_name, reservation_id=lease_id,
-                                                image_name=self.vm.ImageId, count=1,
-                                                key_name=key_pair.name)
+            instance    = server.create_server(server_name, 
+                                               reservation_id=lease_id,
+                                               image_name=image, count=1,
+                                               key_name=keypair.name)
 
 
             # It will take approximately 10 minutes for the bare metal
@@ -228,7 +244,7 @@ class ChiCaas:
             server.wait_for_active(instance.id)
 
         if not security == 'default':
-            instance.add_security_group(security)
+            self.client.add_server_security_groups(instance, [security.name])
 
         print('instance is ACTIVE')
         return instance
@@ -239,12 +255,12 @@ class ChiCaas:
         keypair = None
         if self.vm.KeyPair:
             print('Checking user provided ssh keypair')
-            keypair = chi.nova().keypairs.get(self.vm.KeyPair)
+            keypair = self.client.compute.find_keypair(self.vm.KeyPair)
         
         if not keypair: 
             print("creating ssh key Pair")
             key_name = 'id_rsa'
-            keypair  = chi.nova().keypairs.create(key_name)
+            keypair  = self.client.create_keypair(name=key_name)
 
             # FIXME: move this to utils
             work_dir_path    = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
@@ -276,14 +292,24 @@ class ChiCaas:
         return keypair
 
 
+    def create_or_find_image(self):
+        
+        image = self.client.compute.find_image(self.vm.ImageId)
 
-    def _create_and_assign_floating_ip(self, server):
+        if not image.id:
+            raise NotImplementedError
+
+        return image
+
+
+
+    def create_and_assign_floating_ip(self):
 
         try:
             # the user provided a running instance
             # so let's extract the IP from it
             if self.vm.VmId:
-                addresses = server.addresses.get('sharednet1', None)
+                addresses = self.server.addresses.get('sharednet1', None)
                 if addresses:
                     for address in addresses:
                         ip_type = address.get('OS-EXT-IPS:type')
@@ -292,19 +318,22 @@ class ChiCaas:
                             return ip
             # let's create a public ip
             else:
-                ip = chi.server.associate_floating_ip(server.id)
-                return ip
+                
+                # FIXME: some error about an ip from the floating ip list
+                # that can not be added.
+                try:
+                    ip = self.client.create_floating_ip()
+                    self.client.add_ip_list(self.server, [ip.floating_ip_address])
+                except exc.exceptions.ConflictException:
+                    pass
+
+                assigned_ips = self.client.list_floating_ips()
+                for assigned_ip in assigned_ips:
+                    if assigned_ip.status == 'ACTIVE':
+                        attached_ip = assigned_ip.name
+                        return attached_ip
 
         except exc.exceptions.BadRequestException as e:
-            raise Exception(e)
-
-
-    def open_remote_connection(self, ip):
-        try:
-            self.cluster.check_ssh_connection()
-            remote = Remote(ip)
-            return remote
-        except Exception as e:
             raise Exception(e)
 
 
@@ -355,23 +384,24 @@ class ChiCaas:
 
             if self.keypair.id:
                 print('deleting key-name from cloud storage')
-                chi.nova().keypairs.delete(self.keypair.id)
+                self.client.delete_keypair(self.keypair.id)
 
         try:
-            print('deleteing instance {0}'.format(self.server.id))
-            server.delete(self.server.id)
-            if self.lease:
-                msg = "would you like to delete the lease? yes/no:"
-                user_in = input(msg)
-                if user_in == 'Yes' or user_in == 'yes':
-                    lease.delete(self.lease['id'])
-                else:
-                    pass
+            if self.server:
+                print('deleteing server {0}'.format(self.server.id))
+                self.client.delete_server(self.server.id)
 
-            if os.path.isfile(BOOTSTRAP_PATH):
-                os.remove(BOOTSTRAP_PATH)
-            else:
-                print("File {0} does not exist".format(BOOTSTRAP_PATH))
+                if self.ip:
+                    print('deleting allocated ip')
+                    self.client.delete_floating_ip(self.ip)
+
+                if self.lease:
+                    msg = "would you like to delete the lease? yes/no:"
+                    user_in = input(msg)
+                    if user_in == 'Yes' or user_in == 'yes':
+                        lease.delete(self.lease['id'])
+                    else:
+                        pass
 
         except Exception as e:
             raise Exception(e)

@@ -78,6 +78,14 @@ class proxy(object):
                 jet2_client.list_flavors()
             except Exception as e:
                 print('failed to login to {0}: {1}'.format(provider, e))
+
+        if provider == CHI:
+            chi_creds  = self._load_credentials(provider)
+            chi_client = openstack.connect(**chi_creds)
+            try:
+                chi_client.list_flavors()
+            except Exception as e:
+                print('failed to login to {0}: {1}'.format(provider, e))
             
         if provider == GCLOUD:
             raise NotImplementedError
@@ -115,17 +123,26 @@ class proxy(object):
 
         if provider == JET2:
             try:
-                jet2_creds = {'auth_url'                   : os.environ['OS_AUTH_URL'],
-                            'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
-                            'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
+                jet2_creds = {'auth_url'                     : os.environ['OS_AUTH_URL'],
+                              'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
+                              'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
                 
                 return jet2_creds
             except KeyError:
                 raise
         
         if provider == CHI:
-            chi_creds = {}
-            return chi_creds
+            try:
+                chi_creds = {'auth_url'           : os.environ['OS_AUTH_URL'],
+                             'auth_type'          : os.environ['OS_AUTH_TYPE'],
+                             'compute_api_version': 2,
+                             'region_name'        : os.environ['OS_REGION_NAME'],
+                             'identity_interface' : os.environ['OS_INTERFACE'],
+                             'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
+                             'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
+                return chi_creds
+            except KeyError:
+                raise
 
         if provider == GCLOUD:
              raise NotImplementedError

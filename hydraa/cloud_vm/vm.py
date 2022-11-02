@@ -129,5 +129,6 @@ class OpenStackVM:
         self.required_kwargs['image_id']     = self.ImageId
         self.required_kwargs['flavor_id']    = self.FlavorId
         self.required_kwargs['launch_type']  = self.LaunchType
+
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs

@@ -9,6 +9,7 @@ setup_args['packages']             = find_packages()
 setup_args['package_data']         = {'': ['*.sh']}
 setup_args['python_requires']      = '>=3.6'
 setup_args['install_requires']     = ['boto3',
+                                      'kubernetes',
                                       'azure-core',
                                       'azure-batch', 
                                       'azure-common',
