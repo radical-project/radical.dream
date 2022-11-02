@@ -26,9 +26,18 @@ class Cluster:
         boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
         self.remote.put(boostrapper)
         self.remote.run("chmod +x deploy_kuberentes_local.sh")
+
+        # FIXME: for now we use snap to install microk8s and
+        # we sometimes fail: https://bugs.launchpad.net/snapd/+bug/1826662
+        # as a workaround we wait for snap to be loaded
+        self.remote.run("sudo snap wait system seed.loaded")
+
+        # upload the bootstrapper code to the remote machine
         self.remote.run("./deploy_kuberentes_local.sh")
         while True:
+            # wait for the microk8s to be ready
             stream = self.remote.run('sudo microk8s status --wait-ready')
+
             # check if the cluster is ready to submit the pod
             if "microk8s is running" in stream.stdout:
                 print('booting Kuberentes cluster successful')
@@ -52,7 +61,7 @@ class Cluster:
         for ctask in ctasks:
             envs = []
             if ctask.env_var:
-                for env in env_vars:
+                for env in ctask.env_vars:
                     pod_env  = client.V1EnvVar(name = env[0], value = env[1])
                     envs.append(pod_env)
 
@@ -60,7 +69,7 @@ class Cluster:
             pod_mem = "{0}Mi".format(ctask.memory)
 
             resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                        limits={"cpu": pod_cpu, "memory": pod_mem})
+                                                      limits={"cpu": pod_cpu, "memory": pod_mem})
 
             pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                         resources = resources, command = ctask.cmd, env = envs)
@@ -110,11 +119,11 @@ class Cluster:
         return True
 
 
-    def get_pod_status(self, pod_id):
+    def get_pod_status(self):
 
         #FIXME: get the ifno of a specifc pod by allowing 
         # this function to get pod_id
-        cmd = 'sudo microk8s kubectl get pod {0} --field-selector=status.phase=Succeeded -o json'.format(pod_id)
+        cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
         out = self.remote.run(cmd).stdout
         response = eval(out)
 

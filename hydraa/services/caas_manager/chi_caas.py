@@ -302,7 +302,6 @@ class ChiCaas:
         return image
 
 
-
     def create_and_assign_floating_ip(self):
 
         try:
@@ -318,20 +317,19 @@ class ChiCaas:
                             return ip
             # let's create a public ip
             else:
-                
                 # FIXME: some error about an ip from the floating ip list
                 # that can not be added.
                 try:
                     ip = self.client.create_floating_ip()
                     self.client.add_ip_list(self.server, [ip.floating_ip_address])
+                    return ip.floating_ip_address
                 except exc.exceptions.ConflictException:
-                    pass
-
-                assigned_ips = self.client.list_floating_ips()
-                for assigned_ip in assigned_ips:
-                    if assigned_ip.status == 'ACTIVE':
-                        attached_ip = assigned_ip.name
-                        return attached_ip
+                    print('can not assign ip (machine already has a public ip)')
+                    assigned_ips = self.client.list_floating_ips()
+                    for assigned_ip in assigned_ips:
+                        if assigned_ip.status == 'ACTIVE':
+                            attached_ip = assigned_ip.name
+                            return attached_ip
 
         except exc.exceptions.BadRequestException as e:
             raise Exception(e)
@@ -350,6 +348,10 @@ class ChiCaas:
 
 
     def submit(self, ctasks):
+        """
+        submit a single pod per batch of tasks
+        """
+        
         for ctask in ctasks:
             ctask.run_id      = self.run_id
             ctask.id          = self._task_id

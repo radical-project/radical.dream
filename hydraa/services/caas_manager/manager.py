@@ -168,3 +168,7 @@ class CaasManager:
             if provider == JET2:
                 self.Jet2Caas._shutdown()
             
+            if provider == CHI:
+                self.ChiCaas._shutdown()
+
+            

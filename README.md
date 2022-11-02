@@ -117,3 +117,262 @@ terminating container group hydraa-contianer-group-87f379b4-af92-4eb7-aa67-aba36
 terminating resource group hydraa-resource-group-6aaa1689-b612-4ada-ba78-f33b17a0e226
 done
 ```
+#### CHI Chameleon:
+
+```export chi vars
+source $HOME/app_cred.sc
+```
+
+```python
+from hydraa.cloud_vm import vm
+from hydraa import providers, services
+from hydraa.cloud_task.task import Task
+service_mgr = services.manager
+provider_mgr = providers.proxy(['chameleon'])
+caas_mgr = service_mgr.CaasManager(provider_mgr, asynchronous=False)
+op_vm = vm.OpenStackVM(launch_type='KVM', flavor_id='m1.large', image_id='CC-Ubuntu20.04')
+
+verifying chameleon credentials
+login to chameleon succeed
+```
+
+```python
+tasks = []
+for i in range(3):
+    CTask = Task()
+    CTask.memory = 7
+    CTask.vcpus = 1
+    CTask.image = "screwdrivercd/noop-container"
+    CTask.cmd   = ['/bin/echo', 'noop']
+    tasks.append(CTask)
+
+caas_mgr.submit_tasks(op_vm, tasks)
+```
+
+```shell
+starting run e8b66aa5-57ee-4edb-9986-9120a9829f98
+creating ssh key Pair
+Now using KVM@TACC:
+URL: https://kvm.tacc.chameleoncloud.org
+Location: Austin, Texas, USA
+Support contact: help@chameleoncloud.org
+creating hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98
+instance is ACTIVE
+can not assign ip (machine already has a public ip)
+Waiting for SSH connectivity on 129.114.27.37 ...
+Connection successful
+booting K8s cluster on the remote machine
+Virtual Machine Detected
+dpkg-query: no packages found matching microk8s
+Checking for microk8s:
+No microk8s. Setting up microk8s.
+microk8s (1.25/stable) v1.25.3 from Canonical** installed
+No resources found
+No resources found in default namespace.
+microk8s is not running. Use microk8s inspect for a deeper inspection.
+microk8s is running
+high-availability: no
+  datastore master nodes: 127.0.0.1:19001
+  datastore standby nodes: none
+addons:
+  enabled:
+    ha-cluster           # (core) Configure high availability on the current node
+    helm                 # (core) Helm - the package manager for Kubernetes
+    helm3                # (core) Helm 3 - the package manager for Kubernetes
+  disabled:
+    cert-manager         # (core) Cloud native certificate management
+    community            # (core) The community addons repository
+    dashboard            # (core) The Kubernetes dashboard
+    dns                  # (core) CoreDNS
+    gpu                  # (core) Automatic enablement of Nvidia CUDA
+    host-access          # (core) Allow Pods connecting to Host services smoothly
+    hostpath-storage     # (core) Storage class; allocates storage from host directory
+    ingress              # (core) Ingress controller for external access
+    kube-ovn             # (core) An advanced network fabric for Kubernetes
+    mayastor             # (core) OpenEBS MayaStor
+    metallb              # (core) Loadbalancer for your Kubernetes cluster
+    metrics-server       # (core) K8s Metrics Server for API access to service metrics
+    observability        # (core) A lightweight observability stack for logs, traces and metrics
+    prometheus           # (core) Prometheus operator for monitoring and logging
+    rbac                 # (core) Role-Based Access Control for authorisation
+    registry             # (core) Private image registry exposed on localhost:32000
+    storage              # (core) Alias to hostpath-storage add-on, deprecated
+booting Kuberentes cluster successful
+booting K8s cluster on the remote machine
+Virtual Machine Detected
+dpkg-query: no packages found matching microk8s
+Checking for microk8s:
+No microk8s. Setting up microk8s.
+snap "microk8s" is already installed, see 'snap help refresh'
+NAMESPACE     NAME                                           READY   STATUS              RESTARTS   AGE
+kube-system   pod/calico-node-f276h                          0/1     Running             0          25s
+kube-system   pod/calico-kube-controllers-7b4b7968d4-wsxtn   0/1     ContainerCreating   0          25s
+
+NAMESPACE   NAME                 TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+default     service/kubernetes   ClusterIP   10.152.183.1   <none>        443/TCP   35s
+
+NAMESPACE     NAME                         DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+kube-system   daemonset.apps/calico-node   1         1         0       1            0           kubernetes.io/os=linux   33s
+
+NAMESPACE     NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+kube-system   deployment.apps/calico-kube-controllers   0/1     1            0           33s
+
+NAMESPACE     NAME                                                 DESIRED   CURRENT   READY   AGE
+kube-system   replicaset.apps/calico-kube-controllers-54c85446d4   0         0         0       29s
+kube-system   replicaset.apps/calico-kube-controllers-7b4b7968d4   1         1         0       25s
+Name:               hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98
+Roles:              <none>
+Labels:             beta.kubernetes.io/arch=amd64
+                    beta.kubernetes.io/os=linux
+                    kubernetes.io/arch=amd64
+                    kubernetes.io/hostname=hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98
+                    kubernetes.io/os=linux
+                    microk8s.io/cluster=true
+                    node.kubernetes.io/microk8s-controlplane=microk8s-controlplane
+Annotations:        node.alpha.kubernetes.io/ttl: 0
+                    projectcalico.org/IPv4Address: 10.56.2.192/22
+                    projectcalico.org/IPv4VXLANTunnelAddr: 10.1.87.0
+                    volumes.kubernetes.io/controller-managed-attach-detach: true
+CreationTimestamp:  Wed, 02 Nov 2022 22:25:56 +0000
+Taints:             <none>
+Unschedulable:      false
+Lease:
+  HolderIdentity:  hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98
+  AcquireTime:     <unset>
+  RenewTime:       Wed, 02 Nov 2022 22:26:27 +0000
+Conditions:
+  Type                 Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
+  ----                 ------  -----------------                 ------------------                ------                       -------
+  NetworkUnavailable   False   Wed, 02 Nov 2022 22:26:25 +0000   Wed, 02 Nov 2022 22:26:25 +0000   CalicoIsUp                   Calico is running on this node
+  MemoryPressure       False   Wed, 02 Nov 2022 22:26:27 +0000   Wed, 02 Nov 2022 22:25:56 +0000   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure         False   Wed, 02 Nov 2022 22:26:27 +0000   Wed, 02 Nov 2022 22:25:56 +0000   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure          False   Wed, 02 Nov 2022 22:26:27 +0000   Wed, 02 Nov 2022 22:25:56 +0000   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready                True    Wed, 02 Nov 2022 22:26:27 +0000   Wed, 02 Nov 2022 22:26:27 +0000   KubeletReady                 kubelet is posting ready status. AppArmor enabled
+Addresses:
+  InternalIP:  10.56.2.192
+  Hostname:    hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98
+Capacity:
+  cpu:                4
+  ephemeral-storage:  38695164Ki
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             8148188Ki
+  pods:               110
+Allocatable:
+  cpu:                4
+  ephemeral-storage:  37646588Ki
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             8045788Ki
+  pods:               110
+System Info:
+  Machine ID:                 fd5814d3b95b44ffa9380e6b012c08aa
+  System UUID:                fd5814d3-b95b-44ff-a938-0e6b012c08aa
+  Boot ID:                    6fd26db0-fbe7-48ee-b472-e08121893dbb
+  Kernel Version:             5.4.0-124-generic
+  OS Image:                   Ubuntu 20.04.4 LTS
+  Operating System:           linux
+  Architecture:               amd64
+  Container Runtime Version:  containerd://1.6.6
+  Kubelet Version:            v1.25.3
+  Kube-Proxy Version:         v1.25.3
+Non-terminated Pods:          (2 in total)
+  Namespace                   Name                                        CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----                                        ------------  ----------  ---------------  -------------  ---
+  kube-system                 calico-node-f276h                           250m (6%)     0 (0%)      0 (0%)           0 (0%)         25s
+  kube-system                 calico-kube-controllers-7b4b7968d4-wsxtn    0 (0%)        0 (0%)      0 (0%)           0 (0%)         25s
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests   Limits
+  --------           --------   ------
+  cpu                250m (6%)  0 (0%)
+  memory             0 (0%)     0 (0%)
+  ephemeral-storage  0 (0%)     0 (0%)
+  hugepages-1Gi      0 (0%)     0 (0%)
+  hugepages-2Mi      0 (0%)     0 (0%)
+Events:
+  Type     Reason                   Age              From             Message
+  ----     ------                   ----             ----             -------
+  Normal   Starting                 33s              kube-proxy
+  Normal   Starting                 34s              kubelet          Starting kubelet.
+  Warning  InvalidDiskCapacity      34s              kubelet          invalid capacity 0 on image filesystem
+  Normal   NodeHasSufficientMemory  34s              kubelet          Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 status is now: NodeHasSufficientMemory
+  Normal   NodeHasNoDiskPressure    34s              kubelet          Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 status is now: NodeHasNoDiskPressure
+  Normal   NodeHasSufficientPID     34s              kubelet          Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 status is now: NodeHasSufficientPID
+  Normal   NodeAllocatableEnforced  34s              kubelet          Updated Node Allocatable limit across pods
+  Normal   RegisteredNode           29s              node-controller  Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 event: Registered Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 in Controller
+  Normal   NodeReady                3s               kubelet          Node hydraa-chi-e8b66aa5-57ee-4edb-9986-9120a9829f98 status is now: NodeReady
+  Warning  MissingClusterDNS        2s (x2 over 3s)  kubelet          kubelet does not have ClusterDNS IP configured and cannot create Pod using "ClusterFirst" policy. Falling back to "Default" policy.
+microk8s is running
+high-availability: no
+  datastore master nodes: 127.0.0.1:19001
+  datastore standby nodes: none
+addons:
+  enabled:
+    ha-cluster           # (core) Configure high availability on the current node
+    helm                 # (core) Helm - the package manager for Kubernetes
+    helm3                # (core) Helm 3 - the package manager for Kubernetes
+  disabled:
+    cert-manager         # (core) Cloud native certificate management
+    community            # (core) The community addons repository
+    dashboard            # (core) The Kubernetes dashboard
+    dns                  # (core) CoreDNS
+    gpu                  # (core) Automatic enablement of Nvidia CUDA
+    host-access          # (core) Allow Pods connecting to Host services smoothly
+    hostpath-storage     # (core) Storage class; allocates storage from host directory
+    ingress              # (core) Ingress controller for external access
+    kube-ovn             # (core) An advanced network fabric for Kubernetes
+    mayastor             # (core) OpenEBS MayaStor
+    metallb              # (core) Loadbalancer for your Kubernetes cluster
+    metrics-server       # (core) K8s Metrics Server for API access to service metrics
+    observability        # (core) A lightweight observability stack for logs, traces and metrics
+    prometheus           # (core) Prometheus operator for monitoring and logging
+    rbac                 # (core) Role-Based Access Control for authorisation
+    registry             # (core) Private image registry exposed on localhost:32000
+    storage              # (core) Alias to hostpath-storage add-on, deprecated
+microk8s is running
+high-availability: no
+  datastore master nodes: 127.0.0.1:19001
+  datastore standby nodes: none
+addons:
+  enabled:
+    ha-cluster           # (core) Configure high availability on the current node
+    helm                 # (core) Helm - the package manager for Kubernetes
+    helm3                # (core) Helm 3 - the package manager for Kubernetes
+  disabled:
+    cert-manager         # (core) Cloud native certificate management
+    community            # (core) The community addons repository
+    dashboard            # (core) The Kubernetes dashboard
+    dns                  # (core) CoreDNS
+    gpu                  # (core) Automatic enablement of Nvidia CUDA
+    host-access          # (core) Allow Pods connecting to Host services smoothly
+    hostpath-storage     # (core) Storage class; allocates storage from host directory
+    ingress              # (core) Ingress controller for external access
+    kube-ovn             # (core) An advanced network fabric for Kubernetes
+    mayastor             # (core) OpenEBS MayaStor
+    metallb              # (core) Loadbalancer for your Kubernetes cluster
+    metrics-server       # (core) K8s Metrics Server for API access to service metrics
+    observability        # (core) A lightweight observability stack for logs, traces and metrics
+    prometheus           # (core) Prometheus operator for monitoring and logging
+    rbac                 # (core) Role-Based Access Control for authorisation
+    registry             # (core) Private image registry exposed on localhost:32000
+    storage              # (core) Alias to hostpath-storage add-on, deprecated
+booting Kuberentes cluster successful
+pod/hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98 created
+NAME                                              READY   STATUS              RESTARTS   AGE
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   0/3     ContainerCreating   0          0s
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   0/3     ContainerCreating   0          0s
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   1/3     NotReady            0          12s
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   0/3     Completed           0          13s
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   0/3     Completed           0          14s
+hydraa-pod-e8b66aa5-57ee-4edb-9986-9120a9829f98   0/3     Completed           0          15s
+```
+
+```python
+In [4]: caas_mgr.shutdown()
+deleting ssh keys
+deleting key-name from cloud storage
+deleteing server fd5814d3-b95b-44ff-a938-0e6b012c08aa
+deleting allocated ip
+```
+
