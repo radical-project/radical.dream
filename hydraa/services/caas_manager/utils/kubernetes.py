@@ -1,21 +1,33 @@
 import os
 import time
 import json
+import uuid
+import datetime
+
 from pathlib import Path
+from collections import OrderedDict
 from kubernetes import client, config
 
-true   = True
-false  = False
-null   = None
+true    = True
+false   = False
+null    = None
+HOME    = str(Path.home())
+TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 class Cluster:
 
     def __init__(self, run_id, remote):
         
-        self.id     = run_id
-        self.remote = remote
+        self.id      = run_id
+        self.remote  = remote
+        self.sandbox = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
 
+    
+    def start(self):
+        self.remote.run('sudo microk8s start')
+    
 
+    
     def bootstrap_local(self):
 
         """
@@ -47,16 +59,17 @@ class Cluster:
                 time.sleep(1)
 
 
-    def watch(self, pod_id):
+    def watch(self):
         try:
-            self.remote.run('sudo microk8s kubectl get pods {0} --watch'.format(pod_id))
+            self.remote.run('sudo microk8s kubectl get pods --watch')
         except KeyboardInterrupt:
             return
 
 
     def generate_pod(self, ctasks):
 
-        pod_file  = 'hydraa_pod.json'
+        pod_id     = str(uuid.uuid4())
+        pod_file   = '{0}/hydraa_pod_{1}.json'.format(self.sandbox, pod_id)
         containers = []
         for ctask in ctasks:
             envs = []
@@ -76,7 +89,7 @@ class Cluster:
             
             containers.append(pod_container)
         
-        pod_name      = "hydraa-pod-{0}".format(self.id)
+        pod_name      = "hydraa-pod-{0}".format(pod_id)
         pod_metadata  = client.V1ObjectMeta(name = pod_name)
 
         # check if we need to restart the task
@@ -98,7 +111,7 @@ class Cluster:
         return pod_file, pod_name
     
 
-    def submit_pod(self, pods):
+    def submit_pod(self, pod_file):
 
         # upload the pods file before bootstrapping
         # FIXME: we get socket closed if we did it
@@ -106,13 +119,13 @@ class Cluster:
         # the firewall of the node
 
         # upload the pods.json
-        self.remote.put(pods)
         
-        # bootup the cluster K8s
-        self.bootstrap_local()
+        self.remote.put(pod_file)
 
         # deploy the pods.json on the cluster
-        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pods))
+
+        pod_name = os.path.basename(pod_file)
+        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pod_name))
 
         #FIXME: create a monitering of the pods/containers
         
@@ -124,8 +137,8 @@ class Cluster:
         #FIXME: get the ifno of a specifc pod by allowing 
         # this function to get pod_id
         cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
-        out = self.remote.run(cmd).stdout
-        response = eval(out)
+        status = self.remote.run(cmd).stdout
+        response = eval(status)
 
         # FIXME: generate profiles as pd dataframe
         if response:
@@ -141,19 +154,63 @@ class Cluster:
                         state = container.get('state', None)
                         if state:
                             for kk, vv in container['state'].items():
-                                start_time = os.popen("date -d {0} +%s".format(v.get('startedAt', 0.0)))
-                                stop_time  = os.popen("date -d {0} +%s".format(v.get('finishedAt', 0.0)))
+                                start_time = self.convert_time(v.get('startedAt', 0.0))
+                                stop_time  = self.convert_time(v.get('finishedAt', 0.0))
                                 print('container {0} state:  {1} becasue its {2}'.format(c_name, kk, v.get('reason', None)))
-                                print('container {0} start:  {1}'.format(c_name, start_time.readline().split('\n')[0]))
-                                print('container {0} stop :  {1}'.format(c_name, stop_time.readline().split('\n')[0]))
+                                print('container {0} start:  {1}'.format(c_name, start_time))
+                                print('container {0} stop :  {1}'.format(c_name, stop_time))
         else:
             print('pods did not finish yet or failed')
+    
 
+    def get_pod_events(self):
+        
+        cmd = 'sudo microk8s kubectl get events -A -o json' 
+        events = self.remote.run(cmd).stdout
+        response = eval(events)
+
+        task_stamps = OrderedDict()
+
+        if response:
+            for it in response['items']:
+                field = it['involvedObject'].get('fieldPath', None)
+                if field:
+                    if 'spec.containers' in field:
+                        if 'ctask' in field:
+                            cid  = field.split('}')[0].split('{')[1]
+                            evt  = it.get('reason', None)
+                            task_stamps[cid] = OrderedDict()
+                            task_stamps[cid][evt+'StartedAt'] = self.convert_time(it.get('lastTimestamp', 0.0))
+                            task_stamps[cid][evt+'StoppedAt']  = self.convert_time(it.get('lastTimestamp', 0.0))
+
+
+        return task_stamps
+    
+
+    def convert_time(self, timestamp):
+
+        t  = datetime.datetime.strptime(timestamp, TFORMAT)
+        ts = time.mktime(t.timetuple())
+
+        return ts
 
     
-    def _get_kb_worker_nodes(self):
+    def get_worker_nodes(self):
          pass
     
+
+    def join(self):
+        """
+        This method should allow
+        x worker nodes to join the
+        master node (different vms or
+        pms) 
+        """
+        pass
+
+
+    def stop(self):
+        self.remote.run('sudo microk8s stop')
 
     def delete(self):
         pass

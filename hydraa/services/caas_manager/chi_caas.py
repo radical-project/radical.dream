@@ -1,11 +1,10 @@
 import os
 import chi
-import json
+import math
 import time
 import uuid
+import copy
 import errno
-import shutil
-import socket
 import atexit
 import openstack
 import chi.lease
@@ -14,7 +13,6 @@ import keystoneauth1, blazarclient
 
 from chi import lease
 from chi import server
-from chi.ssh import Remote
 
 from pathlib import Path
 from openstack.cloud import exc
@@ -24,9 +22,12 @@ from hydraa.services.caas_manager.utils import ssh
 from hydraa.services.caas_manager.utils import kubernetes
 
 
+__author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
+
 HOME   = str(Path.home())
 CHI    = 'chameleon'
 ACTIVE = True
+
 
 # --------------------------------------------------------------------------
 #
@@ -63,7 +64,7 @@ class ChiCaas:
     
 
         self._tasks_book  = OrderedDict()
-        self._family_ids  = OrderedDict()
+        self._pod_ids     = OrderedDict()
         self.launch_type  = None
         self._run_cost    = 0
         self.runs_tree    = OrderedDict()
@@ -73,7 +74,8 @@ class ChiCaas:
         atexit.register(self._shutdown)
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def run(self, VM, tasks, service=False, budget=0, time=0):
         self.vm          = VM
         self.launch_type = VM.LaunchType
@@ -112,12 +114,16 @@ class ChiCaas:
         self.ip      = self.create_and_assign_floating_ip()
         self.remote  = ssh.Remote(self.vm.KeyPair, 'cc', self.ip)
         self.cluster = kubernetes.Cluster(self.run_id, self.remote)
-        
+
         self.cluster.bootstrap_local()
 
         self.submit(tasks)
 
+        self.runs_tree[self.run_id] =  self._pod_ids
 
+
+    # --------------------------------------------------------------------------
+    #
     def _create_client(self, cred):
         """
         1-user must create an application credentials for each site here:
@@ -129,8 +135,10 @@ class ChiCaas:
         jet2_client = openstack.connect(**cred)
         
         return jet2_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _lease_resources(self, lease_id=None, reservations=None, lease_node_type=None,
                                                                  duration=0, nodes=0):
         
@@ -188,6 +196,8 @@ class ChiCaas:
         return res_lease
 
 
+    # --------------------------------------------------------------------------
+    #
     def _create_security_with_rule(self):
 
             # we are using the default security group for now
@@ -204,7 +214,8 @@ class ChiCaas:
                 return security
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def _create_server(self, image, flavor, keypair, security, user_lease=None):
 
         if self.vm.VmId:
@@ -250,7 +261,8 @@ class ChiCaas:
         return instance
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def create_or_find_keypair(self):
         keypair = None
         if self.vm.KeyPair:
@@ -292,6 +304,8 @@ class ChiCaas:
         return keypair
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_or_find_image(self):
         
         image = self.client.compute.find_image(self.vm.ImageId)
@@ -302,6 +316,8 @@ class ChiCaas:
         return image
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_and_assign_floating_ip(self):
 
         try:
@@ -335,6 +351,8 @@ class ChiCaas:
             raise Exception(e)
 
 
+    # --------------------------------------------------------------------------
+    #
     def moniter_cpu_usage(self):
         if self.remote:
             cmd = "grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}'"
@@ -347,29 +365,118 @@ class ChiCaas:
                 return
 
 
+    # --------------------------------------------------------------------------
+    #
     def submit(self, ctasks):
         """
         submit a single pod per batch of tasks
         """
-        
-        for ctask in ctasks:
-            ctask.run_id      = self.run_id
-            ctask.id          = self._task_id
-            ctask.name        = 'ctask-{0}'.format(self._task_id)
-            ctask.provider    = CHI
-            ctask.launch_type = self.launch_type
-            self._task_id +=1
 
-        # generate a json file with the pod setup
-        pod, pod_id = self.cluster.generate_pod(ctasks)
+        pod_sizes = self._schedule(ctasks)
+        for batch in pod_sizes:
+            containers = []
+            for ctask in batch:
+                ctask.run_id      = self.run_id
+                ctask.id          = self._task_id
+                ctask.name        = 'ctask-{0}'.format(self._task_id)
+                ctask.provider    = CHI
+                ctask.launch_type = self.launch_type
 
-        # submit to kubernets cluster
-        self.cluster.submit_pod(pod)
+                containers.append(ctask)
+
+                self._task_id +=1
+
+            # generate a json file with the pod setup
+            pod_file, pod_name = self.cluster.generate_pod(containers)
+
+            # submit to kubernets cluster
+            self.cluster.submit_pod(pod_file)
+
+            #self._pod_ids[pod_name]['manager_id']    = self.manager_id
+            #self._pod_ids[pod_name]['task_list']     = batch
+            #self._pod_ids[pod_name]['batch_size']    = len(batch)
+            #self._pod_ids[pod_name]['pod_file_path'] = pod_file
 
         # watch the pod in the cluster
-        self.cluster.watch(pod_id)
+        self.cluster.watch()
 
 
+    # --------------------------------------------------------------------------
+    #
+    def profiles(self):
+        
+        pod_stamps  = self.cluster.get_pod_status()
+        task_stamps = self.cluster.get_pod_events()
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(CHI, len(self._tasks_book), self.manager_id)
+        if os.path.isfile(fname):
+            print('profiles already exist {0}'.format(fname))
+            return fname
+        
+        try:
+            import pandas as pd
+        except ModuleNotFoundError:
+            print('pandas module required to obtain profiles')
+
+        df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
+
+        df.to_csv(fname)
+        print('Dataframe saved in {0}'.format(fname))
+
+        return fname
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _schedule(self, tasks):
+
+        task_batch = copy.deepcopy(tasks)
+        batch_size = len(task_batch)
+        if not batch_size:
+            raise Exception('Batch size can not be 0')
+
+        CPP = self.server.flavor.vcpus - 1
+
+
+        tasks_per_pod = []
+
+        container_grps = math.ceil(batch_size / CPP)
+
+        # If we cannot split the
+        # number into exactly 'container_grps of 10' parts
+        if(batch_size < container_grps):
+            print(-1)
+    
+        # If batch_size % container_grps == 0 then the minimum
+        # difference is 0 and all
+        # numbers are batch_size / container_grps
+        elif (batch_size % container_grps == 0):
+            for i in range(container_grps):
+                tasks_per_pod.append(batch_size // container_grps)
+        else:
+            # upto container_grps-(batch_size % container_grps) the values
+            # will be batch_size / container_grps
+            # after that the values
+            # will be batch_size / container_grps + 1
+            zp = container_grps - (batch_size % container_grps)
+            pp = batch_size // container_grps
+            for i in range(container_grps):
+                if(i>= zp):
+                    tasks_per_pod.append(pp + 1)
+                else:
+                    tasks_per_pod.append(pp)
+        
+        batch_map = tasks_per_pod
+
+        objs_batch = []
+        for batch in batch_map:
+           objs_batch.append(task_batch[:batch])
+           task_batch[:batch]
+           del task_batch[:batch]
+        return(objs_batch)
+
+
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
 
         if self.status == False:
