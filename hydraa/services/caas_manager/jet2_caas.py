@@ -15,7 +15,9 @@ from collections import OrderedDict
 from hydraa.services.caas_manager.utils import ssh
 from hydraa.services.caas_manager.utils import kubernetes
 
- 
+
+__author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
+
 HOME      = str(Path.home())
 JET2      = 'jetstream2'
 ACTIVE    = True
@@ -54,11 +56,11 @@ class Jet2Caas():
 
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
-        self._tasks_book   = OrderedDict()
-        self._family_ids   = OrderedDict()
-        self.launch_type   =  None
-        self._run_cost     = 0
-        self.runs_tree     = OrderedDict()
+        self._tasks_book  = OrderedDict()
+        self._pods_book   = OrderedDict()
+        self.launch_type  =  None
+        self._run_cost    = 0
+        self.runs_tree    = OrderedDict()
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
@@ -90,25 +92,33 @@ class Jet2Caas():
 
         print("server created with public ip: {0}".format(self.ip))
 
-        #FIXME: VM should have a username instead of hard coding ubuntu
+        #FIXME: VM should have a username instead of hard coded ubuntu
         self.remote  = ssh.Remote(self.vm.KeyPair, 'ubuntu', self.ip)
         self.cluster = kubernetes.Cluster(self.run_id, self.remote)
+        
         self.cluster.bootstrap_local()
 
         self.submit(tasks)
 
+        self.runs_tree[self.run_id] =  self._pods_book
 
 
+    # --------------------------------------------------------------------------
+    #
     def _create_client(self, cred):
         jet2_client = openstack.connect(**cred)
         
         return jet2_client
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def _get_run_status(self, pod_id):
         self.cluster.get_pod_status(pod_id)
     
 
+    # --------------------------------------------------------------------------
+    #
     def create_security_with_rule(self):
 
         # we are using the default security group for now
@@ -150,7 +160,8 @@ class Jet2Caas():
         return security
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def create_or_find_keypair(self):
 
         keypair = None
@@ -191,9 +202,10 @@ class Jet2Caas():
             raise Exception('keypair creation failed')
 
         return keypair
-    
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_or_find_image(self):
         
         image = self.client.compute.find_image(self.vm.ImageId)
@@ -204,6 +216,8 @@ class Jet2Caas():
         return image
 
 
+    # --------------------------------------------------------------------------
+    #
     def create_or_find_network(self):
 
         network = None
@@ -237,8 +251,10 @@ class Jet2Caas():
 
             return network
         '''
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def create_and_assign_floating_ip(self):
         
         ip = self.client.create_floating_ip()
@@ -257,7 +273,8 @@ class Jet2Caas():
                 return attached_ip
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def _create_server(self, image, flavor, key_pair, security):
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
@@ -281,25 +298,93 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-
     def submit(self, ctasks):
-        for ctask in ctasks:
-            ctask.run_id      = self.run_id
-            ctask.id          = self._task_id
-            ctask.name        = 'ctask-{0}'.format(self._task_id)
-            ctask.provider    = JET2
-            ctask.launch_type = self.launch_type
-            self._task_id +=1
+        """
+        submit a single pod per batch of tasks
+        """
+        pod_sizes = self._schedule(ctasks)
+        for batch in pod_sizes:
+            containers = []
+            for ctask in batch:
+                ctask.run_id      = self.run_id
+                ctask.id          = self._task_id
+                ctask.name        = 'ctask-{0}'.format(self._task_id)
+                ctask.provider    = JET2
+                ctask.launch_type = self.launch_type
 
-        # generate a json file with the pod setup
-        pod, pod_id = self.cluster.generate_pod(ctasks)
+                containers.append(ctask)
 
-        # submit to kubernets cluster
-        self.cluster.submit_pod(pod)
+                self._task_id +=1
+
+            # generate a json file with the pod setup
+            pod_file, pod_name = self.cluster.generate_pod(containers)
+
+            # create entry for the pod in the pods book
+            self._pods_book[pod_name] = OrderedDict()
+
+            # submit to kubernets cluster
+            self.cluster.submit_pod(pod_file)
+
+            self._pods_book[pod_name]['manager_id']    = self.manager_id
+            self._pods_book[pod_name]['task_list']     = batch
+            self._pods_book[pod_name]['batch_size']    = len(batch)
+            self._pods_book[pod_name]['pod_file_path'] = pod_file
 
         # watch the pod in the cluster
-        self.cluster.watch(pod_id)
+        self.cluster.watch()
 
+
+    # --------------------------------------------------------------------------
+    #
+    def _schedule(self, tasks):
+
+        task_batch = copy.deepcopy(tasks)
+        batch_size = len(task_batch)
+        if not batch_size:
+            raise Exception('Batch size can not be 0')
+
+        CPP = self.server.flavor.vcpus - 1
+
+        tasks_per_pod = []
+
+        container_grps = math.ceil(batch_size / CPP)
+
+        # If we cannot split the
+        # number into exactly 'container_grps of 10' parts
+        if(batch_size < container_grps):
+            print(-1)
+    
+        # If batch_size % container_grps == 0 then the minimum
+        # difference is 0 and all
+        # numbers are batch_size / container_grps
+        elif (batch_size % container_grps == 0):
+            for i in range(container_grps):
+                tasks_per_pod.append(batch_size // container_grps)
+        else:
+            # upto container_grps-(batch_size % container_grps) the values
+            # will be batch_size / container_grps
+            # after that the values
+            # will be batch_size / container_grps + 1
+            zp = container_grps - (batch_size % container_grps)
+            pp = batch_size // container_grps
+            for i in range(container_grps):
+                if(i>= zp):
+                    tasks_per_pod.append(pp + 1)
+                else:
+                    tasks_per_pod.append(pp)
+        
+        batch_map = tasks_per_pod
+
+        objs_batch = []
+        for batch in batch_map:
+           objs_batch.append(task_batch[:batch])
+           task_batch[:batch]
+           del task_batch[:batch]
+        return(objs_batch)
+
+
+    # --------------------------------------------------------------------------
+    #
     def __cleanup(self):
 
         caller = sys._getframe().f_back.f_code.co_name
@@ -317,10 +402,12 @@ class Jet2Caas():
             self.security = None
             self.server   = None
 
-            self._family_ids.clear()
+            self._pods_book.clear()
             print('done')
 
 
+    # --------------------------------------------------------------------------
+    #
     def _shutdown(self):
 
         if not self.server:

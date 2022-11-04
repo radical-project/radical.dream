@@ -34,7 +34,7 @@ ACTIVE = True
 class ChiCaas:
     """Represents a collection of clusters (resources) with a collection of
        services, tasks and instances.:
-       :param cred: CHI credentials (source ~/chi_cred.sh)
+       :param cred: CHI credentials (source ~/app-cred-remote_acess-openrc.sh)
 
        :pram asynchronous: wait for the tasks to finish or run in the
                            background.
@@ -64,7 +64,7 @@ class ChiCaas:
     
 
         self._tasks_book  = OrderedDict()
-        self._pod_ids     = OrderedDict()
+        self._pods_book   = OrderedDict()
         self.launch_type  = None
         self._run_cost    = 0
         self.runs_tree    = OrderedDict()
@@ -119,7 +119,7 @@ class ChiCaas:
 
         self.submit(tasks)
 
-        self.runs_tree[self.run_id] =  self._pod_ids
+        self.runs_tree[self.run_id] =  self._pods_book
 
 
     # --------------------------------------------------------------------------
@@ -389,13 +389,16 @@ class ChiCaas:
             # generate a json file with the pod setup
             pod_file, pod_name = self.cluster.generate_pod(containers)
 
+            # create entry for the pod in the pods book
+            self._pods_book[pod_name] = OrderedDict()
+
             # submit to kubernets cluster
             self.cluster.submit_pod(pod_file)
 
-            #self._pod_ids[pod_name]['manager_id']    = self.manager_id
-            #self._pod_ids[pod_name]['task_list']     = batch
-            #self._pod_ids[pod_name]['batch_size']    = len(batch)
-            #self._pod_ids[pod_name]['pod_file_path'] = pod_file
+            self._pods_book[pod_name]['manager_id']    = self.manager_id
+            self._pods_book[pod_name]['task_list']     = batch
+            self._pods_book[pod_name]['batch_size']    = len(batch)
+            self._pods_book[pod_name]['pod_file_path'] = pod_file
 
         # watch the pod in the cluster
         self.cluster.watch()
@@ -434,8 +437,8 @@ class ChiCaas:
         if not batch_size:
             raise Exception('Batch size can not be 0')
 
+        # containers per pod
         CPP = self.server.flavor.vcpus - 1
-
 
         tasks_per_pod = []
 

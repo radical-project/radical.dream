@@ -18,9 +18,10 @@ class Cluster:
 
     def __init__(self, run_id, remote):
         
-        self.id      = run_id
-        self.remote  = remote
-        self.sandbox = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
+        self.id           = run_id
+        self.remote       = remote
+        self.pod_counter  = 0
+        self.sandbox      = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
 
     
     def start(self):
@@ -68,7 +69,7 @@ class Cluster:
 
     def generate_pod(self, ctasks):
 
-        pod_id     = str(uuid.uuid4())
+        pod_id     = str(self.pod_counter).zfill(6)
         pod_file   = '{0}/hydraa_pod_{1}.json'.format(self.sandbox, pod_id)
         containers = []
         for ctask in ctasks:
@@ -104,9 +105,12 @@ class Cluster:
         pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
                          metadata=pod_metadata, spec=pod_spec)
 
+        # FIXME: generate a single deployment file for all batches(pods)
         with open(pod_file, 'w') as f:
             sanitized_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
             json.dump(sanitized_pod, f)
+        
+        self.pod_counter +=1
 
         return pod_file, pod_name
     
