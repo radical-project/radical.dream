@@ -71,6 +71,10 @@ class ChiCaas:
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
+
+        # FIXME: move this to utils
+        self.sandbox    = None
+
         atexit.register(self._shutdown)
 
 
@@ -87,6 +91,8 @@ class ChiCaas:
         self.status      = ACTIVE
         print("starting run {0}".format(self.run_id))
         
+        self.sandbox = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
+
         self.image   = self.create_or_find_image()
         self.flavor  = self.client.compute.find_flavor(VM.FlavorId)
         self.keypair = self.create_or_find_keypair()
@@ -274,11 +280,9 @@ class ChiCaas:
             key_name = 'id_rsa'
             keypair  = self.client.create_keypair(name=key_name)
 
-            # FIXME: move this to utils
-            work_dir_path    = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
-            ssh_dir_path     = '{0}/.ssh'.format(work_dir_path)
+            ssh_dir_path     = '{0}/.ssh'.format(self.sandbox)
 
-            os.mkdir(work_dir_path, 0o777)
+            os.mkdir(self.sandbox, 0o777)
             os.mkdir(ssh_dir_path, 0o700)
 
             # download both private and public keys
@@ -410,7 +414,9 @@ class ChiCaas:
         
         pod_stamps  = self.cluster.get_pod_status()
         task_stamps = self.cluster.get_pod_events()
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(CHI, len(self._tasks_book), self.manager_id)
+        fname = '{0}/{1}_{2}_ctasks_{3}.csv'.format(self.sandbox, CHI,
+                                                len(self._tasks_book),
+                                                      self.manager_id)
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname
@@ -420,7 +426,7 @@ class ChiCaas:
         except ModuleNotFoundError:
             print('pandas module required to obtain profiles')
 
-        df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
+        df = (pd.merge(pod_stamps, task_stamps, on='Task_ID'))
 
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))

@@ -3,6 +3,7 @@ import time
 import json
 import uuid
 import datetime
+import pandas as pd
 
 from pathlib import Path
 from collections import OrderedDict
@@ -146,7 +147,9 @@ class Cluster:
 
         # FIXME: generate profiles as pd dataframe
         if response:
+            df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
             # iterate on pods
+            i = 0
             for pod in response['items']:
                 # get the status of each pod
                 phase = pod['status']['phase']
@@ -160,11 +163,12 @@ class Cluster:
                             for kk, vv in container['state'].items():
                                 start_time = self.convert_time(v.get('startedAt', 0.0))
                                 stop_time  = self.convert_time(v.get('finishedAt', 0.0))
-                                print('container {0} state:  {1} becasue its {2}'.format(c_name, kk, v.get('reason', None)))
-                                print('container {0} start:  {1}'.format(c_name, start_time))
-                                print('container {0} stop :  {1}'.format(c_name, stop_time))
-        else:
-            print('pods did not finish yet or failed')
+                                df.loc[i] = (c_name, (kk, v.get('reason', None)), start_time, stop_time)
+                                i +=1
+
+                        else:
+                            print('pods did not finish yet or failed')
+            return df
     
 
     def get_pod_events(self):
@@ -172,24 +176,23 @@ class Cluster:
         cmd = 'sudo microk8s kubectl get events -A -o json' 
         events = self.remote.run(cmd).stdout
         response = eval(events)
-
-        task_stamps = OrderedDict()
-
+        df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
+            id = 0
             for it in response['items']:
                 field = it['involvedObject'].get('fieldPath', None)
                 if field:
                     if 'spec.containers' in field:
                         if 'ctask' in field:
-                            cid  = field.split('}')[0].split('{')[1]
-                            evt  = it.get('reason', None)
-                            task_stamps[cid] = OrderedDict()
-                            task_stamps[cid][evt+'StartedAt'] = self.convert_time(it.get('lastTimestamp', 0.0))
-                            task_stamps[cid][evt+'StoppedAt']  = self.convert_time(it.get('lastTimestamp', 0.0))
+                            cid        = field.split('}')[0].split('{')[1]
+                            reason     = it.get('reason', None)
+                            reason_fts = self.convert_time(it.get('firstTimestamp', 0.0))
+                            reason_lts = self.convert_time(it.get('lastTimestamp', 0.0))
+                            df.loc[id] = (cid, reason, reason_fts, reason_lts)
+                            id +=1
+        
+        return df
 
-
-        return task_stamps
-    
 
     def convert_time(self, timestamp):
 
