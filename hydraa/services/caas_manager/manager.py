@@ -1,4 +1,5 @@
 import uuid
+import radical.utils as ru
 from typing import List
 
 from hydraa.cloud_vm.vm     import AwsVM
@@ -37,6 +38,7 @@ class CaasManager:
         
         _id = str(uuid.uuid4())
         self._registered_managers = []
+        prof = ru.Profiler
 
         if proxy:
             self._proxy = proxy_mgr
@@ -54,10 +56,10 @@ class CaasManager:
                 raise NotImplementedError
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
-                self.Jet2Caas = Jet2Caas(_id, cred, asynchronous)
+                self.Jet2Caas = Jet2Caas(_id, cred, asynchronous, prof)
             if provider == CHI:
                 cred = self._proxy._load_credentials(CHI)
-                self.ChiCaas = ChiCaas(_id, cred, asynchronous)
+                self.ChiCaas = ChiCaas(_id, cred, asynchronous, prof)
                 
     # --------------------------------------------------------------------------
     #

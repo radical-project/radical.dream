@@ -41,7 +41,7 @@ class ChiCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
+    def __init__(self, manager_id, cred, asynchronous, prof, DryRun=False):
         
         self.manager_id = manager_id
 
@@ -59,7 +59,7 @@ class ChiCaas:
         self.cluster  = None
         self.keypair  = None
 
-        self.run_id   = None
+        self.run_id   = str(uuid.uuid4())
         self._task_id = 0
     
 
@@ -73,7 +73,11 @@ class ChiCaas:
         self.asynchronous = asynchronous
 
         # FIXME: move this to utils
-        self.sandbox    = None
+        self.sandbox  = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
+        
+        os.mkdir(self.sandbox, 0o777)
+        
+        self.profiler = prof(name=__name__, path=self.sandbox)
 
         atexit.register(self._shutdown)
 
@@ -87,21 +91,26 @@ class ChiCaas:
         if not self.launch_type:
             raise Exception('CHI requires to specify KVM or Baremetal')
 
-        self.run_id      = str(uuid.uuid4())
         self.status      = ACTIVE
         print("starting run {0}".format(self.run_id))
-        
-        self.sandbox = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
+
+        self.profiler.prof('prep_start', uid=self.run_id)
 
         self.image   = self.create_or_find_image()
         self.flavor  = self.client.compute.find_flavor(VM.FlavorId)
         self.keypair = self.create_or_find_keypair()
         self.security = self._create_security_with_rule()
 
+        self.profiler.prof('prep_stop', uid=self.run_id)
+
+
+        
         if self.launch_type == 'KVM':
             chi.use_site('KVM@TACC')
+            self.profiler.prof('server_create_start', uid=self.run_id)
             self.server   = self._create_server(self.image, self.flavor, self.keypair,
                                                                         self.security)
+            self.profiler.prof('server_create_stop', uid=self.run_id)
 
         elif self.launch_type == 'Baremetal':
             chi.use_site('CHI@TACC')
@@ -117,11 +126,16 @@ class ChiCaas:
             self.server   = self._create_server(self.image, self.flavor, self.keypair,
                                                             self.lease, self.security)
 
+        self.profiler.prof('ip_create_start', uid=self.run_id)
         self.ip      = self.create_and_assign_floating_ip()
+        self.profiler.prof('ip_create_start', uid=self.run_id)
+
         self.remote  = ssh.Remote(self.vm.KeyPair, 'cc', self.ip)
         self.cluster = kubernetes.Cluster(self.run_id, self.remote)
 
+        self.profiler.prof('bootstrap_start', uid=self.run_id)
         self.cluster.bootstrap_local()
+        self.profiler.prof('bootstrap_stop', uid=self.run_id)
 
         self.submit(tasks)
 
@@ -282,7 +296,6 @@ class ChiCaas:
 
             ssh_dir_path     = '{0}/.ssh'.format(self.sandbox)
 
-            os.mkdir(self.sandbox, 0o777)
             os.mkdir(ssh_dir_path, 0o700)
 
             # download both private and public keys
@@ -375,8 +388,12 @@ class ChiCaas:
         """
         submit a single pod per batch of tasks
         """
+        self.profiler.prof('submit_start', uid=self.run_id)
 
+        self.profiler.prof('schedule_start', uid=self.run_id)
         pod_sizes = self._schedule(ctasks)
+        self.profiler.prof('schedule_stop', uid=self.run_id)
+
         for batch in pod_sizes:
             containers = []
             for ctask in batch:
@@ -388,10 +405,13 @@ class ChiCaas:
 
                 containers.append(ctask)
 
+                self._tasks_book[str(ctask.id)] = ctask.name
                 self._task_id +=1
 
             # generate a json file with the pod setup
+            self.profiler.prof('gen_pod_start', uid=self.run_id)
             pod_file, pod_name = self.cluster.generate_pod(containers)
+            self.profiler.prof('gen_pod_stop', uid=self.run_id)
 
             # create entry for the pod in the pods book
             self._pods_book[pod_name] = OrderedDict()
@@ -403,7 +423,8 @@ class ChiCaas:
             self._pods_book[pod_name]['task_list']     = batch
             self._pods_book[pod_name]['batch_size']    = len(batch)
             self._pods_book[pod_name]['pod_file_path'] = pod_file
-
+        
+        self.profiler.prof('submit_stop', uid=self.run_id)
         # watch the pod in the cluster
         self.cluster.watch()
 
@@ -414,9 +435,8 @@ class ChiCaas:
         
         pod_stamps  = self.cluster.get_pod_status()
         task_stamps = self.cluster.get_pod_events()
-        fname = '{0}/{1}_{2}_ctasks_{3}.csv'.format(self.sandbox, CHI,
-                                                len(self._tasks_book),
-                                                      self.manager_id)
+        fname = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox, CHI,
+                                            len(self._tasks_book))
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname

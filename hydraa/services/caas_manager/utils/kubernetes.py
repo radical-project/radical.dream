@@ -88,7 +88,7 @@ class Cluster:
 
             pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                         resources = resources, command = ctask.cmd, env = envs)
-            
+
             containers.append(pod_container)
         
         pod_name      = "hydraa-pod-{0}".format(pod_id)
@@ -110,10 +110,23 @@ class Cluster:
         with open(pod_file, 'w') as f:
             sanitized_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
             json.dump(sanitized_pod, f)
-        
+
         self.pod_counter +=1
 
         return pod_file, pod_name
+
+
+    def wait(self):
+        while True:
+            cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded | wc -l'
+            done_pods = self.remote.run(cmd).stdout
+            if str(self.pod_counter -1) in done_pods:
+                break
+            else:
+                time.sleep(5)
+
+            return True
+
     
 
     def submit_pod(self, pod_file):
