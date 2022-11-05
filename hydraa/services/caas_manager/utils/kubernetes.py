@@ -4,10 +4,14 @@ import json
 import uuid
 import datetime
 import pandas as pd
+import radical.utils as ru
 
 from pathlib import Path
 from collections import OrderedDict
 from kubernetes import client, config
+
+
+__author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 true    = True
 false   = False
@@ -15,6 +19,9 @@ null    = None
 HOME    = str(Path.home())
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
+
+# --------------------------------------------------------------------------
+#
 class Cluster:
 
     def __init__(self, run_id, remote):
@@ -23,8 +30,8 @@ class Cluster:
         self.remote       = remote
         self.pod_counter  = 0
         self.sandbox      = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
+        self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
 
-    
     def start(self):
         self.remote.run('sudo microk8s start')
     
@@ -61,6 +68,8 @@ class Cluster:
                 time.sleep(1)
 
 
+    # --------------------------------------------------------------------------
+    #
     def watch(self):
         try:
             self.remote.run('sudo microk8s kubectl get pods --watch')
@@ -68,9 +77,12 @@ class Cluster:
             return
 
 
+    # --------------------------------------------------------------------------
+    #
     def generate_pod(self, ctasks):
 
         pod_id     = str(self.pod_counter).zfill(6)
+        self.profiler.prof('gen_pod_start', uid=pod_id)
         pod_file   = '{0}/hydraa_pod_{1}.json'.format(self.sandbox, pod_id)
         containers = []
         for ctask in ctasks:
@@ -105,6 +117,8 @@ class Cluster:
 
         pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
                          metadata=pod_metadata, spec=pod_spec)
+        
+        self.profiler.prof('gen_pod_stop', uid=pod_id)
 
         # FIXME: generate a single deployment file for all batches(pods)
         with open(pod_file, 'w') as f:
@@ -116,6 +130,8 @@ class Cluster:
         return pod_file, pod_name
 
 
+    # --------------------------------------------------------------------------
+    #
     def wait(self):
         while True:
             cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded | wc -l'
@@ -127,8 +143,9 @@ class Cluster:
 
             return True
 
-    
 
+    # --------------------------------------------------------------------------
+    #
     def submit_pod(self, pod_file):
 
         # upload the pods file before bootstrapping
@@ -142,8 +159,10 @@ class Cluster:
 
         # deploy the pods.json on the cluster
 
+        self.profiler.prof('submit_pod_start', uid=self.id)
         pod_name = os.path.basename(pod_file)
         self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pod_name))
+        self.profiler.prof('submit_pod_start', uid=self.id)
 
         #FIXME: create a monitering of the pods/containers
         
@@ -184,6 +203,8 @@ class Cluster:
             return df
     
 
+    # --------------------------------------------------------------------------
+    #
     def get_pod_events(self):
         
         cmd = 'sudo microk8s kubectl get events -A -o json' 
@@ -207,6 +228,8 @@ class Cluster:
         return df
 
 
+    # --------------------------------------------------------------------------
+    #
     def convert_time(self, timestamp):
 
         t  = datetime.datetime.strptime(timestamp, TFORMAT)
@@ -214,12 +237,16 @@ class Cluster:
 
         return ts
 
-    
+
+    # --------------------------------------------------------------------------
+    #
     def get_worker_nodes(self):
          pass
     
 
-    def join(self):
+    # --------------------------------------------------------------------------
+    #
+    def join_master(self):
         """
         This method should allow
         x worker nodes to join the
@@ -229,6 +256,8 @@ class Cluster:
         pass
 
 
+    # --------------------------------------------------------------------------
+    #
     def stop(self):
         self.remote.run('sudo microk8s stop')
 

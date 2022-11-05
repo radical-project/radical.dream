@@ -62,7 +62,6 @@ class ChiCaas:
         self.run_id   = str(uuid.uuid4())
         self._task_id = 0
     
-
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
         self.launch_type  = None
@@ -388,7 +387,7 @@ class ChiCaas:
         """
         submit a single pod per batch of tasks
         """
-        self.profiler.prof('submit_start', uid=self.run_id)
+        self.profiler.prof('batch_submit_start', uid=self.run_id)
 
         self.profiler.prof('schedule_start', uid=self.run_id)
         pod_sizes = self._schedule(ctasks)
@@ -409,9 +408,7 @@ class ChiCaas:
                 self._task_id +=1
 
             # generate a json file with the pod setup
-            self.profiler.prof('gen_pod_start', uid=self.run_id)
             pod_file, pod_name = self.cluster.generate_pod(containers)
-            self.profiler.prof('gen_pod_stop', uid=self.run_id)
 
             # create entry for the pod in the pods book
             self._pods_book[pod_name] = OrderedDict()
@@ -424,7 +421,7 @@ class ChiCaas:
             self._pods_book[pod_name]['batch_size']    = len(batch)
             self._pods_book[pod_name]['pod_file_path'] = pod_file
         
-        self.profiler.prof('submit_stop', uid=self.run_id)
+        self.profiler.prof('batch_submit_start', uid=self.run_id)
         # watch the pod in the cluster
         self.cluster.watch()
 
