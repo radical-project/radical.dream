@@ -101,8 +101,6 @@ class ChiCaas:
         self.security = self._create_security_with_rule()
 
         self.profiler.prof('prep_stop', uid=self.run_id)
-
-
         
         if self.launch_type == 'KVM':
             chi.use_site('KVM@TACC')
@@ -129,12 +127,16 @@ class ChiCaas:
         self.ip      = self.create_and_assign_floating_ip()
         self.profiler.prof('ip_create_start', uid=self.run_id)
 
-        self.remote  = ssh.Remote(self.vm.KeyPair, 'cc', self.ip)
-        self.cluster = kubernetes.Cluster(self.run_id, self.remote)
+        print("server created with public ip: {0}".format(self.ip))
 
-        self.profiler.prof('bootstrap_start', uid=self.run_id)
+        self.remote  = ssh.Remote(self.vm.KeyPair, 'cc', self.ip)
+
+        # containers per pod
+        cluster_size = self.server.flavor.vcpus - 1
+
+        self.cluster = kubernetes.Cluster(self.run_id, self.remote, cluster_size)
+
         self.cluster.bootstrap_local()
-        self.profiler.prof('bootstrap_stop', uid=self.run_id)
 
         self.submit(tasks)
 
@@ -387,42 +389,31 @@ class ChiCaas:
         """
         submit a single pod per batch of tasks
         """
-        self.profiler.prof('batch_submit_start', uid=self.run_id)
+        self.profiler.prof('submit_batch_start', uid=self.run_id)
+        for ctask in ctasks:
+            ctask.run_id      = self.run_id
+            ctask.id          = self._task_id
+            ctask.name        = 'ctask-{0}'.format(self._task_id)
+            ctask.provider    = CHI
+            ctask.launch_type = self.launch_type
 
-        self.profiler.prof('schedule_start', uid=self.run_id)
-        pod_sizes = self._schedule(ctasks)
-        self.profiler.prof('schedule_stop', uid=self.run_id)
 
-        for batch in pod_sizes:
-            containers = []
-            for ctask in batch:
-                ctask.run_id      = self.run_id
-                ctask.id          = self._task_id
-                ctask.name        = 'ctask-{0}'.format(self._task_id)
-                ctask.provider    = CHI
-                ctask.launch_type = self.launch_type
+            self._task_id +=1
 
-                containers.append(ctask)
-
-                self._tasks_book[str(ctask.id)] = ctask.name
-                self._task_id +=1
-
-            # generate a json file with the pod setup
-            pod_file, pod_name = self.cluster.generate_pod(containers)
-
-            # create entry for the pod in the pods book
-            self._pods_book[pod_name] = OrderedDict()
-
-            # submit to kubernets cluster
-            self.cluster.submit_pod(pod_file)
-
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batch
-            self._pods_book[pod_name]['batch_size']    = len(batch)
-            self._pods_book[pod_name]['pod_file_path'] = pod_file
+        # submit to kubernets cluster
+        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
         
-        self.profiler.prof('batch_submit_start', uid=self.run_id)
-        # watch the pod in the cluster
+        # create entry for the pod in the pods book
+        for idx, pod_name in enumerate(pods_names):
+            self._pods_book[pod_name] = OrderedDict()
+            self._pods_book[pod_name]['manager_id']    = self.manager_id
+            self._pods_book[pod_name]['task_list']     = batches[idx]
+            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
+            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
+        
+        self.profiler.prof('submit_batch_stop', uid=self.run_id)
+
+        # watch the pods in the cluster
         self.cluster.watch()
 
 
@@ -449,56 +440,6 @@ class ChiCaas:
         print('Dataframe saved in {0}'.format(fname))
 
         return fname
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _schedule(self, tasks):
-
-        task_batch = copy.deepcopy(tasks)
-        batch_size = len(task_batch)
-        if not batch_size:
-            raise Exception('Batch size can not be 0')
-
-        # containers per pod
-        CPP = self.server.flavor.vcpus - 1
-
-        tasks_per_pod = []
-
-        container_grps = math.ceil(batch_size / CPP)
-
-        # If we cannot split the
-        # number into exactly 'container_grps of 10' parts
-        if(batch_size < container_grps):
-            print(-1)
-    
-        # If batch_size % container_grps == 0 then the minimum
-        # difference is 0 and all
-        # numbers are batch_size / container_grps
-        elif (batch_size % container_grps == 0):
-            for i in range(container_grps):
-                tasks_per_pod.append(batch_size // container_grps)
-        else:
-            # upto container_grps-(batch_size % container_grps) the values
-            # will be batch_size / container_grps
-            # after that the values
-            # will be batch_size / container_grps + 1
-            zp = container_grps - (batch_size % container_grps)
-            pp = batch_size // container_grps
-            for i in range(container_grps):
-                if(i>= zp):
-                    tasks_per_pod.append(pp + 1)
-                else:
-                    tasks_per_pod.append(pp)
-        
-        batch_map = tasks_per_pod
-
-        objs_batch = []
-        for batch in batch_map:
-           objs_batch.append(task_batch[:batch])
-           task_batch[:batch]
-           del task_batch[:batch]
-        return(objs_batch)
 
 
     # --------------------------------------------------------------------------

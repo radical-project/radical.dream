@@ -1,7 +1,7 @@
 import os
 import time
-import json
-import uuid
+import math
+import copy
 import datetime
 import pandas as pd
 import radical.utils as ru
@@ -24,13 +24,14 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 #
 class Cluster:
 
-    def __init__(self, run_id, remote):
+    def __init__(self, run_id, remote, cluster_size):
         
         self.id           = run_id
         self.remote       = remote
         self.pod_counter  = 0
         self.sandbox      = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
+        self.size         = cluster_size
 
     def start(self):
         self.remote.run('sudo microk8s start')
@@ -38,11 +39,14 @@ class Cluster:
 
     
     def bootstrap_local(self):
-
+        
         """
         deploy kubernetes cluster K8s on chi
         """
         print('booting K8s cluster on the remote machine')
+
+        self.profiler.prof('bootstrap_start', uid=self.id)
+
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
         boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
         self.remote.put(boostrapper)
@@ -55,6 +59,10 @@ class Cluster:
 
         # upload the bootstrapper code to the remote machine
         self.remote.run("./deploy_kuberentes_local.sh")
+
+        self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        self.profiler.prof('cluster_warmup_start', uid=self.id)
         while True:
             # wait for the microk8s to be ready
             stream = self.remote.run('sudo microk8s status --wait-ready')
@@ -66,6 +74,7 @@ class Cluster:
             else:
                 print('waiting for Kuberentes cluster to be running')
                 time.sleep(1)
+        self.profiler.prof('cluster_warmup_stop', uid=self.id)
 
 
     # --------------------------------------------------------------------------
@@ -77,57 +86,79 @@ class Cluster:
             return
 
 
-    # --------------------------------------------------------------------------
-    #
-    def generate_pod(self, ctasks):
+    def generate_pods(self, ctasks):
 
-        pod_id     = str(self.pod_counter).zfill(6)
-        self.profiler.prof('gen_pod_start', uid=pod_id)
-        pod_file   = '{0}/hydraa_pod_{1}.json'.format(self.sandbox, pod_id)
-        containers = []
-        for ctask in ctasks:
-            envs = []
-            if ctask.env_var:
-                for env in ctask.env_vars:
-                    pod_env  = client.V1EnvVar(name = env[0], value = env[1])
-                    envs.append(pod_env)
+        pods            = []
+        pods_names      = []
 
-            pod_cpu = "{0}m".format(ctask.vcpus * 1000)
-            pod_mem = "{0}Mi".format(ctask.memory)
+        self.profiler.prof('schedule_pods_start', uid=self.id)
+        batches         = self.schedule(ctasks)
+        self.profiler.prof('schedule_pods_stop', uid=self.id)
 
-            resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                      limits={"cpu": pod_cpu, "memory": pod_mem})
 
-            pod_container = client.V1Container(name = ctask.name, image = ctask.image,
-                        resources = resources, command = ctask.cmd, env = envs)
+        depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
-            containers.append(pod_container)
+        for batch in batches:
+            pod_id     = str(self.pod_counter).zfill(6)
+            containers = []
+
+            self.profiler.prof('create_pod_start', uid=pod_id)
+            for ctask in batch:
+                envs = []
+                if ctask.env_var:
+                    for env in ctask.env_vars:
+                        pod_env  = client.V1EnvVar(name = env[0], value = env[1])
+                        envs.append(pod_env)
+
+                pod_cpu = "{0}m".format(ctask.vcpus * 1000)
+                pod_mem = "{0}Mi".format(ctask.memory)
+
+                resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
+                                                        limits={"cpu": pod_cpu, "memory": pod_mem})
+
+                pod_container = client.V1Container(name = ctask.name, image = ctask.image,
+                            resources = resources, command = ctask.cmd, env = envs)
+                
+                containers.append(pod_container)
+            
+            pod_name      = "hydraa-pod-{0}".format(pod_id)
+            pod_metadata  = client.V1ObjectMeta(name = pod_name)
+
+            # check if we need to restart the task
+            if ctask.restart:
+                restart_policy = ctask.restart
+            else:
+                restart_policy = 'Never'
+
+            pod_spec  = client.V1PodSpec(containers=containers,
+                                restart_policy=restart_policy)
+
+            pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
+                            metadata=pod_metadata, spec=pod_spec)
+
+            # santize the json object
+            sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
+
+            pods.append(sn_pod)
+            pods_names.append(pod_name)
+            
+            self.pod_counter +=1
         
-        pod_name      = "hydraa-pod-{0}".format(pod_id)
-        pod_metadata  = client.V1ObjectMeta(name = pod_name)
+        self.profiler.prof('create_pod_stop', uid=pod_id)
 
-        # check if we need to restart the task
-        if ctask.restart:
-            restart_policy = ctask.restart
-        else:
-            restart_policy = 'Never'
+        with open(depolyment_file, 'w') as f:
+            for p in pods:
+                print(p, file=f)
 
-        pod_spec  = client.V1PodSpec(containers=containers,
-                             restart_policy=restart_policy)
-
-        pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
-                         metadata=pod_metadata, spec=pod_spec)
+        # we are faking a json file here
+        with open(depolyment_file, "r") as f:
+            text = f.read()
+            text = text.replace("'", '"')
         
-        self.profiler.prof('gen_pod_stop', uid=pod_id)
+        with open(depolyment_file, "w") as f:
+            text = f.write(text)
 
-        # FIXME: generate a single deployment file for all batches(pods)
-        with open(pod_file, 'w') as f:
-            sanitized_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
-            json.dump(sanitized_pod, f)
-
-        self.pod_counter +=1
-
-        return pod_file, pod_name
+        return depolyment_file, pods_names, batches
 
 
     # --------------------------------------------------------------------------
@@ -144,29 +175,78 @@ class Cluster:
             return True
 
 
-    # --------------------------------------------------------------------------
-    #
-    def submit_pod(self, pod_file):
+    def submit(self, ctasks):
 
         # upload the pods file before bootstrapping
         # FIXME: we get socket closed if we did it
         # in the reverse order, because we modify 
         # the firewall of the node
 
-        # upload the pods.json
+        self.profiler.prof('generate_pods_start', uid=self.id)
+        depolyment_file, pods_names, batches = self.generate_pods(ctasks)
+        self.profiler.prof('generate_pods_stop', uid=self.id)
         
-        self.remote.put(pod_file)
+        # upload the pods.json
+        self.remote.put(depolyment_file)
 
         # deploy the pods.json on the cluster
 
-        self.profiler.prof('submit_pod_start', uid=self.id)
-        pod_name = os.path.basename(pod_file)
-        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(pod_name))
-        self.profiler.prof('submit_pod_start', uid=self.id)
+        name = os.path.basename(depolyment_file)
+        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(name))
 
         #FIXME: create a monitering of the pods/containers
         
-        return True
+        return depolyment_file, pods_names, batches
+
+
+    # --------------------------------------------------------------------------
+    #
+    def schedule(self, tasks):
+
+        task_batch = copy.deepcopy(tasks)
+        batch_size = len(task_batch)
+        if not batch_size:
+            raise Exception('Batch size can not be 0')
+
+        # containers per pod
+        CPP = self.size
+
+        tasks_per_pod = []
+
+        container_grps = math.ceil(batch_size / CPP)
+
+        # If we cannot split the
+        # number into exactly 'container_grps of 10' parts
+        if(batch_size < container_grps):
+            print(-1)
+    
+        # If batch_size % container_grps == 0 then the minimum
+        # difference is 0 and all
+        # numbers are batch_size / container_grps
+        elif (batch_size % container_grps == 0):
+            for i in range(container_grps):
+                tasks_per_pod.append(batch_size // container_grps)
+        else:
+            # upto container_grps-(batch_size % container_grps) the values
+            # will be batch_size / container_grps
+            # after that the values
+            # will be batch_size / container_grps + 1
+            zp = container_grps - (batch_size % container_grps)
+            pp = batch_size // container_grps
+            for i in range(container_grps):
+                if(i>= zp):
+                    tasks_per_pod.append(pp + 1)
+                else:
+                    tasks_per_pod.append(pp)
+        
+        batch_map = tasks_per_pod
+
+        objs_batch = []
+        for batch in batch_map:
+           objs_batch.append(task_batch[:batch])
+           task_batch[:batch]
+           del task_batch[:batch]
+        return(objs_batch)
 
 
     def get_pod_status(self):
