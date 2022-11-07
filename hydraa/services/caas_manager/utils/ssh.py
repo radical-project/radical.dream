@@ -24,8 +24,8 @@ class Remote:
         self.conn.put(file)
     
 
-    def run(self, cmd):
-        run = self.conn.run(cmd)
+    def run(self, cmd, hide=False):
+        run = self.conn.run(cmd, hide=hide)
         return run
 
 

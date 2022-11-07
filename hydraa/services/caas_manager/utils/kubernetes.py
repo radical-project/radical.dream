@@ -16,7 +16,6 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 true    = True
 false   = False
 null    = None
-HOME    = str(Path.home())
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 
@@ -24,12 +23,12 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 #
 class Cluster:
 
-    def __init__(self, run_id, remote, cluster_size):
+    def __init__(self, run_id, remote, cluster_size, sandbox):
         
         self.id           = run_id
         self.remote       = remote
         self.pod_counter  = 0
-        self.sandbox      = '{0}/hydraa.sandbox.{1}'.format(HOME, self.id)
+        self.sandbox      = sandbox
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
         self.size         = cluster_size
 
@@ -165,14 +164,16 @@ class Cluster:
     #
     def wait(self):
         while True:
-            cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded | wc -l'
-            done_pods = self.remote.run(cmd).stdout
-            if str(self.pod_counter -1) in done_pods:
+            cmd = 'sudo microk8s kubectl '
+            cmd += 'get pod --field-selector=status.phase=Succeeded '
+            cmd += '| grep Completed* | wc -l'
+            done_pods = self.remote.run(cmd, hide=True).stdout.strip()
+            if self.pod_counter == int(done_pods):
+                print('{0} pods with finished with status Completed'.format(done_pods))
                 break
             else:
-                time.sleep(5)
-
-            return True
+                time.sleep(2)
+        return True
 
 
     def submit(self, ctasks):
@@ -254,7 +255,7 @@ class Cluster:
         #FIXME: get the ifno of a specifc pod by allowing 
         # this function to get pod_id
         cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
-        status = self.remote.run(cmd).stdout
+        status = self.remote.run(cmd, hide=True).stdout
         response = eval(status)
 
         # FIXME: generate profiles as pd dataframe
@@ -288,7 +289,7 @@ class Cluster:
     def get_pod_events(self):
         
         cmd = 'sudo microk8s kubectl get events -A -o json' 
-        events = self.remote.run(cmd).stdout
+        events = self.remote.run(cmd, hide=True).stdout
         response = eval(events)
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:

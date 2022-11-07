@@ -72,7 +72,8 @@ class ChiCaas:
         self.asynchronous = asynchronous
 
         # FIXME: move this to utils
-        self.sandbox  = '{0}/hydraa.sandbox.{1}'.format(HOME, self.run_id)
+        self.sandbox  = '{0}/hydraa.{1}.sandbox.{2}'.format(HOME, CHI,
+                                                          self.run_id)
         
         os.mkdir(self.sandbox, 0o777)
         
@@ -134,7 +135,8 @@ class ChiCaas:
         # containers per pod
         cluster_size = self.server.flavor.vcpus - 1
 
-        self.cluster = kubernetes.Cluster(self.run_id, self.remote, cluster_size)
+        self.cluster = kubernetes.Cluster(self.run_id, self.remote, cluster_size,
+                                                                    self.sandbox)
 
         self.cluster.bootstrap_local()
 
@@ -414,7 +416,9 @@ class ChiCaas:
         self.profiler.prof('submit_batch_stop', uid=self.run_id)
 
         # watch the pods in the cluster
-        self.cluster.watch()
+        self.cluster.wait()
+
+        self.profiles()
 
 
     # --------------------------------------------------------------------------
@@ -423,8 +427,7 @@ class ChiCaas:
         
         pod_stamps  = self.cluster.get_pod_status()
         task_stamps = self.cluster.get_pod_events()
-        fname = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox, CHI,
-                                            len(self._tasks_book))
+        fname = '{0}/{1}_ctasks.csv'.format(self.sandbox, len(self._tasks_book))
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname
