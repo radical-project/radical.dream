@@ -399,7 +399,9 @@ class ChiCaas:
             ctask.provider    = CHI
             ctask.launch_type = self.launch_type
 
-
+            self._tasks_book[str(ctask.id)] = ctask.name
+            print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
+                                                                        end='\r')
             self._task_id +=1
 
         # submit to kubernets cluster
