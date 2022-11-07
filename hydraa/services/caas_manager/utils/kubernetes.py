@@ -36,6 +36,10 @@ class Cluster:
         self.remote.run('sudo microk8s start')
     
 
+    def restart(self):
+        self.stop()
+        self.start()
+
     
     def bootstrap_local(self):
         
@@ -73,6 +77,17 @@ class Cluster:
             else:
                 print('waiting for Kuberentes cluster to be running')
                 time.sleep(1)
+        
+        # the default ttl for Microk8s cluster to keep the historical
+        # event is 5m we increase it to 24 hours
+        set_ttl = ''
+        set_ttl += 'sudo sed -i s/--event-ttl=5m/--event-ttl=1440m/ '
+        set_ttl += '/var/snap/microk8s/current/args/kube-apiserver'
+        
+        # we are modifying a service of microk8s, we have to pay
+        # the price of restarting microk8s to enable the new ttl
+        self.remote.run(set_ttl)
+        self.restart()
         self.profiler.prof('cluster_warmup_stop', uid=self.id)
 
 
@@ -341,6 +356,7 @@ class Cluster:
     #
     def stop(self):
         self.remote.run('sudo microk8s stop')
+
 
     def delete(self):
         pass

@@ -191,7 +191,7 @@ class Jet2Caas():
 
         if not keypair:
             print("creating ssh key Pair")
-            key_name = 'id_rsa'
+            key_name = 'id_rsa_{0}'.format(self.run_id)
             keypair  = self.client.create_keypair(name=key_name)
 
             ssh_dir_path     = '{0}/.ssh'.format(self.sandbox)
