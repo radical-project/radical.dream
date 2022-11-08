@@ -251,13 +251,12 @@ class ChiCaas:
         instance    = None
         print('creating {0}'.format(server_name))
         if self.launch_type == 'KVM':
-            import chi.server
-
             instance = self.client.create_server(name=server_name, 
                                                  image=image, 
                                                  flavor=flavor,
                                                  key_name=keypair.name)
 
+            # Wait for a server to reach ACTIVE status.
             self.client.wait_for_server(instance)
 
         if self.launch_type == 'Baremetal':
@@ -340,35 +339,20 @@ class ChiCaas:
     #
     def create_and_assign_floating_ip(self):
 
+        ip = self.client.create_floating_ip()
+        # FIXME: some error about an ip from the floating ip list
+        # that can not be added.
         try:
-            # the user provided a running instance
-            # so let's extract the IP from it
-            if self.vm.VmId:
-                addresses = self.server.addresses.get('sharednet1', None)
-                if addresses:
-                    for address in addresses:
-                        ip_type = address.get('OS-EXT-IPS:type')
-                        if ip_type == 'floating':
-                            ip = address.get('addr')
-                            return ip
-            # let's create a public ip
-            else:
-                # FIXME: some error about an ip from the floating ip list
-                # that can not be added.
-                try:
-                    ip = self.client.create_floating_ip()
-                    self.client.add_ip_list(self.server, [ip.floating_ip_address])
-                    return ip.floating_ip_address
-                except exc.exceptions.ConflictException:
-                    print('can not assign ip (machine already has a public ip)')
-                    assigned_ips = self.client.list_floating_ips()
-                    for assigned_ip in assigned_ips:
-                        if assigned_ip.status == 'ACTIVE':
-                            attached_ip = assigned_ip.name
-                            return attached_ip
+            self.client.add_ip_list(self.server, [ip.floating_ip_address])
+        except exc.exceptions.ConflictException:
+            pass
 
-        except exc.exceptions.BadRequestException as e:
-            raise Exception(e)
+        assigned_ips = self.client.list_floating_ips()
+
+        for assigned_ip in assigned_ips:
+            if assigned_ip.status == 'ACTIVE':
+                attached_ip = assigned_ip.name
+                return attached_ip
 
 
     # --------------------------------------------------------------------------
@@ -429,7 +413,9 @@ class ChiCaas:
         
         pod_stamps  = self.cluster.get_pod_status()
         task_stamps = self.cluster.get_pod_events()
-        fname = '{0}/{1}_ctasks.csv'.format(self.sandbox, len(self._tasks_book))
+        fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
+                                             len(self._tasks_book),
+                                                 self.cluster.size)
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname

@@ -357,7 +357,9 @@ class Jet2Caas():
         
         pod_stamps  = self.cluster.get_pod_status()
         task_stamps = self.cluster.get_pod_events()
-        fname = '{0}/{1}_ctasks.csv'.format(self.sandbox, len(self._tasks_book))
+        fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
+                                             len(self._tasks_book),
+                                                 self.cluster.size)
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname

@@ -17,16 +17,19 @@ class Remote:
         conn = fabric.Connection(self.ip, port=22, user=self.user,
                         connect_kwargs={'key_filename' :self.key})
         self.check_ssh_connection(self.ip)
-        
+
         return conn
     
     def put(self, file):
         self.conn.put(file)
-    
+
 
     def run(self, cmd, hide=False):
         run = self.conn.run(cmd, hide=hide)
         return run
+
+    def get(self, file):
+        self.conn.get(file)
 
 
     def check_ssh_connection(self, ip):

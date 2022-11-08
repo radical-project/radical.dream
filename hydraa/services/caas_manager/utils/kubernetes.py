@@ -2,6 +2,7 @@ import os
 import time
 import math
 import copy
+import json
 import datetime
 import pandas as pd
 import radical.utils as ru
@@ -13,9 +14,7 @@ from kubernetes import client, config
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-true    = True
-false   = False
-null    = None
+
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 
@@ -267,11 +266,11 @@ class Cluster:
 
     def get_pod_status(self):
 
-        #FIXME: get the ifno of a specifc pod by allowing 
-        # this function to get pod_id
-        cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json'
-        status = self.remote.run(cmd, hide=True).stdout
-        response = eval(status)
+        cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
+        self.remote.run(cmd, hide=True)
+        self.remote.get('pod_status.json')
+        with open('pod_status.json', 'r') as f:
+            response = json.load(f)
 
         # FIXME: generate profiles as pd dataframe
         if response:
@@ -296,6 +295,9 @@ class Cluster:
 
                         else:
                             print('pods did not finish yet or failed')
+
+            os.remove('pod_status.json')
+
             return df
     
 
@@ -303,9 +305,12 @@ class Cluster:
     #
     def get_pod_events(self):
         
-        cmd = 'sudo microk8s kubectl get events -A -o json' 
-        events = self.remote.run(cmd, hide=True).stdout
-        response = eval(events)
+        cmd = 'sudo microk8s kubectl get events -A -o json > pod_events.json' 
+        self.remote.run(cmd, hide=True)
+        self.remote.get('pod_events.json')
+        with open('pod_events.json', 'r') as f:
+            response = json.load(f)
+
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
             id = 0
@@ -320,6 +325,8 @@ class Cluster:
                             reason_lts = self.convert_time(it.get('lastTimestamp', 0.0))
                             df.loc[id] = (cid, reason, reason_fts, reason_lts)
                             id +=1
+
+        os.remove('pod_events.json')
         
         return df
 
