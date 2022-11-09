@@ -274,20 +274,23 @@ class Jet2Caas():
     #
     def create_and_assign_floating_ip(self):
         
-        ip = self.client.create_floating_ip()
-        # FIXME: some error about an ip from the floating ip list
-        # that can not be added.
-        try:
-            self.client.add_ip_list(self.server, [ip.floating_ip_address])
-        except exc.exceptions.ConflictException:
-            pass
-
+        # FIXME: Openstack has a bug that it does not show
+        # the assigned ip address to that server.
+        # As a workaround: we list the ips, we get
+        # the status and the creattion timestamp
+        # we sort them and get the last one got created
         assigned_ips = self.client.list_floating_ips()
-
+        ips = {}
         for assigned_ip in assigned_ips:
-            if assigned_ip.status == 'ACTIVE':
-                attached_ip = assigned_ip.name
-                return attached_ip
+            if not assigned_ip.status == 'DONW':
+                if assigned_ip.attached:
+                    creation_ts = assigned_ip.created_at
+                    ips[assigned_ip.floating_ip_address] = creation_ts
+        
+        # sort them by value (creation_ts)
+        sorted_ips = dict(sorted(ips.items(), key=lambda x: x[1]))
+
+        return list(sorted_ips)[-1]
 
 
     # --------------------------------------------------------------------------
