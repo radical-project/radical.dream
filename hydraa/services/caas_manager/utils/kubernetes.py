@@ -369,3 +369,59 @@ class Cluster:
         pass
     
 
+class Aks_Cluster(Cluster):
+
+
+    # --------------------------------------------------------------------------
+    #
+    def __init__(self, run_id, resource_group, cluster_size, sandbox, nodes=1):
+        self.id            = run_id
+        self.cluster_name  = 'Hydraa_AKS_Cluster_{0}'.format(self.id)
+        self.resource_grup = resource_group
+        self.nodes         = nodes
+        self.max_pods      = 250
+        self.size          = cluster_size
+        self.sandbox       = sandbox
+        super().__init__(run_id, None, cluster_size, sandbox)
+
+        print('AKS cluster requires to authenticate with Azure')
+        os.popen('az login --use-device-code')
+
+
+    # --------------------------------------------------------------------------
+    #
+    def bootstrap(self):
+        cmd  = 'az aks create '
+        cmd += '-g {0} '.format(self.resource_grup.name)
+        cmd += '-n {0} '.format(self.cluster_name)
+        cmd += '--enable-managed-identity '
+        cmd += '--node-count {0} '.format(self.nodes)
+        cmd += '--generate-ssh-keys'
+
+        os.popen(cmd)
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def authenticate(self):
+        cmd  = 'az aks get-credentials '
+        cmd += '--admin --name {0}'.format(self.cluster_name)
+        cmd += '--resource-group {0} -y'.format(self.resource_grup.name)
+
+        os.popen(cmd)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def submit(self, ctasks):
+
+        self.profiler.prof('generate_pods_start', uid=self.id)
+        depolyment_file, pods_names, batches = self.generate_pods(ctasks)
+        self.profiler.prof('generate_pods_stop', uid=self.id)
+
+        name = os.path.basename(depolyment_file)
+        self.remote.run('kubectl apply -f {0}'.format(name))
+
+        #FIXME: create a monitering of the pods/containers
+        
+        return depolyment_file, pods_names, batches
