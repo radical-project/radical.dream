@@ -188,11 +188,6 @@ class AzureCaas():
     #
     def create_resource_group(self):
 
-        for resource_group in self.res_client.resource_groups.list():
-            if 'hydraa-rg' in resource_group.name:
-                print('hydraa resource group exist')
-                return resource_group
-
         # Create (and then get) a resource group into which the container groups
         # are to be created
         self._resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)

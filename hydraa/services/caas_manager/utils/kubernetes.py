@@ -195,9 +195,11 @@ class Cluster:
             if self.remote:
                 done_pods = self.remote.run(cmd, hide=True).stdout.strip()
             else:
-                done_pods = sh_callout(cmd, shell=True)
+                out, err, _ = sh_callout(cmd, shell=True)
+                done_pods = int(out.strip())
 
             if done_pods:
+                print('completed pods: {0}'.format(done_pods), end='\r')
                 if self.pod_counter == int(done_pods):
                     print('{0} pods with finished with status Completed'.format(done_pods))
                     break

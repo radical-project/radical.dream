@@ -14,9 +14,6 @@ import keystoneauth1, blazarclient
 from chi import lease
 from chi import server
 
-from pathlib import Path
-from openstack.cloud import exc
-
 from collections import OrderedDict
 from hydraa.services.caas_manager.utils import ssh
 from hydraa.services.caas_manager.utils import kubernetes
@@ -24,7 +21,6 @@ from hydraa.services.caas_manager.utils import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-HOME   = str(Path.home())
 CHI    = 'chameleon'
 ACTIVE = True
 
@@ -41,7 +37,7 @@ class ChiCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, manager_id, cred, asynchronous, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, asynchronous, prof, DryRun=False):
         
         self.manager_id = manager_id
 
@@ -71,10 +67,7 @@ class ChiCaas:
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
 
-        # FIXME: move this to utils
-        self.sandbox  = '{0}/hydraa.{1}.sandbox.{2}'.format(HOME, CHI,
-                                                          self.run_id)
-        
+        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, CHI, self.run_id)
         os.mkdir(self.sandbox, 0o777)
         
         self.profiler = prof(name=__name__, path=self.sandbox)
