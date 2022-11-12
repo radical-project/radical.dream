@@ -2,10 +2,11 @@ import uuid
 import radical.utils as ru
 from typing import List
 
-from hydraa.cloud_vm.vm     import AwsVM
+from pathlib                import Path
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
 
+from hydraa.services.caas_manager.utils      import misc
 from hydraa.services.caas_manager.chi_caas   import ChiCaas
 from hydraa.services.caas_manager.aws_caas   import AwsCaas
 from hydraa.services.caas_manager.jet2_caas  import Jet2Caas
@@ -42,25 +43,29 @@ class CaasManager:
 
         if proxy:
             self._proxy = proxy_mgr
+
         # TODO: add the created classes based on the loaded
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
+        sandbox = misc.create_sandbox(_id)
+
         for provider in self._proxy._loaded_providers:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                self.AwsCaas = AwsCaas(_id, cred, asynchronous)
+                self.AwsCaas = AwsCaas(sandbox, _id, cred, asynchronous, prof)
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                self.AzureCaas = AzureCaas(_id, cred, asynchronous)
+                self.AzureCaas = AzureCaas(sandbox, _id, cred, asynchronous, prof)
             if provider == GCLOUD:
                 raise NotImplementedError
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
-                self.Jet2Caas = Jet2Caas(_id, cred, asynchronous, prof)
+                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, asynchronous, prof)
             if provider == CHI:
                 cred = self._proxy._load_credentials(CHI)
-                self.ChiCaas = ChiCaas(_id, cred, asynchronous, prof)
-                
+                self.ChiCaas = ChiCaas(sandbox, _id, cred, asynchronous, prof)
+
+   
     # --------------------------------------------------------------------------
     #
     def get_ctask_cost(self, provider):

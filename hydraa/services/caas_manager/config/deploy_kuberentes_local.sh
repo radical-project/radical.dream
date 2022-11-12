@@ -19,13 +19,24 @@ boot_kubernetes_ubuntu_PM () {
     # Enable storage addons
     sudo microk8s enable dns dashboard storage
 
+
+    # Set alias for the "sudo microk8s kubctl"
+    if [[ ! -e $HOME/.bash_aliases ]]; then
+        touch $HOME/.bash_aliases
+    fi
+
+    echo "alias kubectl='sudo microk8s kubectl'" >> $HOME/.bash_aliases
+
+    # Activate the alias
+    source $HOME/.bash_aliases
+    
     # Access the cluster namespace
-    sudo microk8s kubectl get all --all-namespaces
+    kubectl get all --all-namespaces
 
     # check the cluster resources
-    sudo microk8s kubectl describe node
+    kubectl describe node
 
-    sudo microk8s kubectl get all --all-namespaces
+    kubectl get all --all-namespaces
 
     sudo microk8s.status
 }

@@ -4,12 +4,12 @@ import math
 import copy
 import json
 import datetime
-import pandas as pd
+import pandas        as pd
 import radical.utils as ru
 
-from pathlib import Path
-from collections import OrderedDict
-from kubernetes import client, config
+from .misc          import sh_callout
+from kubernetes     import client
+from azure.cli.core import get_default_cli
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -33,11 +33,15 @@ class Cluster:
 
     def start(self):
         self.remote.run('sudo microk8s start')
-    
+        return True
 
     def restart(self):
         self.stop()
         self.start()
+    
+    def delete_completed_pods(self):
+        self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
+        return True
 
     
     def bootstrap_local(self):
@@ -93,8 +97,12 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def watch(self):
+        cmd = 'kubectl get pods --watch'
         try:
-            self.remote.run('sudo microk8s kubectl get pods --watch')
+            if self.remote:
+                self.remote.run(cmd)
+            else:
+                sh_callout(cmd,  shell=True)
         except KeyboardInterrupt:
             return
 
@@ -177,16 +185,24 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def wait(self):
+        # FIXME: convert this to a dameon thread 
+        cmd  = 'kubectl '
+        cmd += 'get pod --field-selector=status.phase=Succeeded '
+        cmd += '| grep Completed* | wc -l'
+        
         while True:
-            cmd = 'sudo microk8s kubectl '
-            cmd += 'get pod --field-selector=status.phase=Succeeded '
-            cmd += '| grep Completed* | wc -l'
-            done_pods = self.remote.run(cmd, hide=True).stdout.strip()
-            if self.pod_counter == int(done_pods):
-                print('{0} pods with finished with status Completed'.format(done_pods))
-                break
+            done_pods = 0
+            if self.remote:
+                done_pods = self.remote.run(cmd, hide=True).stdout.strip()
             else:
-                time.sleep(2)
+                done_pods = sh_callout(cmd, shell=True)
+
+            if done_pods:
+                if self.pod_counter == int(done_pods):
+                    print('{0} pods with finished with status Completed'.format(done_pods))
+                    break
+                else:
+                    time.sleep(5)
         return True
 
 
@@ -196,18 +212,19 @@ class Cluster:
         # FIXME: we get socket closed if we did it
         # in the reverse order, because we modify 
         # the firewall of the node
-
+        cmd = 'kubectl apply -f {0}'.format(name)
         self.profiler.prof('generate_pods_start', uid=self.id)
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
-        
+
         # upload the pods.json
-        self.remote.put(depolyment_file)
-
-        # deploy the pods.json on the cluster
-
         name = os.path.basename(depolyment_file)
-        self.remote.run('sudo microk8s kubectl apply -f {0}'.format(name))
+        if self.remote:
+            # deploy the pods.json on the cluster
+            self.remote.put(depolyment_file)
+            self.remote.run(cmd)
+        else:
+            sh_callout(cmd, shell=True)
 
         #FIXME: create a monitering of the pods/containers
         
@@ -266,9 +283,13 @@ class Cluster:
 
     def get_pod_status(self):
 
-        cmd = 'sudo microk8s kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
-        self.remote.run(cmd, hide=True)
-        self.remote.get('pod_status.json')
+        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
+        if self.remote:
+            self.remote.run(cmd, hide=True)
+            self.remote.get('pod_status.json')
+        else:
+            sh_callout(cmd, shell=True)
+
         with open('pod_status.json', 'r') as f:
             response = json.load(f)
 
@@ -305,9 +326,12 @@ class Cluster:
     #
     def get_pod_events(self):
         
-        cmd = 'sudo microk8s kubectl get events -A -o json > pod_events.json' 
-        self.remote.run(cmd, hide=True)
-        self.remote.get('pod_events.json')
+        cmd = 'kubectl get events -A -o json > pod_events.json' 
+        if self.remote:
+            self.remote.run(cmd, hide=True)
+            self.remote.get('pod_events.json')
+        else:
+            sh_callout(cmd, shell=True)
         with open('pod_events.json', 'r') as f:
             response = json.load(f)
 
@@ -374,41 +398,74 @@ class Aks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, run_id, resource_group, cluster_size, sandbox, nodes=1):
-        self.id            = run_id
-        self.cluster_name  = 'Hydraa_AKS_Cluster_{0}'.format(self.id)
-        self.resource_grup = resource_group
-        self.nodes         = nodes
-        self.max_pods      = 250
-        self.size          = cluster_size
-        self.sandbox       = sandbox
-        super().__init__(run_id, None, cluster_size, sandbox)
+    def __init__(self, run_id, resource_group, sandbox, instance, nodes=1):
+        self.id             = run_id
+        self.cluster_name   = 'hydraa_aks_cluster'
+        self.resource_group = resource_group
+        self.nodes          = nodes
+        self.max_pods       = 250
+        self.size           = 0
+        self.sandbox        = sandbox
+        self.instance       = instance
+        self.config         = None
+        super().__init__(run_id, None, self.size, sandbox)
 
-        print('AKS cluster requires to authenticate with Azure')
-        os.popen('az login --use-device-code')
+        az_cli = get_default_cli()
+        az_cli.invoke(['login', '--use-device-code'])
 
 
     # --------------------------------------------------------------------------
     #
     def bootstrap(self):
+
+        self.profiler.prof('bootstrap_start', uid=self.id)
+        if not self.size:
+            self.size = self.get_vm_size(self.instance) - 1
+        
         cmd  = 'az aks create '
-        cmd += '-g {0} '.format(self.resource_grup.name)
+        cmd += '-g {0} '.format(self.resource_group.name)
         cmd += '-n {0} '.format(self.cluster_name)
         cmd += '--enable-managed-identity '
+        cmd += '--node-vm-size {0} '.format(self.instance)
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        os.popen(cmd)
-    
+        print('building aks cluster..')
+        time.sleep(3)
+        self.config = sh_callout(cmd, shell=True, munch=True)
+
+        self.profiler.prof('authenticate_start', uid=self.id)
+        self.authenticate()
+        self.profiler.prof('bootstrap_stop', uid=self.id)
+        
+
 
     # --------------------------------------------------------------------------
     #
     def authenticate(self):
+        # FIXME: we need to find a way to keep the config
+        # of existing kubernetes (for multinode cluster)
         cmd  = 'az aks get-credentials '
-        cmd += '--admin --name {0}'.format(self.cluster_name)
-        cmd += '--resource-group {0} -y'.format(self.resource_grup.name)
+        cmd += '--admin --name {0} '.format(self.cluster_name)
+        cmd += '--resource-group {0} '.format(self.resource_group.name)
+        cmd += '--overwrite-existing'
 
-        os.popen(cmd)
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)
+
+        return True
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_vm_size(self, vm_id):
+        cmd = 'az vm list-sizes --location eastus'
+        vms = sh_callout(cmd, shell=True, munch=True)
+        for vm in vms:
+            name = vm.get('name')
+            if name == vm_id:
+               return vm['numberOfCores']
 
 
     # --------------------------------------------------------------------------
@@ -419,8 +476,9 @@ class Aks_Cluster(Cluster):
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        name = os.path.basename(depolyment_file)
-        self.remote.run('kubectl apply -f {0}'.format(name))
+        cmd = 'kubectl apply -f {0}'.format(depolyment_file)
+        out, err, _ = sh_callout(cmd, shell=True)
+        print(out, err)
 
         #FIXME: create a monitering of the pods/containers
         

@@ -25,6 +25,8 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
                                                  ResourceRequirements,
                                                  OperatingSystemTypes)
 
+from hydraa.services.caas_manager.utils import kubernetes
+
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
@@ -43,7 +45,8 @@ CGPRG = 60  # Number of container groups per resource group
 
 
 class AzureCaas():
-    def __init__(self, manager_id, cred, asynchronous, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, asynchronous,
+                                            prof, DryRun=False):
         
         self.manager_id = manager_id
 
@@ -57,12 +60,14 @@ class AzureCaas():
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
+        self.cluster                = None
         self._resource_group        = None
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
 
         self.run_id       = None 
         self._task_id     = 0
+        self.run_id       = str(uuid.uuid4())
 
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
@@ -76,6 +81,11 @@ class AzureCaas():
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
+
+        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, AZURE, self.run_id)
+        os.mkdir(self.sandbox, 0o777)
+
+        self.profiler = prof(name=__name__, path=self.sandbox)
 
         atexit.register(self._shutdown)
 
@@ -95,20 +105,33 @@ class AzureCaas():
             self.__cleanup()
 
         self.status      = ACTIVE
-        self.run_id      = str(uuid.uuid4())
         self.launch_type = VM.LaunchType
 
         print("starting run {0}".format(self.run_id))
 
-        self._resource_group = self.create_resource_group()
-        self.submit(tasks)
+        self.profiler.prof('prep_start', uid=self.run_id)
 
+        self._resource_group = self.create_resource_group()
+        
         self.runs_tree[self.run_id] =  self._container_group_names
+
+        self.profiler.prof('prep_stop', uid=self.run_id)
+
+        if self.launch_type in ['AKS', 'aks']:
+            self.cluster = kubernetes.Aks_Cluster(self.run_id, 
+                                         self._resource_group,
+                               self.sandbox, VM.InstanceID, 1)
+
+            self.cluster.bootstrap()
+            self.submit_to_aks(tasks)
+        else:  
+            self.submit(tasks)
+            self._wait_tasks()
 
         if self.asynchronous:
             return self.run_id
 
-        self._wait_tasks()
+        
 
 
     # --------------------------------------------------------------------------
@@ -172,7 +195,7 @@ class AzureCaas():
 
         # Create (and then get) a resource group into which the container groups
         # are to be created
-        self._resource_group_name = 'hydraa-resource-group-{0}'.format(self.manager_id)
+        self._resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
 
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
@@ -220,6 +243,43 @@ class AzureCaas():
         self._container_group_names[self._container_group_name] = OrderedDict()
 
         return self._container_group_name
+    
+    def submit_to_aks(self, ctasks):
+        """
+        submit a single pod per batch of tasks
+        """
+        self.profiler.prof('submit_batch_start', uid=self.run_id)
+        for ctask in ctasks:
+            ctask.run_id      = self.run_id
+            ctask.id          = self._task_id
+            ctask.name        = 'ctask-{0}'.format(self._task_id)
+            ctask.provider    = AZURE
+            ctask.launch_type = self.launch_type
+
+            self._tasks_book[str(ctask.id)] = ctask.name
+            print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
+                                                                        end='\r')
+            self._task_id +=1
+
+        # submit to kubernets cluster
+        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
+        
+        # create entry for the pod in the pods book
+        '''
+        for idx, pod_name in enumerate(pods_names):
+            self._pods_book[pod_name] = OrderedDict()
+            self._pods_book[pod_name]['manager_id']    = self.manager_id
+            self._pods_book[pod_name]['task_list']     = batches[idx]
+            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
+            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
+        
+        '''
+        self.profiler.prof('submit_batch_stop', uid=self.run_id)
+
+        # watch the pods in the cluster
+        self.cluster.wait()
+
+        self.profiles()
 
 
     # --------------------------------------------------------------------------
@@ -314,6 +374,10 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
         
+        if self.cluster:
+            self.cluster.wait()
+            return
+
         UP = "\x1B[3A"
         CLR = "\x1B[0K"
         print("\n\n")
@@ -366,20 +430,31 @@ class AzureCaas():
     #
     def profiles(self):
 
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(AZURE, len(self._tasks_book), self.manager_id)
+        fname = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
+                                       len(self._tasks_book),
+                                             self.manager_id)
 
         if os.path.isfile(fname):
             print('profiles already exist {0}'.format(fname))
             return fname
 
-        task_stamps = self._get_tasks_stamps()
-
         try:
             import pandas as pd
         except ModuleNotFoundError:
             print('pandas module required to obtain profiles')
-
-        df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
+        
+        
+        if self.cluster:
+            pod_stamps  = self.cluster.get_pod_status()
+            task_stamps = self.cluster.get_pod_events()
+            fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
+                                                len(self._tasks_book),
+                                                    self.cluster.size)
+            df = (pd.merge(pod_stamps, task_stamps, on='Task_ID'))
+        else:
+        
+            task_stamps = self._get_tasks_stamps()
+            df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
@@ -405,7 +480,7 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def list_container_groups(resource_group):
+    def list_container_groups(self, resource_group):
         """Lists the container groups in the specified resource group.
 
         Arguments:
