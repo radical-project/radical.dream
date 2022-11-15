@@ -189,10 +189,19 @@ class HybridWorkflow:
                         
                         #self.cloud_manager.submit(task)
 
+                    if not task['task'].arch:
+                        print('task {0} sent to the DEFAULT manager'.format(task['tid']))
+                        if task_input:
+                            result = task['task'].cmd(*tuple(task_input))
+                        else:
+                            result = task['task'].cmd()
+
                     if result:
                         with self.submission_lock:
                             self.running.pop(task['tid'])
                             self.finished[task['tid']] = [result]
+                    else:
+                        pass
                     
             except queue.Empty:
                 continue
