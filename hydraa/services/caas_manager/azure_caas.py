@@ -274,8 +274,6 @@ class AzureCaas():
         # watch the pods in the cluster
         self.cluster.wait()
 
-        self.profiles()
-
 
     # --------------------------------------------------------------------------
     #

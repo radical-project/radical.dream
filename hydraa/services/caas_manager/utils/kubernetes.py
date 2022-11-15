@@ -3,11 +3,15 @@ import time
 import math
 import copy
 import json
+import atexit
 import datetime
+
 import pandas        as pd
+import threading     as mt
 import radical.utils as ru
 
 from .misc          import sh_callout
+from functools      import reduce
 from kubernetes     import client
 from azure.cli.core import get_default_cli
 
@@ -201,13 +205,15 @@ class Cluster:
             if done_pods:
                 print('completed pods: {0}'.format(done_pods), end='\r')
                 if self.pod_counter == int(done_pods):
-                    print('{0} pods with finished with status Completed'.format(done_pods))
+                    print('{0} pods finished with status "Completed"'.format(done_pods))
                     break
                 else:
                     time.sleep(5)
         return True
 
 
+    # --------------------------------------------------------------------------
+    #
     def submit(self, ctasks):
 
         # upload the pods file before bootstrapping
@@ -410,10 +416,19 @@ class Aks_Cluster(Cluster):
         self.sandbox        = sandbox
         self.instance       = instance
         self.config         = None
+        self.stop_event     = mt.Event()
+        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="CP_Profiles")
+
+        self.dataframes     = []
+
         super().__init__(run_id, None, self.size, sandbox)
+
+        self.watch_profiles.daemon = True
 
         az_cli = get_default_cli()
         az_cli.invoke(['login', '--use-device-code'])
+
+        atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
 
 
     # --------------------------------------------------------------------------
@@ -433,13 +448,11 @@ class Aks_Cluster(Cluster):
         cmd += '--generate-ssh-keys'
 
         print('building aks cluster..')
-        time.sleep(3)
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('authenticate_start', uid=self.id)
         self.authenticate()
         self.profiler.prof('bootstrap_stop', uid=self.id)
-        
 
 
     # --------------------------------------------------------------------------
@@ -457,6 +470,28 @@ class Aks_Cluster(Cluster):
         print(out, err)
 
         return True
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def wait(self):
+        if super().wait():
+            self.profiler.prof('pods_finished', uid=self.id)
+            self.stop_event.set()
+            return True
+
+
+    # --------------------------------------------------------------------------
+    #
+    def stop_background(self, stop_event, threads):
+        """
+        stop the background task gracefully before exit
+        """
+        # request the background thread stop
+        stop_event.set()
+        # wait for the background thread to stop
+        for thread in threads:
+            thread.join()
 
 
     # --------------------------------------------------------------------------
@@ -482,6 +517,67 @@ class Aks_Cluster(Cluster):
         out, err, _ = sh_callout(cmd, shell=True)
         print(out, err)
 
-        #FIXME: create a monitering of the pods/containers
+        # start the profiles thread
+        self.watch_profiles.start()
         
         return depolyment_file, pods_names, batches
+
+
+    # --------------------------------------------------------------------------
+    #
+    def checkpoint_profiles(self):
+        """
+        AKS does not allow to modify the ttl-events
+        of the cluster meaning if we have an exeution
+        for > 1 hour the profiles will be deleted
+        from the cluster to be replaced by new ones, unless
+        we enable Azure monitoring which == $$.
+
+        This function will save a checkopint of the profiles
+        as a dataframe every 55 minutes and merge them at the
+        end of the execution.
+        https://github.com/Azure/AKS/issues/2140
+        """
+        self.profiler.prof('checkpoint_start', uid=self.id)
+        ids = 0
+        while not self.stop_event.is_set():
+            fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            for t in range(3300,0,-1):
+                if t == 1:
+                    self.profiler.prof('register_checkpoint', uid=self.id)
+                    print('registering a profiles checkpoint')
+                    df1 = self.get_pod_status()
+                    df2 = self.get_pod_events()
+                    df = (pd.merge(df1, df2, on='Task_ID'))
+                    self.dataframes.append(df)
+                    df.to_csv(fname)
+                    print('checkpoint profiles saved to {0}'.format(fname))
+
+                if self.stop_event.is_set():
+                    break
+
+                else:
+                    time.sleep(1)
+
+            ids +=1
+        
+        self.profiler.prof('checkpoint_stop', uid=self.id)
+
+
+
+class Eks_Cluster(Cluster):
+    def __init__(self, run_id, remote, cluster_size, sandbox):
+
+        super().__init__(run_id, remote, cluster_size, sandbox)
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def bootstrap(self):
+
+        self.profiler.prof('bootstrap_start', uid=self.id)
+        if not self.size:
+            self.size = self.get_vm_size(self.instance) - 1
+        
+        self.profiler.prof('bootstrap_stop', uid=self.id)
+    
