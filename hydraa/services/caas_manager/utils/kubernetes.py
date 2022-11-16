@@ -225,8 +225,6 @@ class Cluster:
         # in the reverse order, because we modify 
         # the firewall of the node
 
-        cmd = 'kubectl apply -f {0}'.format(name)
-
         self.profiler.prof('generate_pods_start', uid=self.id)
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
@@ -236,6 +234,8 @@ class Cluster:
         # remote mode: NSF cluster (we manage it via SSH)
         # embeded mode: Azure/AWS we manage by merging
         # the config of the cluster to the local machine
+
+        cmd = 'kubectl apply -f {0}'.format(name)
 
         # check if we are in remote mode or embeded mode
         if self.remote:
