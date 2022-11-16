@@ -686,7 +686,7 @@ class Eks_Cluster(Cluster):
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, nodes=1):
 
         self.id             = run_id
-        self.cluster_name   = 'hydraa_eks_cluster'
+        self.cluster_name   = 'Hydraa-Eks-Cluster'
         self.nodes          = nodes
         self.max_pods       = 250
         self.size           = 1
@@ -764,10 +764,10 @@ class Eks_Cluster(Cluster):
         desrired_capacity: we always assume it is the min_nodes
         """
 
-        stackName = "eks-auto-scaling-group-" + self.cluster_name
+        stackName = "Eks-Auto-Scaling-Group-" + self.cluster_name
         templateURL = 'https://amazon-eks.s3-us-west-2.amazonaws.com/cloudformation/2019-02-11/amazon-eks-nodegroup.yaml'
 
-        self.node_group_name = 'hydraa_eks_nodes_group'
+        self.node_group_name = 'Hydraa-Eks-Nodes-Group'
         params = [
         {'ParameterKey' : 'KeyName' , 
         'ParameterValue' : 'eksNodeKey' },
@@ -776,11 +776,11 @@ class Eks_Cluster(Cluster):
         {'ParameterKey' : 'NodeInstanceType' , 
         'ParameterValue' : self.vm.InstanceID },
         {'ParameterKey' : 'NodeAutoScalingGroupMinSize' , 
-        'ParameterValue' : self.vm.MinCount },
+        'ParameterValue' : str(self.vm.MinCount) },
         {'ParameterKey' : 'NodeAutoScalingGroupMaxSize' , 
-        'ParameterValue' : self.vm.MaxCount },
+        'ParameterValue' : str(self.vm.MaxCount) },
         {'ParameterKey' : 'NodeAutoScalingGroupDesiredCapacity' , 
-        'ParameterValue' : self.vm.MinCount },
+        'ParameterValue' : str(self.vm.MinCount) },
         {'ParameterKey' : 'ClusterName' , 
         'ParameterValue' : self.cluster_name },
         {'ParameterKey' : 'NodeGroupName' , 
