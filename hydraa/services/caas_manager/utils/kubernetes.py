@@ -19,7 +19,6 @@ from azure.cli.core import get_default_cli
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 
@@ -190,7 +189,11 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def wait(self):
-        # FIXME: convert this to a dameon thread 
+        # FIXME: for some reason the completed pods
+        #        are reported incorrectley, making
+        #        the cluster hold the resources
+        #        after the execution finished.
+
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
         cmd += '| grep Completed* | wc -l'
@@ -304,6 +307,8 @@ class Cluster:
         return(objs_batch)
 
 
+    # --------------------------------------------------------------------------
+    #
     def get_pod_status(self):
 
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
@@ -455,7 +460,14 @@ class Cluster:
     
 
 class Aks_Cluster(Cluster):
+    """Represents a single/multi node Kubrenetes cluster.
+       This class asssumes that:
 
+       1- Your user has the correct permessions for AKS and CLI.
+       2- Azure-cli is installed
+
+       NOTE: This class will overide any existing kubernetes
+    """
 
     # --------------------------------------------------------------------------
     #
@@ -470,7 +482,7 @@ class Aks_Cluster(Cluster):
         self.instance       = instance
         self.config         = None
         self.stop_event     = mt.Event()
-        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="CP_Profiles")
+        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
 
         self.dataframes     = []
 
@@ -512,7 +524,7 @@ class Aks_Cluster(Cluster):
     #
     def configure(self):
         # FIXME: we need to find a way to keep the config
-        # of existing kubernetes (for multinode cluster)
+        #        of existing kubernetes (for multinode cluster)
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
         cmd += '--resource-group {0} '.format(self.resource_group.name)
@@ -528,6 +540,7 @@ class Aks_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def wait(self):
+        # wait for all pods to finish
         if super().wait():
             self.profiler.prof('pods_finished', uid=self.id)
             self.stop_event.set()
@@ -576,7 +589,7 @@ class Aks_Cluster(Cluster):
 
 
 class Eks_Cluster(Cluster):
-    """Represents a single Kubrenetes cluster.
+    """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that you did the one time
        preparational steps:
 
@@ -588,8 +601,7 @@ class Eks_Cluster(Cluster):
 
        2- Create a CloudFormation S3 template stack (VPC).
 
-       3- This class will overide any existing kubernetes
-          config files under $HOME/.kube/config
+       NOTE: This class will overide any existing kubernetes config
     """
     def __init__(self, run_id, cluster_size, sandbox, iam, clf, ec2, eks):
 
@@ -608,7 +620,7 @@ class Eks_Cluster(Cluster):
         self.eks            = eks
         self.ec2            = ec2
 
-        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="CP_Profiles")
+        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="EKS_profiles_watcher")
 
         super().__init__(run_id, None, cluster_size, sandbox)
 
@@ -619,6 +631,8 @@ class Eks_Cluster(Cluster):
     #
     def bootstrap(self):
 
+        kubernetes_v = '1.22'
+
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         # Get role information
@@ -626,8 +640,8 @@ class Eks_Cluster(Cluster):
         roleArn = response['Role']['Arn']
         print("Found role ARN: ", roleArn)
 
-        response = self.clf.describe_stack_resources(StackName = 'eks-vpc',
-                                                   LogicalResourceId="VPC")
+        response = self.clf.describe_stack_resources(StackName         = 'eks-vpc',
+                                                     LogicalResourceId = 'VPC')
         vpcId = response['StackResources'][0]['PhysicalResourceId']
         print("Found VPC ID: ", vpcId)
 
@@ -635,9 +649,9 @@ class Eks_Cluster(Cluster):
         subnets = [subnet.id for subnet in vpc.subnets.all()]
         print("Found subnets: ", subnets)
 
-        self.config = self.eks.create_cluster(name=self.cluster_name, version=k8Version, roleArn = roleArn,
-                                         resourcesVpcConfig = {'subnetIds'        : subnets,
-                                                               'securityGroupIds' : [secGroupId]})
+        self.config = self.eks.create_cluster(name=self.cluster_name, version=kubernetes_v,
+                                              roleArn = roleArn, resourcesVpcConfig = {'subnetIds' :  subnets,
+                                                                                       'securityGroupIds' : [secGroupId]})
 
         print("Submitted create command, response status is : ", self.config['cluster']['status'])
         print("Waiting for cluster creation to be completed. This can take up to ten minutes")
@@ -709,7 +723,7 @@ class Eks_Cluster(Cluster):
                 ]
         }
         config_text = yaml.dump(cluster_config, default_flow_style=False)
-        config_file = expanduser("~") + "/.kube/config"
+        config_file = os.path.expanduser("~") + "/.kube/config"
 
         if not os.path.isfile(config_file):
             open(config_file, 'x')
