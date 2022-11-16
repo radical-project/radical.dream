@@ -9,14 +9,18 @@ setup_args['packages']             = find_packages()
 setup_args['package_data']         = {'': ['*.sh']}
 setup_args['python_requires']      = '>=3.6'
 setup_args['install_requires']     = ['boto3',
+                                      'pandas',
+                                      'azure.cli',
                                       'kubernetes',
                                       'azure-core',
+                                      'python-chi',
                                       'azure-batch', 
                                       'azure-common',
                                       'azure-identity',
                                       'azure-mgmt-core',
                                       'azure-mgmt-storage',
                                       'azure-mgmt-resource',
+                                      'python-openstackclient',
                                       'azure-mgmt-containerinstance']
 
 setup(**setup_args)

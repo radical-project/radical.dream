@@ -69,6 +69,7 @@ class AwsCaas():
         self._clf_client    = self._create_clf_client(cred)
         self._eks_client    = self._create_eks_client(cred)
 
+        self._clf_resource  = self._create_clf_resource(cred)
         self._ec2_resource  = self._create_ec2_resource(cred)
         self._dydb_resource = self._create_dydb_resource(cred)
 
@@ -201,7 +202,7 @@ class AwsCaas():
         
         if self.launch_type in EKS:
             self.cluster = kubernetes.Eks_Cluster(self.run_id, self.sandbox,
-                                            VM.InstanceID, self._iam_client,
+                                    VM, self._iam_client,self._clf_resource,
                                        self._clf_client, self._ec2_resource,
                                                   self._eks_client, nodes=1)
             self.cluster.bootstrap()
@@ -276,6 +277,20 @@ class AwsCaas():
                                                  region_name           = cred['region_name'])
 
         return dydb_client
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _create_clf_resource(self, cred):
+        """a wrapper around create cloudformation resource client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
+        clf_client = boto3.resource('cloudformation', aws_access_key_id     = cred['aws_access_key_id'],
+                                                      aws_secret_access_key = cred['aws_secret_access_key'],
+                                                      region_name           = cred['region_name'])
+
+        return clf_client
 
 
     # --------------------------------------------------------------------------

@@ -11,10 +11,11 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout
-from functools      import reduce
-from kubernetes     import client
-from azure.cli.core import get_default_cli
+from .misc                  import sh_callout
+from functools              import reduce
+from kubernetes             import client, config
+from azure.cli.core         import get_default_cli
+from kubernetes.client.rest import ApiException
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -533,7 +534,82 @@ class Aks_Cluster(Cluster):
         print(out, err)
 
         return True
+
+
+    # --------------------------------------------------------------------------
+    #
+    def add_nodes(self, nodes_type=None):
+        """
+        add nodes to an existing cluster
+        """
+        self.nodes_pool = 'hydraa_aks_nodepool'
+
+        cmd  = 'az aks nodepool add '
+        cmd += '--resource-group {0} '.format(self.resource_group)
+        cmd += '--cluster-name {0} '.format(self.cluster_name)
+        cmd += '--name  {0} '.format(self.nodes_pool)
+        cmd += '--node-count {0} --no-wait'.format(self.nodes)
+
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)
+
+        return True
+
+
+    # --------------------------------------------------------------------------
+    #
+    def add_auto_scaler(self, nodes, nodes_type, range: list):
+        """
+        Create a node pool. This will not launch any nodes immediately but will
+        scale up and down as needed. If you change the GPU type or the number of
+        GPUs per node, you may need to change the machine-type.
+
+        range: list of 2 index [min_nodes, max_nodes]
+        """
+        self.auto_scaler = 'hydraa_autoscale_aks_nodepool'
+
+        cmd  = 'az aks nodepool add '
+        cmd += '--resource-group {0} '.format(self.resource_group)
+        cmd += '--cluster-name {0} '.format(self.cluster_name)
+        cmd += '--name {0} '.format(self.auto_scaler)
+        cmd += '--node-count {0} '.format(nodes)
+        cmd += '--node-vm-size {0} '.format(nodes_type)
+        cmd += '--enable-cluster-autoscaler '
+        cmd += '--min-count {0} --max-count {1}'.format(range[0], range[1])
+
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)
+
+        return True
     
+
+    # --------------------------------------------------------------------------
+    #
+    def update_auto_scaler(self, range: list):
+        """
+        Update an exsiting autoscaler with different number of nodes.
+        
+        range: list of 2 index [min_nodes, max_nodes]
+        """
+
+        if not self.auto_scaler:
+            raise Exception('No autoscaler in this cluster, you need to create one')
+        
+        cmd = 'az aks nodepool update '
+        cmd += '--update-cluster-autoscaler '
+        cmd += '--min-count {0} --max-count {1} '.format(range[0], range[1])
+        cmd += '--resource-group {0} '.format(self.resource_group)
+        cmd += '--cluster-name {0} '.format(self.cluster_name)
+        cmd += '--name {0}'.format(self.auto_scaler)
+
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)
+
+        return True
+
 
     # --------------------------------------------------------------------------
     #
@@ -585,31 +661,37 @@ class Aks_Cluster(Cluster):
         return depolyment_file, pods_names, batches
 
 
-
 class Eks_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that you did the one time
        preparational steps:
 
-       1- Create an IAM role with the name EKSEC2UserRole
+       1- An IAM role with the name `EKSEC2UserRole`
           that has 2 permessions:
           
           a-AmazonEKSClusterPolicy
           b-AmazonEKSServicePolicy
+       
+       2- An IAM role with the name `NodeInstanceRole`
+          that has 2 permessions:
 
-       2- Create a CloudFormation S3 template stack (VPC).
+          a-AmazonEKSWorkerNodePolicy
+          b-AmazonEC2ContainerRegistryReadOnly
+          c-AmazonEKS_CNI_Policy
+
+       2- A CloudFormation S3 template stack (VPC).
 
        NOTE: This class will overide any existing kubernetes config
     """
-    def __init__(self, run_id, sandbox, instance, iam, clf, ec2, eks, nodes=1):
+    def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, nodes=1):
 
         self.id             = run_id
         self.cluster_name   = 'hydraa_eks_cluster'
         self.nodes          = nodes
         self.max_pods       = 250
-        self.size           = 0
+        self.size           = 1
         self.sandbox        = sandbox
-        self.instance       = instance
+        self.vm             = vm
         self.config         = None
         self.stop_event     = mt.Event()
 
@@ -617,6 +699,7 @@ class Eks_Cluster(Cluster):
         self.clf            = clf
         self.ec2            = ec2
         self.eks            = eks
+        self.rclf           = rclf
 
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="EKS_profiles_watcher")
 
@@ -640,30 +723,29 @@ class Eks_Cluster(Cluster):
 
         response = self.clf.describe_stack_resources(StackName         = 'eks-vpc',
                                                      LogicalResourceId = 'VPC')
-        vpcId = response['StackResources'][0]['PhysicalResourceId']
-        print("Found VPC ID: ", vpcId)
+        self.vpcId = response['StackResources'][0]['PhysicalResourceId']
+        print("Found VPC ID: ", self.vpcId)
 
         response = self.clf.describe_stack_resources(StackName        = 'eks-vpc',
                                                      LogicalResourceId= 'ControlPlaneSecurityGroup')
 
-        secGroupId = response['StackResources'][0]['PhysicalResourceId']
-        print("Found security group ID: ", secGroupId)
+        self.secGroupId = response['StackResources'][0]['PhysicalResourceId']
+        print("Found security group ID: ", self.secGroupId)
 
 
-        vpc = self.ec2.Vpc(vpcId)
-        subnets = [subnet.id for subnet in vpc.subnets.all()]
-        print("Found subnets: ", subnets)
+        vpc = self.ec2.Vpc(self.vpcId)
+        self.subnets = [subnet.id for subnet in vpc.subnets.all()]
+        print("Found subnets: ", self.subnets)
 
         self.config = self.eks.create_cluster(name=self.cluster_name, version=kubernetes_v,
-                                                                         roleArn = roleArn, 
-                                              resourcesVpcConfig = {'subnetIds' :  subnets,
-                                                                    'securityGroupIds' : [secGroupId]})
+                                                                         roleArn = roleArn,
+                                              resourcesVpcConfig = {'subnetIds' :  self.subnets,
+                                                                    'securityGroupIds' : [self.secGroupId]})
 
         print("Submitted create command, response status is : ", self.config['cluster']['status'])
         print("Waiting for cluster creation to be completed. This can take up to ten minutes")
         waiter = self.eks.get_waiter("cluster_active")
         waiter.wait(name=self.cluster_name)
-
 
         self.profiler.prof('configure_start', uid=self.id)
         self.configure()
@@ -673,11 +755,99 @@ class Eks_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def create_nodes(self):
+
         """
-        use boto3.create_node_group(cluster_name=name, name=group_nodes1, 
-                                     node_type=m3.tiny, nodes=1, min=1, max=1)
+        add a stack of nodes for an existing EKS cluster.
+        
+        range: list of 2 index [min_nodes, max_nodes]
+
+        desrired_capacity: we always assume it is the min_nodes
         """
-        pass
+
+        stackName = "eks-auto-scaling-group-" + self.cluster_name
+        templateURL = 'https://amazon-eks.s3-us-west-2.amazonaws.com/cloudformation/2019-02-11/amazon-eks-nodegroup.yaml'
+
+        self.node_group_name = 'hydraa_eks_nodes_group'
+        params = [
+        {'ParameterKey' : 'KeyName' , 
+        'ParameterValue' : 'eksNodeKey' },
+        {'ParameterKey' : 'NodeImageId' , 
+        'ParameterValue' : self.vm.ImageId },
+        {'ParameterKey' : 'NodeInstanceType' , 
+        'ParameterValue' : self.vm.InstanceID },
+        {'ParameterKey' : 'NodeAutoScalingGroupMinSize' , 
+        'ParameterValue' : self.vm.MinCount },
+        {'ParameterKey' : 'NodeAutoScalingGroupMaxSize' , 
+        'ParameterValue' : self.vm.MaxCount },
+        {'ParameterKey' : 'NodeAutoScalingGroupDesiredCapacity' , 
+        'ParameterValue' : self.vm.MinCount },
+        {'ParameterKey' : 'ClusterName' , 
+        'ParameterValue' : self.cluster_name },
+        {'ParameterKey' : 'NodeGroupName' , 
+        'ParameterValue' : self.node_group_name },
+        {'ParameterKey' : 'ClusterControlPlaneSecurityGroup' , 
+        'ParameterValue' : self.secGroupId },
+        {'ParameterKey' : 'VpcId' , 
+        'ParameterValue' : self.vpcId },
+        {'ParameterKey' : 'Subnets' , 
+        'ParameterValue' : ",".join(self.subnets) },
+        ]
+
+        print("Params: ", params)
+        self.clf.create_stack(StackName = stackName, TemplateURL = templateURL,
+                              Parameters = params, Capabilities = ['CAPABILITY_IAM'])
+
+        print("Submitted creation request for auto-scaling group stack, now waiting for completion")
+        waiter = self.clf.get_waiter('stack_create_complete')
+        waiter.wait(StackName=stackName)
+
+        # Extract node instance role 
+        stack = self.rclf.Stack(stackName)
+        for i in stack.outputs:
+            if (i['OutputKey'] == "NodeInstanceRole"):
+                nodeInstanceRole = i['OutputValue']
+
+        print("Using node instance role ", nodeInstanceRole)
+
+        self.add_config_map(nodeInstanceRole)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def add_config_map(self, nodeInstanceRole):
+        
+        config.load_kube_config()
+        v1 = client.CoreV1Api() 
+
+        # We need to create a config map in the namespace kube-system
+        # 
+        namespace = "kube-system"
+        configMapName = "aws-auth"
+
+        # Delete old config maps in case it exists
+        #
+        body = client.V1DeleteOptions()
+        body.api_version="v1"
+        try:
+            v1.delete_namespaced_config_map(name="aws-auth", namespace="kube-system", body = body)
+        except ApiException as e:
+            pass
+    
+        # Create new config map
+        #
+        body = client.V1ConfigMap()
+        body.api_version="v1"
+        body.metadata = {}
+        body.metadata['name'] = configMapName
+        body.metadata['namespace'] = namespace
+
+        body.data = {}
+        body.data['mapRoles'] = "- rolearn: " + nodeInstanceRole +  "\n  username: system:node:{{EC2PrivateDNSName}}\n  groups:\n    - system:bootstrappers\n    - system:nodes\n"
+
+        print("Submitting request to create config map")
+        response = v1.create_namespaced_config_map(namespace, body)
+        print("Done")
+
 
     # --------------------------------------------------------------------------
     #
@@ -728,6 +898,9 @@ class Eks_Cluster(Cluster):
                     }
                 ]
         }
+
+        self.create_nodes()
+
         config_text = yaml.dump(cluster_config, default_flow_style=False)
         config_file = os.path.expanduser("~") + "/.kube/config"
 
