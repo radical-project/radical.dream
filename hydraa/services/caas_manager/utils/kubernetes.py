@@ -764,10 +764,3 @@ class Eks_Cluster(Cluster):
         self.watch_profiles.start()
 
         return depolyment_file, pods_names, batches
-
-
-
-    
-
-
-    
