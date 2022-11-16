@@ -2,34 +2,30 @@ import uuid
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2']
+LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
 
 
 # --------------------------------------------------------------------
 #
 class AwsVM:
-    def __init__(self, image_id: str, min_count: int, max_count: int,
-                   instance_type: str, user_data: str, profile: dict,
-                                                     **input_kwargs):
+    def __init__(self, launch_type: str, image_id: str, min_count: int,
+                    max_count: int, instance_id: str, user_data: str, 
+                                        profile: dict, **input_kwargs):
 
         self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
         self.ImageId            = image_id
         self.MinCount           = min_count
         self.MaxCount           = max_count
-        self.InstanceID         = str
-        self.InstanceType       = instance_type
+        self.InstanceID         = instance_id
+        self.LaunchType         = launch_type
         self.UserData           = user_data
         self.IamInstanceProfile = profile
         self.TagSpecifications  = [{'ResourceType': 'instance',
                                     'Tags'        : [{'Key'  :'Name',
                                                       'Value': self.VmName}]}]
-        if not self.InstanceType:
-            raise Exception('InstanceType must be set')
 
-        if self.InstanceType in LTYPE[:2]:
-            self.LaunchType = 'FARGATE'
-        else:
-            self.LaunchType = 'EC2'
+        if self.LaunchType not in LTYPE:
+            raise Exception('LaunchType must be: {0}'.format(LTYPE))
 
         self.input_kwargs       = input_kwargs
 

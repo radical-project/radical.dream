@@ -30,6 +30,7 @@ from hydraa.services.caas_manager.utils import kubernetes
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
+AKS       = ['AKS', 'aks']
 AZURE     = 'azure'
 ACTIVE    = True
 WAIT_TIME = 2
@@ -117,22 +118,19 @@ class AzureCaas():
 
         self.profiler.prof('prep_stop', uid=self.run_id)
 
-        if self.launch_type in ['AKS', 'aks']:
-            self.cluster = kubernetes.Aks_Cluster(self.run_id, 
-                                         self._resource_group,
-                               self.sandbox, VM.InstanceID, 1)
+        if self.launch_type in AKS:
+            self.cluster = kubernetes.Aks_Cluster(self.run_id, self._resource_group,
+                                               self.sandbox, VM.InstanceID, nodes=1)
 
             self.cluster.bootstrap()
             self.submit_to_aks(tasks)
         else:  
             self.submit(tasks)
-            self._wait_tasks()
 
         if self.asynchronous:
             return self.run_id
-
         
-
+        self._wait_tasks()
 
     # --------------------------------------------------------------------------
     #
@@ -267,12 +265,8 @@ class AzureCaas():
             self._pods_book[pod_name]['task_list']     = batches[idx]
             self._pods_book[pod_name]['batch_size']    = len(batches[idx])
             self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        
         '''
         self.profiler.prof('submit_batch_stop', uid=self.run_id)
-
-        # watch the pods in the cluster
-        self.cluster.wait()
 
 
     # --------------------------------------------------------------------------
@@ -441,8 +435,8 @@ class AzureCaas():
             pod_stamps  = self.cluster.get_pod_status()
             task_stamps = self.cluster.get_pod_events()
             fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
-                                                len(self._tasks_book),
-                                                    self.cluster.size)
+                                                 len(self._tasks_book),
+                                                     self.cluster.size)
             df = (pd.merge(pod_stamps, task_stamps, on='Task_ID'))
         else:
         

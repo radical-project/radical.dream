@@ -207,7 +207,7 @@ class Cluster:
                 done_pods = int(out.strip())
 
             if done_pods:
-                print('completed pods: {0}'.format(done_pods), end='\r')
+                print('completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
                 if self.pod_counter == int(done_pods):
                     print('{0} pods finished with status "Completed"'.format(done_pods))
                     break
@@ -235,20 +235,18 @@ class Cluster:
         # embeded mode: Azure/AWS we manage by merging
         # the config of the cluster to the local machine
 
-        cmd = 'kubectl apply -f {0}'.format(name)
-
         # check if we are in remote mode or embeded mode
         if self.remote:
-
             # upload the pods file to the remote machine
             self.remote.put(depolyment_file)
-
+            cmd = 'kubectl apply -f {0}'.format(name)
             # deploy the pods.json on the cluster
             self.remote.run(cmd)
         
         # we are in the embeded mode
         else:
-            # just inoke a shell process
+            # just invoke a shell process
+            cmd = 'kubectl apply -f {0}'.format(depolyment_file)
             out, err, _ = sh_callout(cmd, shell=True)
             print(out, err)
 
@@ -603,7 +601,7 @@ class Eks_Cluster(Cluster):
 
        NOTE: This class will overide any existing kubernetes config
     """
-    def __init__(self, run_id, cluster_size, sandbox, iam, clf, ec2, eks):
+    def __init__(self, run_id, sandbox, instance, iam, clf, ec2, eks, nodes=1):
 
         self.id             = run_id
         self.cluster_name   = 'hydraa_eks_cluster'
@@ -617,12 +615,12 @@ class Eks_Cluster(Cluster):
 
         self.iam            = iam
         self.clf            = clf
-        self.eks            = eks
         self.ec2            = ec2
+        self.eks            = eks
 
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="EKS_profiles_watcher")
 
-        super().__init__(run_id, None, cluster_size, sandbox)
+        super().__init__(run_id, None, self.size, sandbox)
 
         atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
 
@@ -645,13 +643,21 @@ class Eks_Cluster(Cluster):
         vpcId = response['StackResources'][0]['PhysicalResourceId']
         print("Found VPC ID: ", vpcId)
 
+        response = self.clf.describe_stack_resources(StackName        = 'eks-vpc',
+                                                     LogicalResourceId= 'ControlPlaneSecurityGroup')
+
+        secGroupId = response['StackResources'][0]['PhysicalResourceId']
+        print("Found security group ID: ", secGroupId)
+
+
         vpc = self.ec2.Vpc(vpcId)
         subnets = [subnet.id for subnet in vpc.subnets.all()]
         print("Found subnets: ", subnets)
 
         self.config = self.eks.create_cluster(name=self.cluster_name, version=kubernetes_v,
-                                              roleArn = roleArn, resourcesVpcConfig = {'subnetIds' :  subnets,
-                                                                                       'securityGroupIds' : [secGroupId]})
+                                                                         roleArn = roleArn, 
+                                              resourcesVpcConfig = {'subnetIds' :  subnets,
+                                                                    'securityGroupIds' : [secGroupId]})
 
         print("Submitted create command, response status is : ", self.config['cluster']['status'])
         print("Waiting for cluster creation to be completed. This can take up to ten minutes")
