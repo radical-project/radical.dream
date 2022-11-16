@@ -316,7 +316,6 @@ class Cluster:
         with open('pod_status.json', 'r') as f:
             response = json.load(f)
 
-        # FIXME: generate profiles as pd dataframe
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
             # iterate on pods
@@ -623,11 +622,11 @@ class Eks_Cluster(Cluster):
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         # Get role information
-        response = self.iam.get_role(RoleName=eksRoleName)
+        response = self.iam.get_role(RoleName='EKSEC2UserRole')
         roleArn = response['Role']['Arn']
         print("Found role ARN: ", roleArn)
 
-        response = self.clf.describe_stack_resources(StackName = stackName,
+        response = self.clf.describe_stack_resources(StackName = 'eks-vpc',
                                                    LogicalResourceId="VPC")
         vpcId = response['StackResources'][0]['PhysicalResourceId']
         print("Found VPC ID: ", vpcId)
