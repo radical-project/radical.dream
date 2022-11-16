@@ -3,6 +3,7 @@ import time
 import math
 import copy
 import json
+import yaml
 import atexit
 import datetime
 
@@ -220,19 +221,33 @@ class Cluster:
         # FIXME: we get socket closed if we did it
         # in the reverse order, because we modify 
         # the firewall of the node
+
         cmd = 'kubectl apply -f {0}'.format(name)
+
         self.profiler.prof('generate_pods_start', uid=self.id)
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        # upload the pods.json
         name = os.path.basename(depolyment_file)
+
+        # remote mode: NSF cluster (we manage it via SSH)
+        # embeded mode: Azure/AWS we manage by merging
+        # the config of the cluster to the local machine
+
+        # check if we are in remote mode or embeded mode
         if self.remote:
-            # deploy the pods.json on the cluster
+
+            # upload the pods file to the remote machine
             self.remote.put(depolyment_file)
+
+            # deploy the pods.json on the cluster
             self.remote.run(cmd)
+        
+        # we are in the embeded mode
         else:
-            sh_callout(cmd, shell=True)
+            # just inoke a shell process
+            out, err, _ = sh_callout(cmd, shell=True)
+            print(out, err)
 
         #FIXME: create a monitering of the pods/containers
         
@@ -359,8 +374,47 @@ class Cluster:
                             id +=1
 
         os.remove('pod_events.json')
-        
+
         return df
+
+
+    # --------------------------------------------------------------------------
+    #
+    def checkpoint_profiles(self):
+        """
+        **This method should start as a background thread.
+
+        AKS/EKS does not allow to modify the ttl-events
+        of the cluster meaning if we have an exeution
+        for > 1 hour the profiles will be deleted
+        from the cluster to be replaced by new ones, unless
+        we enable Azure or AWS monitoring which == $$.
+
+        This function will save a checkopint of the profiles
+        as a dataframe every 55 minutes and merge them at the
+        end of the execution.
+        https://github.com/Azure/AKS/issues/2140
+        """
+        ids = 0
+        while not self.stop_event.is_set():
+            fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            for t in range(3300, 0, -1):
+                if t == 1:
+                    print('registering a profiles checkpoint')
+                    df1 = self.get_pod_status()
+                    df2 = self.get_pod_events()
+                    df = (pd.merge(df1, df2, on='Task_ID'))
+                    self.dataframes.append(df)
+                    df.to_csv(fname)
+                    print('checkpoint profiles saved to {0}'.format(fname))
+
+                if self.stop_event.is_set():
+                    break
+
+                else:
+                    time.sleep(1)
+
+            ids +=1
 
 
     # --------------------------------------------------------------------------
@@ -450,14 +504,14 @@ class Aks_Cluster(Cluster):
         print('building aks cluster..')
         self.config = sh_callout(cmd, shell=True, munch=True)
 
-        self.profiler.prof('authenticate_start', uid=self.id)
-        self.authenticate()
+        self.profiler.prof('configure_start', uid=self.id)
+        self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
 
     # --------------------------------------------------------------------------
     #
-    def authenticate(self):
+    def configure(self):
         # FIXME: we need to find a way to keep the config
         # of existing kubernetes (for multinode cluster)
         cmd  = 'az aks get-credentials '
@@ -497,8 +551,12 @@ class Aks_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def get_vm_size(self, vm_id):
+
+        # obtain all of the vms in this region
         cmd = 'az vm list-sizes --location eastus'
         vms = sh_callout(cmd, shell=True, munch=True)
+        
+        # get the coresponding info of the targeted vm 
         for vm in vms:
             name = vm.get('name')
             if name == vm_id:
@@ -509,75 +567,194 @@ class Aks_Cluster(Cluster):
     #
     def submit(self, ctasks):
 
-        self.profiler.prof('generate_pods_start', uid=self.id)
-        depolyment_file, pods_names, batches = self.generate_pods(ctasks)
-        self.profiler.prof('generate_pods_stop', uid=self.id)
-
-        cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-        out, err, _ = sh_callout(cmd, shell=True)
-        print(out, err)
+        depolyment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
         self.watch_profiles.start()
-        
+
         return depolyment_file, pods_names, batches
-
-
-    # --------------------------------------------------------------------------
-    #
-    def checkpoint_profiles(self):
-        """
-        AKS does not allow to modify the ttl-events
-        of the cluster meaning if we have an exeution
-        for > 1 hour the profiles will be deleted
-        from the cluster to be replaced by new ones, unless
-        we enable Azure monitoring which == $$.
-
-        This function will save a checkopint of the profiles
-        as a dataframe every 55 minutes and merge them at the
-        end of the execution.
-        https://github.com/Azure/AKS/issues/2140
-        """
-        self.profiler.prof('checkpoint_start', uid=self.id)
-        ids = 0
-        while not self.stop_event.is_set():
-            fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
-            for t in range(3300,0,-1):
-                if t == 1:
-                    self.profiler.prof('register_checkpoint', uid=self.id)
-                    print('registering a profiles checkpoint')
-                    df1 = self.get_pod_status()
-                    df2 = self.get_pod_events()
-                    df = (pd.merge(df1, df2, on='Task_ID'))
-                    self.dataframes.append(df)
-                    df.to_csv(fname)
-                    print('checkpoint profiles saved to {0}'.format(fname))
-
-                if self.stop_event.is_set():
-                    break
-
-                else:
-                    time.sleep(1)
-
-            ids +=1
-        
-        self.profiler.prof('checkpoint_stop', uid=self.id)
 
 
 
 class Eks_Cluster(Cluster):
-    def __init__(self, run_id, remote, cluster_size, sandbox):
+    """Represents a single Kubrenetes cluster.
+       This class asssumes that you did the one time
+       preparational steps:
 
-        super().__init__(run_id, remote, cluster_size, sandbox)
-    
+       1- Create an IAM role with the name EKSEC2UserRole
+          that has 2 permessions:
+          
+          a-AmazonEKSClusterPolicy
+          b-AmazonEKSServicePolicy
+
+       2- Create a CloudFormation S3 template stack (VPC).
+
+       3- This class will overide any existing kubernetes
+          config files under $HOME/.kube/config
+    """
+    def __init__(self, run_id, cluster_size, sandbox, iam, clf, ec2, eks):
+
+        self.id             = run_id
+        self.cluster_name   = 'hydraa_eks_cluster'
+        self.nodes          = nodes
+        self.max_pods       = 250
+        self.size           = 0
+        self.sandbox        = sandbox
+        self.instance       = instance
+        self.config         = None
+        self.stop_event     = mt.Event()
+
+        self.iam            = iam
+        self.clf            = clf
+        self.eks            = eks
+        self.ec2            = ec2
+
+        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="CP_Profiles")
+
+        super().__init__(run_id, None, cluster_size, sandbox)
+
+        atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
+
 
     # --------------------------------------------------------------------------
     #
     def bootstrap(self):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
-        if not self.size:
-            self.size = self.get_vm_size(self.instance) - 1
-        
+
+        # Get role information
+        response = self.iam.get_role(RoleName=eksRoleName)
+        roleArn = response['Role']['Arn']
+        print("Found role ARN: ", roleArn)
+
+        response = self.clf.describe_stack_resources(StackName = stackName,
+                                                   LogicalResourceId="VPC")
+        vpcId = response['StackResources'][0]['PhysicalResourceId']
+        print("Found VPC ID: ", vpcId)
+
+        vpc = self.ec2.Vpc(vpcId)
+        subnets = [subnet.id for subnet in vpc.subnets.all()]
+        print("Found subnets: ", subnets)
+
+        self.config = self.eks.create_cluster(name=self.cluster_name, version=k8Version, roleArn = roleArn,
+                                         resourcesVpcConfig = {'subnetIds'        : subnets,
+                                                               'securityGroupIds' : [secGroupId]})
+
+        print("Submitted create command, response status is : ", self.config['cluster']['status'])
+        print("Waiting for cluster creation to be completed. This can take up to ten minutes")
+        waiter = self.eks.get_waiter("cluster_active")
+        waiter.wait(name=self.cluster_name)
+
+
+        self.profiler.prof('configure_start', uid=self.id)
+        self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_nodes(self):
+        """
+        use boto3.create_node_group(cluster_name=name, name=group_nodes1, 
+                                     node_type=m3.tiny, nodes=1, min=1, max=1)
+        """
+        pass
+
+    # --------------------------------------------------------------------------
+    #
+    def configure(self):
+
+        print("Cluster available, now creating config file")
+
+        cluster      = self.eks.describe_cluster(name=self.cluster_name)
+        cluster_cert = cluster["cluster"]["certificateAuthority"]["data"]
+        cluster_ep   = cluster["cluster"]["endpoint"]
+        cluster_arn  = cluster["cluster"]["arn"]
+
+        cluster_config = {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [
+                    {
+                        "cluster": {
+                            "server": str(cluster_ep),
+                            "certificate-authority-data": str(cluster_cert)
+                        },
+                        "name": cluster_arn
+                    }
+                ],
+                "contexts": [
+                    {
+                        "context": {
+                            "cluster": cluster_arn,
+                            "user": cluster_arn,
+                        },
+                        "name": cluster_arn
+                    }
+                ],
+                "current-context": cluster_arn,
+                "preferences": {},
+                "users": [
+                    {
+                        "name": cluster_arn,
+                        "user": {
+                            "exec": {
+                                "apiVersion": "client.authentication.k8s.io/v1alpha1",
+                                "command": "aws-iam-authenticator",
+                                "args": [
+                                    "token", "-i", self.cluster_name
+                                ]
+                            }
+                        }
+                    }
+                ]
+        }
+        config_text = yaml.dump(cluster_config, default_flow_style=False)
+        config_file = expanduser("~") + "/.kube/config"
+
+        if not os.path.isfile(config_file):
+            open(config_file, 'x')
+        print("Writing kubectl configuration to ", config_file)
+        open(config_file, "w").write(config_text)
+        print("Done")
+
+
+    # --------------------------------------------------------------------------
+    #
+    def wait(self):
+        if super().wait():
+            self.profiler.prof('pods_finished', uid=self.id)
+            self.stop_event.set()
+            return True
+
+
+    # --------------------------------------------------------------------------
+    #
+    def stop_background(self, stop_event, threads):
+        """
+        stop the background task gracefully before exit
+        """
+        # request the background thread stop
+        stop_event.set()
+        # wait for the background thread to stop
+        for thread in threads:
+            thread.join()
+
+
+    # --------------------------------------------------------------------------
+    #
+    def submit(self, ctasks):
+
+        depolyment_file, pods_names, batches = super().submit(ctasks)
+
+        # start the profiles thread
+        self.watch_profiles.start()
+
+        return depolyment_file, pods_names, batches
+
+
+
+    
+
+
     

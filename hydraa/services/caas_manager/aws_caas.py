@@ -326,6 +326,35 @@ class AwsCaas():
                                                 region_name           = cred['region_name'])
 
         return clw_client
+    
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _create_clf_client(self, cred):
+        """a wrapper around create cloudformation client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
+        clf_client = boto3.client('cloudformation', aws_access_key_id     = cred['aws_access_key_id'],
+                                                    aws_secret_access_key = cred['aws_secret_access_key'],
+                                                    region_name           = cred['region_name'])
+        
+        return clf_client
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _create_eks_client(self, cred):
+        """a wrapper around create eks client
+
+           :param: cred: AWS credentials (access key, secert key, region)
+        """
+        eks_client = boto3.client('eks', aws_access_key_id     = cred['aws_access_key_id'],
+                                         aws_secret_access_key = cred['aws_secret_access_key'],
+                                         region_name           = cred['region_name'])
+        
+        return eks_client
 
 
     # --------------------------------------------------------------------------
