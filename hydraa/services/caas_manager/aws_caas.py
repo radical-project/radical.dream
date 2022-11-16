@@ -76,8 +76,8 @@ class AwsCaas():
         self.cluster_name = None
         self.service_name = None
 
-        self.run_id        = None
-        self._task_id      = 0
+        self.run_id   = str(uuid.uuid4())
+        self._task_id = 0
 
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
@@ -183,7 +183,6 @@ class AwsCaas():
             self.cost        = run_cost
 
         self.status      = ACTIVE
-        self.run_id      = str(uuid.uuid4())
 
         print("starting run {0}".format(self.run_id))
 

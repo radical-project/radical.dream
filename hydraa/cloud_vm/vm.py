@@ -9,7 +9,7 @@ LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
 #
 class AwsVM:
     def __init__(self, launch_type: str, image_id: str, min_count: int,
-                    max_count: int, instance_id: str, user_data: str, 
+                      max_count: int, instance_id: str, user_data: str, 
                                         profile: dict, **input_kwargs):
 
         self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
@@ -29,32 +29,12 @@ class AwsVM:
 
         self.input_kwargs       = input_kwargs
 
-    # --------------------------------------------------------------------------
-    #
-    @property
-    def InstanceID(self, instance_id):
-        return self.__InstanceID
-
-
-    # --------------------------------------------------------------------------
-    #
-    @InstanceID.setter
-    def InstanceID(self, instance_id):
-        self.__InstanceID = instance_id
-
 
     # --------------------------------------------------------------------------
     #
     @property
     def __name__(self):
         return self.__class__.__name__.lower()
-
-
-    # --------------------------------------------------------------------------
-    #
-    def VmName(self):
-        return self.VmName
-
 
     # --------------------------------------------------------------------------
     #
