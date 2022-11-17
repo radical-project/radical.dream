@@ -21,10 +21,10 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 AWS       = 'aws'
 BUDGET    = 0
 ACTIVE    = True
-EKS       = ['EKS', 'eks']
-EC2       = ['EC2', 'ec2']
-FARGATE   = ['FARGATE', 'fargate']
-
+EKS       = ['EKS', 'eks']         # Elastic kubernetes Service
+EC2       = ['EC2', 'ec2']         # Elastic Cloud 
+ECS       = ['ECS', 'ecs']         # Elastic Container Service
+FARGATE   = ['FARGATE', 'fargate'] # Fargate container service
 
 WAIT_TIME = 2
 
@@ -187,19 +187,25 @@ class AwsCaas():
 
         print("starting run {0}".format(self.run_id))
 
-        resource_cluster = self.create_cluster()
-        self._wait_clusters(resource_cluster)
-
+        # check if this launch will be a service
         if service:
             self.create_ecs_service()
 
-        if self.launch_type in FARGATE:
-            self.submit(tasks, resource_cluster)
 
-        if self.launch_type in EC2:
-            self.create_ec2_instance(VM)
-            self.submit(tasks, resource_cluster)
+        # check if this is an ECS service
+        if self.launch_type in ECS:
+            resource_cluster = self.create_cluster()
+            self._wait_clusters(resource_cluster)
+
+            if self.launch_type in FARGATE:
+                self.submit(tasks, resource_cluster)
+
+            if self.launch_type in EC2:
+                self.create_ec2_instance(VM)
+                self.submit(tasks, resource_cluster)
+
         
+        # check if this is an EKS service
         if self.launch_type in EKS:
             self.cluster = kubernetes.Eks_Cluster(self.run_id, self.sandbox,
                                     VM, self._iam_client,self._clf_resource,

@@ -398,19 +398,26 @@ class Cluster:
         end of the execution.
         https://github.com/Azure/AKS/issues/2140
         """
-        ids = 0
-        while not self.stop_event.is_set():
+
+        def get_profiles(ids):
+            print('registering a profiles checkpoint')
             fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            df1 = self.get_pod_status()
+            df2 = self.get_pod_events()
+            df = (pd.merge(df1, df2, on='Task_ID'))
+            self.dataframes.append(df)
+            df.to_csv(fname)
+            print('checkpoint profiles saved to {0}'.format(fname))
+
+        ids = 0
+        # iterate until the stop_event is triggered
+        while not self.stop_event.is_set():
             for t in range(3300, 0, -1):
                 if t == 1:
-                    print('registering a profiles checkpoint')
-                    df1 = self.get_pod_status()
-                    df2 = self.get_pod_events()
-                    df = (pd.merge(df1, df2, on='Task_ID'))
-                    self.dataframes.append(df)
-                    df.to_csv(fname)
-                    print('checkpoint profiles saved to {0}'.format(fname))
-
+                    # save a checkpoint every ~ 55 minutes
+                    get_profiles(ids)
+                
+                # exit the loop if stop_event is true
                 if self.stop_event.is_set():
                     break
 
@@ -418,6 +425,8 @@ class Cluster:
                     time.sleep(1)
 
             ids +=1
+        # if we exist, then save a checkpoint as well
+        get_profiles(ids)
 
 
     # --------------------------------------------------------------------------
@@ -779,9 +788,11 @@ class Eks_Cluster(Cluster):
         'ParameterValue' : str(self.vm.MaxCount) },
         {'ParameterKey'  : 'NodeAutoScalingGroupDesiredCapacity' , 
         'ParameterValue' : str(self.vm.MinCount) },
+        {'ParameterKey'  : 'NodeVolumeSize' , 
+        'ParameterValue' : str(30) }, # FIXME: find a way to determine the best disk size
         {'ParameterKey'  : 'ClusterName' , 
         'ParameterValue' : self.cluster_name },
-        {'ParameterKey'  : 'NodeGroupName' , 
+        {'ParameterKey'  : 'NodeGroupName' ,
         'ParameterValue' : self.node_group_name },
         {'ParameterKey'  : 'ClusterControlPlaneSecurityGroup' , 
         'ParameterValue' : self.secGroupId },
