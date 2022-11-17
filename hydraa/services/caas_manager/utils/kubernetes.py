@@ -912,15 +912,23 @@ class Eks_Cluster(Cluster):
                 ]
         }
 
-        self.create_nodes()
-
         config_text = yaml.dump(cluster_config, default_flow_style=False)
         config_file = os.path.expanduser("~") + "/.kube/config"
 
+        # write the kube config file
+        if not os.path.isdir(os.path.expanduser("~") + "/.kube"):
+            print('Creating .kube folder')
+            os.mkdir(os.path.expanduser("~") + "/.kube")
+
         if not os.path.isfile(config_file):
             open(config_file, 'x')
+
         print("Writing kubectl configuration to ", config_file)
         open(config_file, "w").write(config_text)
+
+        # now create the nodes
+        self.create_nodes()
+
         print("Done")
 
 
