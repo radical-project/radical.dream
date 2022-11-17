@@ -20,6 +20,7 @@ class AwsVM:
         self.LaunchType         = launch_type
         self.UserData           = user_data
         self.IamInstanceProfile = profile
+        self.KeyPair            = input_kwargs.get('keypair', None)
         self.TagSpecifications  = [{'ResourceType': 'instance',
                                     'Tags'        : [{'Key'  :'Name',
                                                       'Value': self.VmName}]}]

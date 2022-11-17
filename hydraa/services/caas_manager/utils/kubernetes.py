@@ -769,29 +769,31 @@ class Eks_Cluster(Cluster):
 
         self.node_group_name = 'Hydraa-Eks-Nodes-Group'
         params = [
-        {'ParameterKey' : 'KeyName' , 
-        'ParameterValue' : 'eksNodeKey' },
-        {'ParameterKey' : 'NodeImageId' , 
+        {'ParameterKey'  : 'NodeImageId' , 
         'ParameterValue' : self.vm.ImageId },
-        {'ParameterKey' : 'NodeInstanceType' , 
+        {'ParameterKey'  : 'NodeInstanceType' , 
         'ParameterValue' : self.vm.InstanceID },
-        {'ParameterKey' : 'NodeAutoScalingGroupMinSize' , 
+        {'ParameterKey'  : 'NodeAutoScalingGroupMinSize' , 
         'ParameterValue' : str(self.vm.MinCount) },
-        {'ParameterKey' : 'NodeAutoScalingGroupMaxSize' , 
+        {'ParameterKey'  : 'NodeAutoScalingGroupMaxSize' , 
         'ParameterValue' : str(self.vm.MaxCount) },
-        {'ParameterKey' : 'NodeAutoScalingGroupDesiredCapacity' , 
+        {'ParameterKey'  : 'NodeAutoScalingGroupDesiredCapacity' , 
         'ParameterValue' : str(self.vm.MinCount) },
-        {'ParameterKey' : 'ClusterName' , 
+        {'ParameterKey'  : 'ClusterName' , 
         'ParameterValue' : self.cluster_name },
-        {'ParameterKey' : 'NodeGroupName' , 
+        {'ParameterKey'  : 'NodeGroupName' , 
         'ParameterValue' : self.node_group_name },
-        {'ParameterKey' : 'ClusterControlPlaneSecurityGroup' , 
+        {'ParameterKey'  : 'ClusterControlPlaneSecurityGroup' , 
         'ParameterValue' : self.secGroupId },
-        {'ParameterKey' : 'VpcId' , 
+        {'ParameterKey'  : 'VpcId' , 
         'ParameterValue' : self.vpcId },
-        {'ParameterKey' : 'Subnets' , 
+        {'ParameterKey'  : 'Subnets' , 
         'ParameterValue' : ",".join(self.subnets) },
         ]
+
+        if self.vm.KeyPair:
+            params.append({'ParameterKey'   : 'KeyName' ,
+                           'ParameterValue' : self.vm.KeyPair })
 
         print("Params: ", params)
         self.clf.create_stack(StackName = stackName, TemplateURL = templateURL,
