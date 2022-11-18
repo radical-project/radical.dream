@@ -66,17 +66,20 @@ class AzureCaas():
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
 
-        self.run_id       = None 
-        self._task_id     = 0
         self.run_id       = str(uuid.uuid4())
 
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
+        self._task_id     = 0
         self._tasks_book  = OrderedDict()
 
         self.launch_type  = None
-        self._region_name = cred['region_name']
-        self._run_cost    = 0
+
+        # FIXME: This is not correct. Remove this from
+        # the init and if the region is required, obtain it
+        # from self.vm.Region.
+        self.region       = cred['region_name']
+        self.run_cost    = 0
 
         self.runs_tree = OrderedDict()
 
@@ -106,7 +109,12 @@ class AzureCaas():
             self.__cleanup()
 
         self.status      = ACTIVE
+        
+        # FIXME: This is not correct. It should be
+        # self.vm = VM, and to get LaunchType we do
+        # self.vm.LaunchType
         self.launch_type = VM.LaunchType
+        VM.Region = self.region
 
         print("starting run {0}".format(self.run_id))
 
@@ -119,8 +127,8 @@ class AzureCaas():
         self.profiler.prof('prep_stop', uid=self.run_id)
 
         if self.launch_type in AKS:
-            self.cluster = kubernetes.Aks_Cluster(self.run_id, self._resource_group,
-                                               self.sandbox, VM.InstanceID, nodes=1)
+            VM.ResourceGroup = self._resource_group
+            self.cluster = kubernetes.Aks_Cluster(self.run_id, VM, self.sandbox)
 
             self.cluster.bootstrap()
             self.submit_to_aks(tasks)
@@ -192,7 +200,7 @@ class AzureCaas():
 
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
-                                                   {'location': self._region_name})
+                                                   {'location': self.region})
 
         resource_group = self.res_client.resource_groups.get(self._resource_group_name)
 
@@ -544,9 +552,9 @@ class AzureCaas():
         caller = sys._getframe().f_back.f_code.co_name
         self._container_group_names = OrderedDict()
 
-        self._task_id     = 0
+        self._task_id = 0
+        self.run_cost = 0
         self._tasks_book.clear()
-        self._run_cost    = 0
 
         if caller == '_shutdown':
             self.manager_id  = None

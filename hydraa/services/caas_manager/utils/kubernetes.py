@@ -493,15 +493,16 @@ class Aks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, run_id, resource_group, sandbox, instance, nodes=1):
+    def __init__(self, run_id, vm, sandbox):
         self.id             = run_id
         self.cluster_name   = 'hydraa_aks_cluster'
-        self.resource_group = resource_group
-        self.nodes          = nodes
+        self.resource_group = vm.ResourceGroup
+        self.nodes          = vm.MinCount
         self.max_pods       = 250
         self.size           = 0
         self.sandbox        = sandbox
-        self.instance       = instance
+        self.instance       = vm.InstanceID
+        self.region         = vm.Region
         self.config         = None
         self.stop_event     = mt.Event()
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
@@ -524,8 +525,8 @@ class Aks_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
         if not self.size:
-            self.size = self.get_vm_size(self.instance) - 1
-        
+            self.size = self.get_vm_size(self.instance, self.region) - 1
+
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
         cmd += '-n {0} '.format(self.cluster_name)
@@ -649,17 +650,19 @@ class Aks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def get_vm_size(self, vm_id):
+    def get_vm_size(self, vm_id, region):
 
         # obtain all of the vms in this region
-        cmd = 'az vm list-sizes --location eastus'
+        cmd = 'az vm list-sizes --location {0}'.format(region)
         vms = sh_callout(cmd, shell=True, munch=True)
         
-        # get the coresponding info of the targeted vm 
+        # get the coresponding info of the targeted vm
         for vm in vms:
             name = vm.get('name')
+            if not name:
+                raise Exception('Could not retrive the VM size')
             if name == vm_id:
-               return vm['numberOfCores']
+                return vm['numberOfCores']
 
 
     # --------------------------------------------------------------------------

@@ -70,11 +70,14 @@ class AwsVM:
 
 
 class AzureVM:
-    def __init__(self, launch_type, instance_id, **input_kwargs):
+    def __init__(self, launch_type, instance_id, min_count, max_count,
+                                                      **input_kwargs):
 
         self.VmName             = 'AZURE_VM-{0}'.format(uuid.uuid4())
         self.LaunchType         = launch_type
         self.InstanceID         = instance_id
+        self.MinCount           = min_count
+        self.MaxCount           = max_count
         self.input_kwargs       = input_kwargs
 
     def __call__(self):
