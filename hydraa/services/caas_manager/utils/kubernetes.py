@@ -47,8 +47,22 @@ class Cluster:
     def delete_completed_pods(self):
         self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
         return True
-
     
+
+    # --------------------------------------------------------------------------
+    #
+    def stop_background(self, stop_event, threads):
+        """
+        stop the background task gracefully before exiting
+        """
+        # request the background thread stop
+        stop_event.set()
+        # wait for the background thread to stop
+        for thread in threads:
+            if thread.is_alive():
+                thread.join()
+    
+
     def bootstrap_local(self):
         
         """
@@ -533,6 +547,9 @@ class Aks_Cluster(Cluster):
     def configure(self):
         # FIXME: we need to find a way to keep the config
         #        of existing kubernetes (for multinode cluster)
+        
+        # To manage a Kubernetes cluster, we use the Kubernetes CLI and kubectl
+        # NOTE: kubectl is already installed if you use Azure Cloud Shell.
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
         cmd += '--resource-group {0} '.format(self.resource_group.name)
@@ -632,19 +649,6 @@ class Aks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def stop_background(self, stop_event, threads):
-        """
-        stop the background task gracefully before exit
-        """
-        # request the background thread stop
-        stop_event.set()
-        # wait for the background thread to stop
-        for thread in threads:
-            thread.join()
-
-
-    # --------------------------------------------------------------------------
-    #
     def get_vm_size(self, vm_id):
 
         # obtain all of the vms in this region
@@ -688,7 +692,9 @@ class Eks_Cluster(Cluster):
           b-AmazonEC2ContainerRegistryReadOnly
           c-AmazonEKS_CNI_Policy
 
-       2- A CloudFormation S3 template stack (VPC).
+       3- A CloudFormation S3 template stack (VPC).
+
+       4- Kubectl already installed
 
        NOTE: This class will overide any existing kubernetes config
     """
@@ -720,6 +726,11 @@ class Eks_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def bootstrap(self):
+        
+        # NOTE: unlike Azure, kubectl is not installed with AWS-CLI.
+        #       We assume that the user did:
+        #       1- install https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+        #       2- export the path of kubectl so AKS can access it.
 
         kubernetes_v = '1.22'
 
@@ -756,9 +767,91 @@ class Eks_Cluster(Cluster):
         waiter = self.eks.get_waiter("cluster_active")
         waiter.wait(name=self.cluster_name)
 
+        # AWS requires IAM authenticator binary to be present in the local machine
+        # to authenticate to a Kubernetes cluster, for more information check the link:
+        # https://docs.aws.amazon.com/eks/latest/userguide/install-aws-iam-authenticator.html
+        cmd  = 'curl -Lo aws-iam-authenticator '
+        cmd += 'https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/download/v0.5.9/aws-iam-authenticator_0.5.9_linux_amd64 '
+        cmd += '&& chmod +x ./aws-iam-authenticator '
+        cmd += '&& mkdir -p {0}/bin && mv ./aws-iam-authenticator {0}/bin/aws-iam-authenticator && export PATH=$PATH:{0}/bin'.format(self.sandbox)
+
+        out, err = sh_callout(cmd, shell=True)
+        
+        print(out, err)
+
         self.profiler.prof('configure_start', uid=self.id)
         self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def configure(self):
+
+        print("Cluster available, now creating config file")
+
+        cluster      = self.eks.describe_cluster(name=self.cluster_name)
+        cluster_cert = cluster["cluster"]["certificateAuthority"]["data"]
+        cluster_ep   = cluster["cluster"]["endpoint"]
+        cluster_arn  = cluster["cluster"]["arn"]
+
+        cluster_config = {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [
+                    {
+                        "cluster": {
+                            "server": str(cluster_ep),
+                            "certificate-authority-data": str(cluster_cert)
+                        },
+                        "name": cluster_arn
+                    }
+                ],
+                "contexts": [
+                    {
+                        "context": {
+                            "cluster": cluster_arn,
+                            "user": cluster_arn,
+                        },
+                        "name": cluster_arn
+                    }
+                ],
+                "current-context": cluster_arn,
+                "preferences": {},
+                "users": [
+                    {
+                        "name": cluster_arn,
+                        "user": {
+                            "exec": {
+                                "apiVersion": "client.authentication.k8s.io/v1alpha1",
+                                "command": "aws-iam-authenticator",
+                                "args": [
+                                    "token", "-i", self.cluster_name
+                                ]
+                            }
+                        }
+                    }
+                ]
+        }
+
+        config_text = yaml.dump(cluster_config, default_flow_style=False)
+        config_file = os.path.expanduser("~") + "/.kube/config"
+
+        # write the kube config file
+        if not os.path.isdir(os.path.expanduser("~") + "/.kube"):
+            print('Creating .kube folder')
+            os.mkdir(os.path.expanduser("~") + "/.kube")
+
+        if not os.path.isfile(config_file):
+            open(config_file, 'x')
+
+        print("Writing kubectl configuration to ", config_file)
+        open(config_file, "w").write(config_text)
+
+        # now create the nodes
+        self.create_nodes()
+
+        print("Done")
 
 
     # --------------------------------------------------------------------------
@@ -864,94 +957,11 @@ class Eks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def configure(self):
-
-        print("Cluster available, now creating config file")
-
-        cluster      = self.eks.describe_cluster(name=self.cluster_name)
-        cluster_cert = cluster["cluster"]["certificateAuthority"]["data"]
-        cluster_ep   = cluster["cluster"]["endpoint"]
-        cluster_arn  = cluster["cluster"]["arn"]
-
-        cluster_config = {
-                "apiVersion": "v1",
-                "kind": "Config",
-                "clusters": [
-                    {
-                        "cluster": {
-                            "server": str(cluster_ep),
-                            "certificate-authority-data": str(cluster_cert)
-                        },
-                        "name": cluster_arn
-                    }
-                ],
-                "contexts": [
-                    {
-                        "context": {
-                            "cluster": cluster_arn,
-                            "user": cluster_arn,
-                        },
-                        "name": cluster_arn
-                    }
-                ],
-                "current-context": cluster_arn,
-                "preferences": {},
-                "users": [
-                    {
-                        "name": cluster_arn,
-                        "user": {
-                            "exec": {
-                                "apiVersion": "client.authentication.k8s.io/v1alpha1",
-                                "command": "aws-iam-authenticator",
-                                "args": [
-                                    "token", "-i", self.cluster_name
-                                ]
-                            }
-                        }
-                    }
-                ]
-        }
-
-        config_text = yaml.dump(cluster_config, default_flow_style=False)
-        config_file = os.path.expanduser("~") + "/.kube/config"
-
-        # write the kube config file
-        if not os.path.isdir(os.path.expanduser("~") + "/.kube"):
-            print('Creating .kube folder')
-            os.mkdir(os.path.expanduser("~") + "/.kube")
-
-        if not os.path.isfile(config_file):
-            open(config_file, 'x')
-
-        print("Writing kubectl configuration to ", config_file)
-        open(config_file, "w").write(config_text)
-
-        # now create the nodes
-        self.create_nodes()
-
-        print("Done")
-
-
-    # --------------------------------------------------------------------------
-    #
     def wait(self):
         if super().wait():
             self.profiler.prof('pods_finished', uid=self.id)
             self.stop_event.set()
             return True
-
-
-    # --------------------------------------------------------------------------
-    #
-    def stop_background(self, stop_event, threads):
-        """
-        stop the background task gracefully before exit
-        """
-        # request the background thread stop
-        stop_event.set()
-        # wait for the background thread to stop
-        for thread in threads:
-            thread.join()
 
 
     # --------------------------------------------------------------------------
