@@ -535,7 +535,7 @@ class Aks_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('building aks cluster..')
+        print('Building aks cluster..')
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
@@ -710,7 +710,8 @@ class Eks_Cluster(Cluster):
 
         super().__init__(run_id, None, self.size, sandbox)
 
-        atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
+        atexit.register(self.stop_background, self.delete,self.stop_event,
+                                                    [self.watch_profiles])
 
 
     # --------------------------------------------------------------------------
@@ -727,7 +728,9 @@ class Eks_Cluster(Cluster):
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
         cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
 
-        out, err = sh_callout(cmd, shell=True)
+        print('building aks cluster..')
+
+        out, err, _ = sh_callout(cmd, shell=True)
         
         print(out, err)
 
@@ -756,7 +759,7 @@ class Eks_Cluster(Cluster):
         cmd  = 'aws eks update-kubeconfig --region {0} '.format(self.vm.Region)
         cmd += '--name {0}'.format(self.cluster_name)
 
-        out, err = sh_callout(cmd, shell=True)
+        out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
 
@@ -770,18 +773,18 @@ class Eks_Cluster(Cluster):
         """
         
         name = 'Hydraa-Eks-NodeGroup-AutoScaler{0}'.format(str(uuid.uuid4()))
+
         cmd  = 'eksctl create nodegroup --name {0} '.format(name)
         cmd += '--cluster {0} --node-type {1} '.format(self.cluster_name, 
                                                               node_type)
 
         if range:
-            cmd += '--nodes --nodes-min {0} --nodes-max {1} '.format(range[0],
-                                                                     range[1])
+            cmd += '--nodes-min {1} --nodes-max {2} '.format(range[0], range[1])
  
         if volume_size:
             cmd += '--node-volume-size {1}'.format(volume_size)
 
-        out, err = sh_callout(cmd, shell=True)
+        out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
 
@@ -806,7 +809,7 @@ class Eks_Cluster(Cluster):
             
             cmd += '--nodes-min={1} --nodes-max={2}'.format(nodes, range[0], range[1])
 
-            out, err = sh_callout(cmd, shell=True)
+            out, err, _ = sh_callout(cmd, shell=True)
 
             print(out, err)
 
@@ -829,3 +832,17 @@ class Eks_Cluster(Cluster):
         self.watch_profiles.start()
 
         return depolyment_file, pods_names, batches
+
+
+    # --------------------------------------------------------------------------
+    #
+    def delete(self):
+        
+        cmd = 'eksctl delete cluster --name {0}'.format(self.cluster_name)
+
+        print('Deleteing EKS cluster: {0}'.format(self.cluster_name))
+
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)
+
