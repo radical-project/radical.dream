@@ -3,7 +3,7 @@ import time
 import math
 import copy
 import json
-import yaml
+import uuid
 import atexit
 import datetime
 
@@ -682,22 +682,9 @@ class Eks_Cluster(Cluster):
        This class asssumes that you did the one time
        preparational steps:
 
-       1- An IAM role with the name `EKSEC2UserRole`
-          that has 2 permessions:
-          
-          a-AmazonEKSClusterPolicy
-          b-AmazonEKSServicePolicy
-       
-       2- An IAM role with the name `NodeInstanceRole`
-          that has 2 permessions:
-
-          a-AmazonEKSWorkerNodePolicy
-          b-AmazonEC2ContainerRegistryReadOnly
-          c-AmazonEKS_CNI_Policy
-
-       3- A CloudFormation S3 template stack (VPC).
-
-       4- Kubectl already installed
+       1- AWS-> eksctl installed 
+       2- AWS-> aws-iam-authenticatorKubectl already installed
+       2- Kuberenetes-> kubectl installed
 
        NOTE: This class will overide any existing kubernetes config
     """
@@ -729,61 +716,24 @@ class Eks_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def bootstrap(self):
-        
-        # NOTE: unlike Azure, kubectl is not installed with AWS-CLI.
-        #       We assume that the user did:
-        #       1- install https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
-        #       2- export the path of kubectl so AKS can access it.
 
-        kubernetes_v = '1.22'
+        kubernetes_v  = '1.22'
+        NodeGroupName = "Hydraa-Eks-NodeGroup"
 
         self.profiler.prof('bootstrap_start', uid=self.id)
-
-        # Get role information
-        response = self.iam.get_role(RoleName='EKSEC2UserRole')
-        roleArn = response['Role']['Arn']
-        print("Found role ARN: ", roleArn)
-
-        response = self.clf.describe_stack_resources(StackName         = 'eks-vpc',
-                                                     LogicalResourceId = 'VPC')
-        self.vpcId = response['StackResources'][0]['PhysicalResourceId']
-        print("Found VPC ID: ", self.vpcId)
-
-        response = self.clf.describe_stack_resources(StackName        = 'eks-vpc',
-                                                     LogicalResourceId= 'ControlPlaneSecurityGroup')
-
-        self.secGroupId = response['StackResources'][0]['PhysicalResourceId']
-        print("Found security group ID: ", self.secGroupId)
-
-
-        vpc = self.ec2.Vpc(self.vpcId)
-        self.subnets = [subnet.id for subnet in vpc.subnets.all()]
-        print("Found subnets: ", self.subnets)
-
-        self.config = self.eks.create_cluster(name=self.cluster_name, version=kubernetes_v,
-                                                                         roleArn = roleArn,
-                                              resourcesVpcConfig = {'subnetIds' :  self.subnets,
-                                                                    'securityGroupIds' : [self.secGroupId]})
-
-        print("Submitted create command, response status is : ", self.config['cluster']['status'])
-        print("Waiting for cluster creation to be completed. This can take up to ten minutes")
-        waiter = self.eks.get_waiter("cluster_active")
-        waiter.wait(name=self.cluster_name)
-
-        # AWS requires IAM authenticator binary to be present in the local machine
-        # to authenticate to a Kubernetes cluster, for more information check the link:
-        # https://docs.aws.amazon.com/eks/latest/userguide/install-aws-iam-authenticator.html
-        cmd  = 'curl -Lo aws-iam-authenticator '
-        cmd += 'https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/download/v0.5.9/aws-iam-authenticator_0.5.9_linux_amd64 '
-        cmd += '&& chmod +x ./aws-iam-authenticator '
-        cmd += '&& mkdir -p {0}/bin && mv ./aws-iam-authenticator {0}/bin/aws-iam-authenticator && export PATH=$PATH:{0}/bin'.format(self.sandbox)
+        
+        cmd  = 'eksctl create cluster --name {0} '.format(self.cluster_name)
+        cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+        cmd += '--nodegroup-name {0} '.format(NodeGroupName)
+        cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
 
         out, err = sh_callout(cmd, shell=True)
         
         print(out, err)
 
-        self.profiler.prof('configure_start', uid=self.id)
+        self.profiler.prof('cofigure_start', uid=self.id)
         self.configure()
+
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
 
@@ -791,53 +741,6 @@ class Eks_Cluster(Cluster):
     #
     def configure(self):
 
-        print("Cluster available, now creating config file")
-
-        cluster      = self.eks.describe_cluster(name=self.cluster_name)
-        cluster_cert = cluster["cluster"]["certificateAuthority"]["data"]
-        cluster_ep   = cluster["cluster"]["endpoint"]
-        cluster_arn  = cluster["cluster"]["arn"]
-
-        cluster_config = {
-                "apiVersion": "v1",
-                "kind": "Config",
-                "clusters": [
-                    {
-                        "cluster": {
-                            "server": str(cluster_ep),
-                            "certificate-authority-data": str(cluster_cert)
-                        },
-                        "name": cluster_arn
-                    }
-                ],
-                "contexts": [
-                    {
-                        "context": {
-                            "cluster": cluster_arn,
-                            "user": cluster_arn,
-                        },
-                        "name": cluster_arn
-                    }
-                ],
-                "current-context": cluster_arn,
-                "preferences": {},
-                "users": [
-                    {
-                        "name": cluster_arn,
-                        "user": {
-                            "exec": {
-                                "apiVersion": "client.authentication.k8s.io/v1alpha1",
-                                "command": "aws-iam-authenticator",
-                                "args": [
-                                    "token", "-i", self.cluster_name
-                                ]
-                            }
-                        }
-                    }
-                ]
-        }
-
-        config_text = yaml.dump(cluster_config, default_flow_style=False)
         config_file = os.path.expanduser("~") + "/.kube/config"
 
         # write the kube config file
@@ -849,114 +752,63 @@ class Eks_Cluster(Cluster):
             open(config_file, 'x')
 
         print("Writing kubectl configuration to ", config_file)
-        open(config_file, "w").write(config_text)
 
-        # now create the nodes
-        self.create_nodes()
+        cmd  = 'aws eks update-kubeconfig --region {0} '.format(self.vm.Region)
+        cmd += '--name {0}'.format(self.cluster_name)
 
-        print("Done")
+        out, err = sh_callout(cmd, shell=True)
 
-
-    # --------------------------------------------------------------------------
-    #
-    def create_nodes(self):
-
-        """
-        add a stack of nodes for an existing EKS cluster.
-        
-        range: list of 2 index [min_nodes, max_nodes]
-
-        desrired_capacity: we always assume it is the min_nodes
-        """
-
-        stackName = "Eks-Auto-Scaling-Group-" + self.cluster_name
-        templateURL = 'https://amazon-eks.s3-us-west-2.amazonaws.com/cloudformation/2019-02-11/amazon-eks-nodegroup.yaml'
-
-        self.node_group_name = 'Hydraa-Eks-Nodes-Group'
-        params = [
-        {'ParameterKey'  : 'NodeImageId' , 
-        'ParameterValue' : self.vm.ImageId },
-        {'ParameterKey'  : 'NodeInstanceType' , 
-        'ParameterValue' : self.vm.InstanceID },
-        {'ParameterKey'  : 'NodeAutoScalingGroupMinSize' , 
-        'ParameterValue' : str(self.vm.MinCount) },
-        {'ParameterKey'  : 'NodeAutoScalingGroupMaxSize' , 
-        'ParameterValue' : str(self.vm.MaxCount) },
-        {'ParameterKey'  : 'NodeAutoScalingGroupDesiredCapacity' , 
-        'ParameterValue' : str(self.vm.MinCount) },
-        {'ParameterKey'  : 'NodeVolumeSize' , 
-        'ParameterValue' : str(30) }, # FIXME: find a way to determine the best disk size
-        {'ParameterKey'  : 'ClusterName' , 
-        'ParameterValue' : self.cluster_name },
-        {'ParameterKey'  : 'NodeGroupName' ,
-        'ParameterValue' : self.node_group_name },
-        {'ParameterKey'  : 'ClusterControlPlaneSecurityGroup' , 
-        'ParameterValue' : self.secGroupId },
-        {'ParameterKey'  : 'VpcId' , 
-        'ParameterValue' : self.vpcId },
-        {'ParameterKey'  : 'Subnets' , 
-        'ParameterValue' : ",".join(self.subnets) },
-        ]
-
-        if self.vm.KeyPair:
-            params.append({'ParameterKey'   : 'KeyName' ,
-                           'ParameterValue' : self.vm.KeyPair })
-
-        print("Params: ", params)
-        self.clf.create_stack(StackName = stackName, TemplateURL = templateURL,
-                              Parameters = params, Capabilities = ['CAPABILITY_IAM'])
-
-        print("Submitted creation request for auto-scaling group stack, now waiting for completion")
-        waiter = self.clf.get_waiter('stack_create_complete')
-        waiter.wait(StackName=stackName)
-
-        # Extract node instance role 
-        stack = self.rclf.Stack(stackName)
-        for i in stack.outputs:
-            if (i['OutputKey'] == "NodeInstanceRole"):
-                nodeInstanceRole = i['OutputValue']
-
-        print("Using node instance role ", nodeInstanceRole)
-
-        self.add_config_map(nodeInstanceRole)
+        print(out, err)
 
 
     # --------------------------------------------------------------------------
     #
-    def add_config_map(self, nodeInstanceRole):
+    def add_auto_scaler(self, node_type, range=[2,2], volume_size=0):
+        """
+        range[0] int   minimum nodes in ASG (default 2)
+        range[1] int   maximum nodes in ASG (default 2)
+        """
         
-        config.load_kube_config()
-        v1 = client.CoreV1Api() 
+        name = 'Hydraa-Eks-NodeGroup-AutoScaler{0}'.format(str(uuid.uuid4()))
+        cmd  = 'eksctl create nodegroup --name {0} '.format(name)
+        cmd += '--cluster {0} --node-type {1} '.format(self.cluster_name, 
+                                                              node_type)
 
-        # We need to create a config map in the namespace kube-system
-        # 
-        namespace = "kube-system"
-        configMapName = "aws-auth"
+        if range:
+            cmd += '--nodes --nodes-min {0} --nodes-max {1} '.format(range[0],
+                                                                     range[1])
+ 
+        if volume_size:
+            cmd += '--node-volume-size {1}'.format(volume_size)
 
-        # Delete old config maps in case it exists
-        #
-        body = client.V1DeleteOptions()
-        body.api_version="v1"
-        try:
-            v1.delete_namespaced_config_map(name="aws-auth", namespace="kube-system", body = body)
-        except ApiException as e:
-            pass
-    
-        # Create new config map
-        #
-        body = client.V1ConfigMap()
-        body.api_version="v1"
-        body.metadata = {}
-        body.metadata['name'] = configMapName
-        body.metadata['namespace'] = namespace
+        out, err = sh_callout(cmd, shell=True)
 
-        body.data = {}
-        body.data['mapRoles'] = "- rolearn: " + nodeInstanceRole +  "\n  username: system:node:{{EC2PrivateDNSName}}\n  groups:\n    - system:bootstrappers\n    - system:nodes\n"
+        print(out, err)
 
-        print("Submitting request to create config map")
-        response = v1.create_namespaced_config_map(namespace, body)
-        print("Done")
+        self.vm.AutoScaler = [name]
 
+
+    # --------------------------------------------------------------------------
+    #
+    def add_nodes(self, group_name, range, nodes=0):
+        """
+        add nodes to an existing cluster
+        """
+        if self.vm.AutoScaler:
+            if len(self.vm.AutoScaler) > 1:
+                print('Group Name needed: {0}'.format(self.vm.AutoScaler))
+                return
+
+            cmd  = 'eksctl scale nodegroup --name {0} '.format(group_name)
+            cmd += '--cluster {0} '.format(self.cluster_name)
+            if nodes:
+                cmd += '--nodes={0} '
+            
+            cmd += '--nodes-min={1} --nodes-max={2}'.format(nodes, range[0], range[1])
+
+            out, err = sh_callout(cmd, shell=True)
+
+            print(out, err)
 
     # --------------------------------------------------------------------------
     #
