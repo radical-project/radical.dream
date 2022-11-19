@@ -86,7 +86,7 @@ class AwsCaas():
         self._family_ids   = OrderedDict()
 
         self.launch_type  =  None
-        self._region_name =  cred['region_name']
+        self.region       =  cred['region_name']
 
         self._run_cost     = 0
 
@@ -126,7 +126,7 @@ class AwsCaas():
     # --------------------------------------------------------------------------
     #
     def _budget(self) -> AwsCost:      
-        return AwsCost(self._prc_client, self._dydb_resource, self._region_name)
+        return AwsCost(self._prc_client, self._dydb_resource, self.region)
     
 
     # --------------------------------------------------------------------------
@@ -155,6 +155,8 @@ class AwsCaas():
         if self.status:
             self.__cleanup()
 
+        
+        VM.Region        = self.region
         self.launch_type = VM.LaunchType
 
         # TODO: In our scheduling mechanism we need to consider:
@@ -1111,7 +1113,7 @@ class AwsCaas():
 
             self._family_ids.clear()
 
-            self._region_name =  None
+            self.region =  None
             print('done')
         
 
