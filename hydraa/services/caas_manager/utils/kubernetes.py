@@ -736,7 +736,7 @@ class Eks_Cluster(Cluster):
         
         cmd  = 'eksctl create cluster --name {0} '.format(self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
-        cmd += '--zones {0}{1} '.format(self.vm.Region, Support_Zones[0])
+        cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, Support_Zones[0], Support_Zones[1])
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
         cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
 
