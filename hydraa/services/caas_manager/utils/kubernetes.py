@@ -68,7 +68,7 @@ class Cluster:
         """
         deploy kubernetes cluster K8s on chi
         """
-        print('booting K8s cluster on the remote machine')
+        print('Booting K8s cluster on the remote machine')
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -94,10 +94,10 @@ class Cluster:
 
             # check if the cluster is ready to submit the pod
             if "microk8s is running" in stream.stdout:
-                print('booting Kuberentes cluster successful')
+                print('Booting Kuberentes cluster successful')
                 break
             else:
-                print('waiting for Kuberentes cluster to be running')
+                print('Waiting for Kuberentes cluster to be running')
                 time.sleep(1)
         
         # the default ttl for Microk8s cluster to keep the historical
@@ -222,9 +222,9 @@ class Cluster:
                 done_pods = int(out.strip())
 
             if done_pods:
-                print('completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
+                print('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
                 if self.pod_counter == int(done_pods):
-                    print('{0} pods finished with status "Completed"'.format(done_pods))
+                    print('{0} Pods finished with status "Completed"'.format(done_pods))
                     break
                 else:
                     time.sleep(5)
@@ -341,7 +341,7 @@ class Cluster:
             for pod in response['items']:
                 # get the status of each pod
                 phase = pod['status']['phase']
-                print('pod has phase:{0}'.format(phase))
+
                 # iterate on containers
                 for container in pod['status']['containerStatuses']:
                     c_name = container.get('name')
@@ -355,7 +355,7 @@ class Cluster:
                                 i +=1
 
                         else:
-                            print('pods did not finish yet or failed')
+                            print('Pods did not finish yet or failed')
 
             os.remove('pod_status.json')
 
@@ -414,14 +414,14 @@ class Cluster:
         """
 
         def get_profiles(ids):
-            print('registering a profiles checkpoint')
+            print('Registering a profiles checkpoint')
             fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
             self.dataframes.append(df)
             df.to_csv(fname)
-            print('checkpoint profiles saved to {0}'.format(fname))
+            print('Checkpoint profiles saved to {0}'.format(fname))
 
         ids = 0
         # iterate until the stop_event is triggered
@@ -495,7 +495,7 @@ class Aks_Cluster(Cluster):
     #
     def __init__(self, run_id, vm, sandbox):
         self.id             = run_id
-        self.cluster_name   = 'hydraa_aks_cluster'
+        self.cluster_name   = 'HydraaAksCluster'
         self.resource_group = vm.ResourceGroup
         self.nodes          = vm.MinCount
         self.max_pods       = 250
@@ -683,10 +683,11 @@ class Eks_Cluster(Cluster):
        preparational steps:
 
        1- AWS-> eksctl installed 
-       2- AWS-> aws-iam-authenticatorKubectl already installed
+       2- AWS-> aws-iam-authenticator
        2- Kuberenetes-> kubectl installed
 
-       NOTE: This class will overide any existing kubernetes config
+       FIXME: For every run, export $KUBECONFIG
+       NOTE : This class will overide any existing kubernetes config
     """
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, nodes=1):
 
@@ -718,21 +719,32 @@ class Eks_Cluster(Cluster):
     #
     def bootstrap(self):
 
+        # FIXME: let the user specify the kubernetes_v
         kubernetes_v  = '1.22'
         NodeGroupName = "Hydraa-Eks-NodeGroup"
+
+        # FIXME: Find a way to workaround
+        #        the limited avilability
+        #        zones.
+        # https://github.com/weaveworks/eksctl/issues/817
+
+        Support_Zones = ['a', 'b']
 
         self.profiler.prof('bootstrap_start', uid=self.id)
         
         cmd  = 'eksctl create cluster --name {0} '.format(self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+        cmd += '--zones {0}{1}'.format(self.vm.Region, Support_Zones[0])
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
         cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
 
-        print('building aks cluster..')
+        print('Building aks cluster..')
 
-        out, err, _ = sh_callout(cmd, shell=True)
-        
-        print(out, err)
+        out, err, ret = sh_callout(cmd, shell=True)
+
+        if ret:
+            print(out, err)
+            raise Exception('Failed to build EKS cluster')
 
         self.profiler.prof('cofigure_start', uid=self.id)
         self.configure()
@@ -799,7 +811,7 @@ class Eks_Cluster(Cluster):
         """
         if self.vm.AutoScaler:
             if len(self.vm.AutoScaler) > 1:
-                print('Group Name needed: {0}'.format(self.vm.AutoScaler))
+                print('Please specify which NodeGroup to add nodes to: {0}'.format(self.vm.AutoScaler))
                 return
 
             cmd  = 'eksctl scale nodegroup --name {0} '.format(group_name)
