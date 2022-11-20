@@ -711,6 +711,8 @@ class Eks_Cluster(Cluster):
 
         super().__init__(run_id, None, self.size, sandbox)
 
+        self.watch_profiles.daemon = True
+
         atexit.register(self.stop_background, self.delete,self.stop_event,
                                                     [self.watch_profiles])
 
