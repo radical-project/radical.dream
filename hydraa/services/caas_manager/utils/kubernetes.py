@@ -751,6 +751,8 @@ class Eks_Cluster(Cluster):
         if ret:
             print(out, err)
             raise Exception('Failed to build EKS cluster')
+        
+        print(out, err)
 
         self.profiler.prof('cofigure_start', uid=self.id)
         self.configure()
