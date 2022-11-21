@@ -654,16 +654,16 @@ class Aks_Cluster(Cluster):
         cmd = 'az vm list-sizes --location {0}'.format(region)
         vms = sh_callout(cmd, shell=True, munch=True)
 
-        vm_cores = 0
+        vcpus = 0
         # get the coresponding info of the targeted vm
         for vm in vms:
             name = vm.get('name', None)
             if name == vm_id:
-                vm_cores = vm['numberOfCores']
+                vcpus = vm['numberOfCores']
                 break
-        if not vm_cores:
+        if not vcpus:
             raise Exception('Can not find VM size')
-        return vm_cores
+        return vcpus
 
 
     # --------------------------------------------------------------------------
@@ -696,7 +696,7 @@ class Eks_Cluster(Cluster):
         self.cluster_name   = 'Hydraa-Eks-Cluster'
         self.nodes          = nodes
         self.max_pods       = 250
-        self.size           = 1
+        self.size           = 0
         self.sandbox        = sandbox
         self.vm             = vm
         self.config         = None
@@ -734,6 +734,9 @@ class Eks_Cluster(Cluster):
         Support_Zones = ['a', 'b']
 
         self.profiler.prof('bootstrap_start', uid=self.id)
+
+        if not self.size:
+            self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
         
         cmd  = 'eksctl create cluster --name {0} '.format(self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
@@ -804,6 +807,45 @@ class Eks_Cluster(Cluster):
         print(out, err)
 
         self.vm.AutoScaler = [name]
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_vm_size(vm_id, region):
+        '''
+        Modified version of get_instances() from
+        https://github.com/powdahound/ec2instances.info/blob/master/ec2.py
+        AWS provides no simple API for retrieving all instance types
+        '''
+        import boto3
+        pricing_client = boto3.client('pricing', region_name=region)
+        product_pager = pricing_client.get_paginator('get_products')
+
+        product_iterator = product_pager.paginate(
+            ServiceCode='AmazonEC2', Filters=[
+                # We're gonna assume N. Virginia has all the available types
+                {'Type': 'TERM_MATCH', 'Field': 'location',
+                 'Value': 'US East (N. Virginia)'},])
+
+        vcpus = 0
+        for product_item in product_iterator:
+            for offer_string in product_item.get('PriceList'):
+                offer = json.loads(offer_string)
+                product = offer.get('product')
+
+                # Check if it's an instance
+                if product.get('productFamily') not in ['Dedicated Host',
+                                                        'Compute Instance',
+                                                        'Compute Instance (bare metal)']:
+                    continue
+
+                product_attributes = product.get('attributes')
+                instance_type = product_attributes.get('instanceType')
+                if instance_type == vm_id:
+                    vcpus = product_attributes.get('vcpu')
+                    if not vcpus:
+                        raise Exception('Could not find VM size')
+                    return int(vcpus)
 
 
     # --------------------------------------------------------------------------
