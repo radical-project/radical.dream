@@ -68,7 +68,7 @@ class Cluster:
         """
         deploy kubernetes cluster K8s on chi
         """
-        print('Booting K8s cluster on the remote machine')
+        print('Building MicroK8s cluster on the remote machine')
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -419,7 +419,7 @@ class Cluster:
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
-            self.dataframes.append(df)
+
             df.to_csv(fname)
             print('Checkpoint profiles saved to {0}'.format(fname))
 
@@ -507,8 +507,6 @@ class Aks_Cluster(Cluster):
         self.stop_event     = mt.Event()
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
 
-        self.dataframes     = []
-
         super().__init__(run_id, None, self.size, sandbox)
 
         self.watch_profiles.daemon = True
@@ -535,7 +533,7 @@ class Aks_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('Building aks cluster..')
+        print('Building AKS cluster..')
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
@@ -655,14 +653,17 @@ class Aks_Cluster(Cluster):
         # obtain all of the vms in this region
         cmd = 'az vm list-sizes --location {0}'.format(region)
         vms = sh_callout(cmd, shell=True, munch=True)
-        
+
+        vm_cores = 0
         # get the coresponding info of the targeted vm
         for vm in vms:
-            name = vm.get('name')
-            if not name:
-                raise Exception('Could not retrive the VM size')
+            name = vm.get('name', None)
             if name == vm_id:
-                return vm['numberOfCores']
+                vm_cores = vm['numberOfCores']
+                break
+        if not vm_cores:
+            raise Exception('Can not find VM size')
+        return vm_cores
 
 
     # --------------------------------------------------------------------------
@@ -740,7 +741,7 @@ class Eks_Cluster(Cluster):
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
         cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
 
-        print('Building aks cluster..')
+        print('Building EKS cluster..')
 
         out, err, ret = sh_callout(cmd, shell=True)
 
