@@ -811,7 +811,7 @@ class Eks_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def get_vm_size(vm_id, region):
+    def get_vm_size(self, vm_id, region):
         '''
         Modified version of get_instances() from
         https://github.com/powdahound/ec2instances.info/blob/master/ec2.py
