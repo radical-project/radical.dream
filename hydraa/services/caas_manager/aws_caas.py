@@ -1171,7 +1171,7 @@ class AwsCaas():
         
         if self.EKS_cluster:
             self.EKS_cluster.shutdown()
-        
+
         self.__cleanup()
         
 

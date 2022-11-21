@@ -903,5 +903,5 @@ class EKS_Cluster(Cluster):
     
 
     def shutdown(self):
-        self.stop_background()
+        self.stop_background(self.stop_event, [self.watch_profiles])
         self.delete()
