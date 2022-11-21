@@ -196,24 +196,24 @@ class AwsCaas():
 
         # check if this is an ECS service
         if self.launch_type in ECS:
-            resource_cluster = self.create_cluster()
-            self._wait_clusters(resource_cluster)
+            self.ECS_cluster = self.create_cluster()
+            self._wait_clusters(self.ECS_cluster)
 
             if self.launch_type in FARGATE:
-                self.submit(tasks, resource_cluster)
+                self.submit(tasks, self.ECS_cluster)
 
             if self.launch_type in EC2:
                 self.create_ec2_instance(VM)
-                self.submit(tasks, resource_cluster)
+                self.submit(tasks, self.ECS_cluster)
 
         
         # check if this is an EKS service
         if self.launch_type in EKS:
-            self.cluster = kubernetes.Eks_Cluster(self.run_id, self.sandbox,
-                                    VM, self._iam_client,self._clf_resource,
-                                       self._clf_client, self._ec2_resource,
-                                                  self._eks_client, nodes=1)
-            self.cluster.bootstrap()
+            self.EKS_cluster = kubernetes.EKS_Cluster(self.run_id, self.sandbox,
+                                        VM, self._iam_client,self._clf_resource,
+                                           self._clf_client, self._ec2_resource,
+                                                               self._eks_client)
+            self.EKS_cluster.bootstrap()
             self.submit_to_eks(tasks)
 
         self.runs_tree[self.run_id] =  self._family_ids
@@ -677,7 +677,7 @@ class AwsCaas():
             self._task_id +=1
 
         # submit to kubernets cluster
-        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
+        depolyment_file, pods_names, batches = self.EKS_cluster.submit(ctasks)
         
         # create entry for the pod in the pods book
         '''
@@ -899,7 +899,7 @@ class AwsCaas():
             raise Exception('Task wait is not supported in asynchronous mode')
 
         if self.cluster:
-            self.cluster.wait()
+            self.EKS_cluster.wait()
             return
 
         UP = "\x1B[3A"
@@ -1124,57 +1124,53 @@ class AwsCaas():
 
         if not self.cluster_name and self.status == False:
             return
+        
+        print("Shutting down.....")
 
-        try:
-            print("Shutting down.....")
-            # set desired service count to 0 (obligatory to delete)
-            response = self._ecs_client.update_service(cluster=self.cluster_name,
-                                                       service=self.service_name,
-                                                       desiredCount=0)
-            # delete service
-            response = self._ecs_client.delete_service(cluster=self.cluster_name,
-                                                       service=self.service_name)
-        except:
-            #print("no active service found")
-            pass
+        # Delete the ECS cluster and all of the associated
+        # resources.
+        if self.ECS_cluster:
+            try:
+                if self.service_name:
+                    # set desired service count to 0 (obligatory to delete)
+                    self._ecs_client.update_service(cluster=self.cluster_name,
+                                                    service=self.service_name,
+                                                               desiredCount=0)
+                    # delete service
+                    self._ecs_client.delete_service(cluster=self.cluster_name,
+                                                    service=self.service_name)
+            except:
+                pass
 
-        # degister all task definitions
-        if self._family_ids:
-            for task_fam_key, task_fam_val in self._family_ids.items():
-                # deregister task definition(s)
-                print("deregistering task {0}".format(task_fam_val['ARN']))
-                deregister_response = self._ecs_client.deregister_task_definition(
-                    taskDefinition=task_fam_val['ARN'])
+            # degister all task definitions
+            if self._family_ids:
+                for task_fam_key, task_fam_val in self._family_ids.items():
+                    # deregister task definition(s)
+                    print("deregistering task {0}".format(task_fam_val['ARN']))
+                    self._ecs_client.deregister_task_definition(taskDefinition=task_fam_val['ARN'])
 
-        # terminate virtual machine(s)
-        instances = self._ecs_client.list_container_instances(cluster=self.cluster_name)
-        if instances["containerInstanceArns"]:
-            container_instance_resp = self._ecs_client.describe_container_instances(
-            cluster=self.cluster_name,
-            containerInstances=instances["containerInstanceArns"])
+            # terminate virtual machine(s)
+            instances = self._ecs_client.list_container_instances(cluster=self.cluster_name)
+            if instances["containerInstanceArns"]:
+                container_instance_resp = self._ecs_client.describe_container_instances(
+                cluster=self.cluster_name,
+                containerInstances=instances["containerInstanceArns"])
 
-            for ec2_instance in container_instance_resp["containerInstances"]:
-                istance_id = ec2_instance['ec2InstanceId']
-                print("terminating instance {0}".format(istance_id))
-                ec2_termination_resp = self._ec2_client.terminate_instances(
-                    DryRun=False,
-                    InstanceIds=[istance_id])
-                
-                waiter = self._ec2_client.get_waiter('instance_terminated')
-                waiter.wait(InstanceIds=[istance_id])
+                for ec2_instance in container_instance_resp["containerInstances"]:
+                    istance_id = ec2_instance['ec2InstanceId']
+                    print("terminating instance {0}".format(istance_id))
+                    self._ec2_client.terminate_instances(DryRun=False,
+                                                         InstanceIds=[istance_id])
+                    
+                    waiter = self._ec2_client.get_waiter('instance_terminated')
+                    waiter.wait(InstanceIds=[istance_id])
 
-        # finally delete the cluster
-        clusters = self.list_cluster()
-
-        # check if we have running clusters
-        if clusters:
-            if not self.cluster_name in clusters[0]:
-                print('cluster {0} does not exist'.format(self.cluster_name))
-            elif 'hydraa' in clusters[0]:
-                response = self._ecs_client.delete_cluster(cluster=self.cluster_name)
-                print("hydraa cluster {0} found and deleted".format(self.cluster_name))
-        else:
-            print("no cluster(s) found/active")
+            # finally delete the cluster
+            self._ecs_client.delete_cluster(cluster=self.cluster_name)
+            print("hydraa cluster {0} found and deleted".format(self.cluster_name))
+        
+        if self.EKS_cluster:
+            self.EKS_cluster.shutdown()
         
         self.__cleanup()
         

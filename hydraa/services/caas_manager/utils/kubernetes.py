@@ -678,7 +678,7 @@ class Aks_Cluster(Cluster):
         return depolyment_file, pods_names, batches
 
 
-class Eks_Cluster(Cluster):
+class EKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that you did the one time
        preparational steps:
@@ -690,11 +690,10 @@ class Eks_Cluster(Cluster):
        FIXME: For every run, export $KUBECONFIG
        NOTE : This class will overide any existing kubernetes config
     """
-    def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, nodes=1):
+    def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks):
 
         self.id             = run_id
         self.cluster_name   = 'Hydraa-Eks-Cluster'
-        self.nodes          = nodes
         self.max_pods       = 250
         self.size           = 0
         self.sandbox        = sandbox
@@ -713,9 +712,6 @@ class Eks_Cluster(Cluster):
         super().__init__(run_id, None, self.size, sandbox)
 
         self.watch_profiles.daemon = True
-
-        atexit.register(self.stop_background, self.delete,self.stop_event,
-                                                    [self.watch_profiles])
 
 
     # --------------------------------------------------------------------------
@@ -904,4 +900,8 @@ class Eks_Cluster(Cluster):
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
+    
 
+    def shutdown(self):
+        self.stop_background()
+        self.delete()
