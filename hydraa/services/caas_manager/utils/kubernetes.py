@@ -12,10 +12,8 @@ import threading     as mt
 import radical.utils as ru
 
 from .misc                  import sh_callout
-from functools              import reduce
-from kubernetes             import client, config
+from kubernetes             import client
 from azure.cli.core         import get_default_cli
-from kubernetes.client.rest import ApiException
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
