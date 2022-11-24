@@ -479,7 +479,7 @@ class Cluster:
         pass
     
 
-class Aks_Cluster(Cluster):
+class AKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that:
 

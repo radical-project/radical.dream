@@ -61,7 +61,7 @@ class AzureCaas():
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
-        self.cluster                = None
+        self.AKS_Cluster            = None
         self._resource_group        = None
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
@@ -128,9 +128,9 @@ class AzureCaas():
 
         if self.launch_type in AKS:
             VM.ResourceGroup = self._resource_group
-            self.cluster = kubernetes.Aks_Cluster(self.run_id, VM, self.sandbox)
+            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, VM, self.sandbox)
 
-            self.cluster.bootstrap()
+            self.AKS_Cluster.bootstrap()
             self.submit_to_aks(tasks)
         else:  
             self.submit(tasks)
@@ -263,7 +263,7 @@ class AzureCaas():
             self._task_id +=1
 
         # submit to kubernets cluster
-        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
+        depolyment_file, pods_names, batches = self.AKS_Cluster.submit(ctasks)
         
         # create entry for the pod in the pods book
         '''
@@ -369,8 +369,8 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
         
-        if self.cluster:
-            self.cluster.wait()
+        if self.launch_type in AKS:
+            self.AKS_Cluster.wait()
             return
 
         UP = "\x1B[3A"
@@ -439,12 +439,12 @@ class AzureCaas():
             print('pandas module required to obtain profiles')
         
         
-        if self.cluster:
-            pod_stamps  = self.cluster.get_pod_status()
-            task_stamps = self.cluster.get_pod_events()
+        if self.launch_type in AKS:
+            pod_stamps  = self.AKS_Cluster.get_pod_status()
+            task_stamps = self.AKS_Cluster.get_pod_events()
             fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
                                                  len(self._tasks_book),
-                                                     self.cluster.size)
+                                                 self.AKS_Cluster.size)
             df = (pd.merge(pod_stamps, task_stamps, on='Task_ID'))
         else:
         

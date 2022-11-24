@@ -195,6 +195,8 @@ class AwsCaas():
 
 
         # check if this is an ECS service
+        # FIXME: FARGATE and EC2 are not a
+        # launch type
         if self.launch_type in ECS:
             self.ECS_cluster = self.create_cluster()
             self._wait_clusters(self.ECS_cluster)
@@ -1129,7 +1131,7 @@ class AwsCaas():
 
         # Delete the ECS cluster and all of the associated
         # resources.
-        if self.ECS_cluster:
+        if self.launch_type in ECS:
             try:
                 if self.service_name:
                     # set desired service count to 0 (obligatory to delete)
@@ -1169,7 +1171,7 @@ class AwsCaas():
             self._ecs_client.delete_cluster(cluster=self.cluster_name)
             print("hydraa cluster {0} found and deleted".format(self.cluster_name))
         
-        if self.EKS_cluster:
+        if self.launch_type in EKS:
             self.EKS_cluster.shutdown()
 
         self.__cleanup()
