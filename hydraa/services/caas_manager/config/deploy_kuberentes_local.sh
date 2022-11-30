@@ -19,17 +19,12 @@ boot_kubernetes_ubuntu_PM () {
     # Enable storage addons
     sudo microk8s enable dns dashboard storage
 
+    # create a fake kubectl binary
+    touch $HOME/kubectl
+    sudo echo -e "#!/bin/sh \n sudo microk8s kubectl $"@"" >  $HOME/kubectl
+    chmod +x $HOME/kubectl
+    sudo mv $HOME/kubectl /usr/local/bin
 
-    # Set alias for the "sudo microk8s kubctl"
-    if [[ ! -e $HOME/.bash_aliases ]]; then
-        touch $HOME/.bash_aliases
-    fi
-
-    echo "alias kubectl='sudo microk8s kubectl'" >> $HOME/.bash_aliases
-
-    # Activate the alias
-    source $HOME/.bash_aliases
-    
     # Access the cluster namespace
     kubectl get all --all-namespaces
 
@@ -56,15 +51,17 @@ boot_kubernetes_ubuntu_VM () {
     sudo usermod -a -G microk8s $USER
     sudo chown -f -R $USER ~/.kube
 
-    #sudo ufw allow in on cni0 && sudo ufw allow out on cni0
-
-    #sudo ufw default allow routed
+    # create a fake kubectl binary
+    touch $HOME/kubectl
+    sudo echo -e "#!/bin/sh \n sudo microk8s kubectl $"@"" >  $HOME/kubectl
+    chmod +x $HOME/kubectl
+    sudo mv $HOME/kubectl /usr/local/bin
 
     # Access the cluster namespace
-    sudo microk8s kubectl get all --all-namespaces
+    kubectl get all --all-namespaces
 
     # check the cluster resources
-    sudo microk8s kubectl describe node
+    kubectl describe node
 
     sudo microk8s.status
 }
@@ -73,7 +70,7 @@ if [  -n "$(uname -a | grep Ubuntu)" ]; then
     if [ "" = "$(systemd-detect-virt)"  ]; then
         echo "Physical Machine Detected"
         boot_kubernetes_ubuntu_PM
-    
+
     else
         echo "Virtual Machine Detected"
         boot_kubernetes_ubuntu_VM
