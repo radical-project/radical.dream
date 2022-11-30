@@ -37,6 +37,7 @@ def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False
     if munch:
         if not ret:
             out = eval(stdout.decode("utf-8"))
+            # FIXME: return out, stderr, ret
             return out
     else:
         return stdout.decode("utf-8"), stderr.decode("utf-8"), ret
