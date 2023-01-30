@@ -509,8 +509,8 @@ class AKS_Cluster(Cluster):
 
         self.watch_profiles.daemon = True
 
-        az_cli = get_default_cli()
-        az_cli.invoke(['login', '--use-device-code'])
+        #az_cli = get_default_cli()
+        #az_cli.invoke(['login', '--use-device-code'])
 
         atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
 
@@ -729,6 +729,9 @@ class EKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
+        self.profiler.prof('cofigure_start', uid=self.id)
+        kube_config_file = self.configure()
+
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
         
@@ -736,7 +739,8 @@ class EKS_Cluster(Cluster):
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
         cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, Support_Zones[0], Support_Zones[1])
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-        cmd += '--node-type {0} --nodes {1}'.format(self.vm.InstanceID, self.vm.MinCount)
+        cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
+        cmd += '--kubeconfig {0}'.format(kube_config_file)
 
         print('Building EKS cluster..')
 
@@ -748,9 +752,6 @@ class EKS_Cluster(Cluster):
         
         print(out, err)
 
-        self.profiler.prof('cofigure_start', uid=self.id)
-        self.configure()
-
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
 
@@ -758,24 +759,14 @@ class EKS_Cluster(Cluster):
     #
     def configure(self):
 
-        config_file = os.path.expanduser("~") + "/.kube/config"
+        config_file = self.sandbox + "/.kube/config"
 
-        # write the kube config file
-        if not os.path.isdir(os.path.expanduser("~") + "/.kube"):
-            print('Creating .kube folder')
-            os.mkdir(os.path.expanduser("~") + "/.kube")
+        print('Creating .kube folder')
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
 
-        if not os.path.isfile(config_file):
-            open(config_file, 'x')
-
-        print("Writing kubectl configuration to ", config_file)
-
-        cmd  = 'aws eks update-kubeconfig --region {0} '.format(self.vm.Region)
-        cmd += '--name {0}'.format(self.cluster_name)
-
-        out, err, _ = sh_callout(cmd, shell=True)
-
-        print(out, err)
+        return config_file
+        
 
 
     # --------------------------------------------------------------------------

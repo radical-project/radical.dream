@@ -250,7 +250,7 @@ class ChiCaas:
                                                  key_name=keypair.name)
 
             # Wait for a server to reach ACTIVE status.
-            self.client.wait_for_server(instance)
+            self.client.wait_for_server(instance, timeout=600)
 
         if self.launch_type == 'Baremetal':
             # Launch your compute node instances
