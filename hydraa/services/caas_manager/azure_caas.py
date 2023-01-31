@@ -4,8 +4,10 @@ import math
 import uuid
 import copy
 import time
+import queue
 import atexit
 import datetime
+import threading
 
 from collections import OrderedDict
 from azure.batch import BatchServiceClient
@@ -46,9 +48,10 @@ CGPRG = 60  # Number of container groups per resource group
 
 
 class AzureCaas():
-    def __init__(self, sandbox, manager_id, cred, asynchronous,
-                                            prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
+                                               prof, DryRun=False):
         
+
         self.manager_id = manager_id
 
         self.status = False
@@ -66,20 +69,17 @@ class AzureCaas():
         self._resource_group_name   = None
         self._container_group_names = OrderedDict()
 
-        self.run_id       = str(uuid.uuid4())
-
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
         self._task_id     = 0
         self._tasks_book  = OrderedDict()
 
-        self.launch_type  = None
+        self.vm        = VM
+        self.vm.Region = cred['region_name']
 
-        # FIXME: This is not correct. Remove this from
-        # the init and if the region is required, obtain it
-        # from self.vm.Region.
-        self.region       = cred['region_name']
-        self.run_cost    = 0
+        self.run_id    = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
+
+        self.run_cost = 0
 
         self.runs_tree = OrderedDict()
 
@@ -90,6 +90,17 @@ class AzureCaas():
         os.mkdir(self.sandbox, 0o777)
 
         self.profiler = prof(name=__name__, path=self.sandbox)
+
+        self.incoming_q = queue.Queue()
+        self.outgoing_q = queue.Queue()
+
+        self._terminate = threading.Event()
+
+        self.start_thread = threading.Thread(target=self.start, name='AzureCaaS')
+        self.start_thread.daemon = True
+
+        if not self.start_thread.is_alive():
+            self.start_thread.start()
 
         atexit.register(self._shutdown)
 
@@ -103,18 +114,11 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def run(self, VM, tasks, budget=0, time=0):
+    def start(self):
         
         if self.status:
-            self.__cleanup()
-
-        self.status      = ACTIVE
-        
-        # FIXME: This is not correct. It should be
-        # self.vm = VM, and to get LaunchType we do
-        # self.vm.LaunchType
-        self.launch_type = VM.LaunchType
-        VM.Region = self.region
+            print('Manager already started')
+            return self.run_id
 
         print("starting run {0}".format(self.run_id))
 
@@ -126,19 +130,56 @@ class AzureCaas():
 
         self.profiler.prof('prep_stop', uid=self.run_id)
 
-        if self.launch_type in AKS:
-            VM.ResourceGroup = self._resource_group
-            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, VM, self.sandbox)
-
+        if self.vm.LaunchType  in AKS:
+            self.vm.ResourceGroup = self._resource_group
+            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, self.vm, self.sandbox)
             self.AKS_Cluster.bootstrap()
-            self.submit_to_aks(tasks)
-        else:  
-            self.submit(tasks)
 
-        if self.asynchronous:
-            return self.run_id
+        else:  
+            pass
         
-        self._wait_tasks()
+        # call get work to pull tasks
+        self._get_work()
+
+        # now set the manager as active
+        self.status = ACTIVE
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _get_work(self):
+
+        bulk = list()
+        max_bulk_size = 100
+        max_bulk_time = 2        # seconds
+        min_bulk_time = 0.1      # seconds
+
+        while not self._terminate.is_set():
+            now = time.time()  # time of last submission
+            # collect tasks for min bulk time
+            # NOTE: total collect time could actually be max_time + min_time
+            while time.time() - now < max_bulk_time:
+                try:
+                    task = self.incoming_q.get(block=True, timeout=min_bulk_time)
+                except queue.Empty:
+                        task = None
+                
+                if task:
+                        bulk.append(task)
+                
+                if len(bulk) >= max_bulk_size:
+                        break
+
+            if bulk:
+                if self.vm.LaunchType  in AKS:
+                    self.submit_to_aks(bulk)
+                else:
+                    self.submit(bulk)
+
+                if not self.asynchronous:
+                    self._wait_tasks()
+                bulk = list()
+
 
     # --------------------------------------------------------------------------
     #
@@ -200,7 +241,7 @@ class AzureCaas():
 
         print("Creating resource group '{0}'...".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
-                                                   {'location': self.region})
+                                                   {'location': self.vm.Region})
 
         resource_group = self.res_client.resource_groups.get(self._resource_group_name)
 
@@ -224,8 +265,6 @@ class AzureCaas():
             command = ['/bin/sh', '-c', 'echo FOO BAR && tail -f /dev/null']
         """
         self._container_group_name = 'hydraa-contianer-group-{0}'.format(str(uuid.uuid4()))
-
-        #print("Creating container group '{0}'...".format(self._container_group_name), end='\r')
 
         group = ContainerGroup(location=resource_group.location,
                                containers=contianers,
@@ -255,7 +294,7 @@ class AzureCaas():
             ctask.id          = self._task_id
             ctask.name        = 'ctask-{0}'.format(self._task_id)
             ctask.provider    = AZURE
-            ctask.launch_type = self.launch_type
+            ctask.launch_type = self.vm.LaunchType 
 
             self._tasks_book[str(ctask.id)] = ctask.name
             print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
@@ -289,13 +328,13 @@ class AzureCaas():
                 ctask.id          = self._task_id
                 ctask.name        = 'ctask-{0}'.format(self._task_id)
                 ctask.provider    = AZURE
-                ctask.launch_type = self.launch_type
+                ctask.launch_type = self.vm.LaunchType 
 
                 container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
                                                                          cpu=ctask.vcpus)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
-                
+
                 az_vars =[]
                 if ctask.env_var:
                     for var in ctask.env_var:
@@ -310,7 +349,7 @@ class AzureCaas():
                                       command=ctask.cmd,
                                       environment_variables=az_vars)
                 containers.append(container)
-                
+
                 self._tasks_book[str(ctask.id)] = ctask.name
                 print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
                                                                             end='\r')
@@ -369,7 +408,7 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
         
-        if self.launch_type in AKS:
+        if self.vm.LaunchType  in AKS:
             self.AKS_Cluster.wait()
             return
 
@@ -386,12 +425,17 @@ class AzureCaas():
                 if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
                     break
 
-                print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
-                        len(pending), CLR, len(running), CLR, len(stopped), CLR))
+                if stopped:
+                    for task in stopped:
+                        self.outgoing_q.put(task)
+                        print('task result sent to queue')
+
+                #print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
+                #        len(pending), CLR, len(running), CLR, len(stopped), CLR))
 
             time.sleep(0.2)
 
-        print('Finished, {0} tasks stopped with status: {1}'.format(len(statuses), statuses))
+        #print('Finished, {0} tasks stopped with status: {1}'.format(len(statuses), statuses))
 
     # --------------------------------------------------------------------------
     #
@@ -439,7 +483,7 @@ class AzureCaas():
             print('pandas module required to obtain profiles')
         
         
-        if self.launch_type in AKS:
+        if self.vm.LaunchType  in AKS:
             pod_stamps  = self.AKS_Cluster.get_pod_status()
             task_stamps = self.AKS_Cluster.get_pod_events()
             fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
@@ -581,6 +625,8 @@ class AzureCaas():
         
         print(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
+
+        #self._worker_queue.join()
         
         self.__cleanup()
 

@@ -1,7 +1,9 @@
 import uuid
+import queue
+import threading     as mt
 import radical.utils as ru
-from typing import List
 
+from typing                 import List
 from pathlib                import Path
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
@@ -35,10 +37,10 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, proxy_mgr, asynchronous):
+    def __init__(self, proxy_mgr, vms, asynchronous):
         
         _id = str(uuid.uuid4())
-        self._registered_managers = []
+        self._registered_managers = {}
         prof = ru.Profiler
 
         if proxy:
@@ -50,20 +52,19 @@ class CaasManager:
         sandbox = misc.create_sandbox(_id)
 
         for provider in self._proxy._loaded_providers:
-            if provider == AWS:
-                cred = self._proxy._load_credentials(AWS)
-                self.AwsCaas = AwsCaas(sandbox, _id, cred, asynchronous, prof)
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, asynchronous, prof)
-            if provider == GCLOUD:
-                raise NotImplementedError
-            if provider == JET2:
-                cred = self._proxy._load_credentials(JET2)
-                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, asynchronous, prof)
-            if provider == CHI:
-                cred = self._proxy._load_credentials(CHI)
-                self.ChiCaas = ChiCaas(sandbox, _id, cred, asynchronous, prof)
+                self.AzureCaas = AzureCaas(sandbox, _id, cred, vms[0], asynchronous, prof)
+                self._registered_managers[AZURE] = {'class' : self.AzureCaas,
+                                                    'run_id': self.AzureCaas.run_id,
+                                                    'in_q'  : self.AzureCaas.incoming_q,
+                                                    'out_q' : self.AzureCaas.outgoing_q}
+
+        self._terminate  = mt.Event()
+        self._get_result = mt.Thread(target=self._get_results, name="CaaSManagerResult")
+        self._get_result.daemon = True
+
+        self._get_result.start()
 
    
     # --------------------------------------------------------------------------
@@ -89,14 +90,13 @@ class CaasManager:
         check if the entire run is still executing or 
         pending/done/failed
         """
-        if not provider:
-            for provider in self._proxy._loaded_providers:
-                if provider == AWS:
-                    return self.AwsCaas._get_run_status(run_id)
-                if provider == AZURE:
-                    return self.AzureCaas._get_run_status(run_id)
-                if provider == GCLOUD:
-                    raise NotImplementedError
+        if provider:
+            if provider in self._proxy._loaded_providers:
+                self._registered_managers[provider]['class']._get_run_status(run_id)
+        else:
+            for manager_k, manager_attrs in self._registered_managers.items():
+                manager_attrs['class']._get_run_status(run_id)
+
 
 
     # --------------------------------------------------------------------------
@@ -117,65 +117,47 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def get_task_status(self, task_id):
+    def _get_results(self):
         """
         check if the contianer is still executing or
         Done/failed
         """
-        raise NotImplementedError
+        while not self._terminate.is_set():
+            for manager_k, manager_attrs in self._registered_managers.items():
+                try:
+                    task = manager_attrs['out_q'].get(block=True, timeout=0.1)
+                    if task:
+                        print('task {0} from manager {1} is done'.format(task, manager_k))
+                except queue.Empty:
+                    continue
+
 
 
     # --------------------------------------------------------------------------
     #
-    def submit_tasks(self, VM, tasks: List[Task], service=False, budget=0, time=0):
+    def submit(self, tasks: List[Task], service=False, budget=0, time=0):
         """
         submit contianers and wait for them or not.
         """
-        if AWS in self._proxy._loaded_providers:
-            run_id = self.AwsCaas.run(VM, tasks, service, budget, time)
-            return run_id
+        for manager_k, manager_attrs in self._registered_managers.items():
+            for task in tasks:
+                if task.provider == manager_k:
+                    manager_attrs['in_q'].put(task)
 
-        if AZURE in self._proxy._loaded_providers:
-            run_id = self.AzureCaas.run(VM, tasks, budget, time)
-            return run_id
-
-        if GCLOUD in self._proxy._loaded_providers:
-            raise NotImplementedError
-        
-        if JET2 in self._proxy._loaded_providers:
-            run_id = self.Jet2Caas.run(VM, tasks, service, budget, time)
-            return run_id
-        
-        if CHI in self._proxy._loaded_providers:
-            run_id = self.ChiCaas.run(VM, tasks, service, budget, time)
-            return run_id
 
     # --------------------------------------------------------------------------
     #
-    def submit_jobs(self, jobs: List[Task], budget=0, time=0, container_path=None):
-        raise NotImplementedError
-    
-    # --------------------------------------------------------------------------
-    #
-    def shutdown(self):
+    def shutdown(self, provider=None):
         """
         shudown the manager(s) by deleting all the 
         previously created components by the user
         """
-        for provider in self._proxy._loaded_providers:
-            if provider == AWS:
-                self.AwsCaas._shutdown()
-            
-            if provider == AZURE:
-                self.AzureCaas._shutdown()
-            
-            if provider == GCLOUD:
-                raise NotImplementedError
-            
-            if provider == JET2:
-                self.Jet2Caas._shutdown()
-            
-            if provider == CHI:
-                self.ChiCaas._shutdown()
+        self._terminate.set()
 
-            
+        if provider:
+            if provider in self._proxy._loaded_providers:
+                self._registered_managers[provider]['class']._shutdown()
+
+        else:
+            for manager_k, manager_attrs in self._registered_managers.items():
+                manager_attrs['class']._shutdown()
