@@ -5,6 +5,7 @@ import radical.utils as ru
 
 from typing                 import List
 from pathlib                import Path
+from hydraa.cloud_vm        import vm
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
 
@@ -54,11 +55,21 @@ class CaasManager:
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, vms[0], asynchronous, prof)
+                vmx  = next(v for v in vms if isinstance(v, vm.AzureVM))
+                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, prof)
                 self._registered_managers[AZURE] = {'class' : self.AzureCaas,
                                                     'run_id': self.AzureCaas.run_id,
                                                     'in_q'  : self.AzureCaas.incoming_q,
                                                     'out_q' : self.AzureCaas.outgoing_q}
+            if provider == AWS:
+                cred = self._proxy._load_credentials(AWS)
+                vmx  = next(v for v in vms if isinstance(v, vm.AwsVM))
+                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, prof)
+                self._registered_managers[AWS] = {'class' : self.AwsCaas,
+                                                  'run_id': self.AwsCaas.run_id,
+                                                  'in_q'  : self.AwsCaas.incoming_q,
+                                                  'out_q' : self.AwsCaas.outgoing_q}
+                
 
         self._terminate  = mt.Event()
         self._get_result = mt.Thread(target=self._get_results, name="CaaSManagerResult")

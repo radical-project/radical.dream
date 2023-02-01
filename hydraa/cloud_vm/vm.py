@@ -58,7 +58,7 @@ class AwsVM:
         self.required_kwargs['ImageId']            = self.ImageId           
         self.required_kwargs['MinCount']           = self.MinCount          
         self.required_kwargs['MaxCount']           = self.MaxCount          
-        self.required_kwargs['InstanceType']       = self.InstanceType
+        self.required_kwargs['InstanceType']       = self.InstanceID
 
         user_data = self._user_data(cluster, self.UserData)
         self.required_kwargs['UserData']           = user_data

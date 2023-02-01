@@ -422,13 +422,13 @@ class AzureCaas():
                 running = list(filter(lambda running: running == 'Running'   , statuses))
                 stopped = list(filter(lambda stopped: stopped == 'Terminated', statuses))
 
-                if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
-                    break
-
                 if stopped:
                     for task in stopped:
                         self.outgoing_q.put(task)
                         print('task result sent to queue')
+
+                if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
+                    break
 
                 #print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
                 #        len(pending), CLR, len(running), CLR, len(stopped), CLR))
@@ -610,7 +610,7 @@ class AzureCaas():
             self._container_group_names.clear()
 
             self.runs_tree.clear()
-            print('done')
+            print('cleanup done')
 
 
     # --------------------------------------------------------------------------
@@ -618,6 +618,8 @@ class AzureCaas():
     def _shutdown(self):
         if not self._resource_group_name and self.status == False:
             return
+        
+        print("termination started")
 
         for key, val in self._container_group_names.items():
             print(("terminating container group {0}".format(key)))
@@ -625,8 +627,6 @@ class AzureCaas():
         
         print(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
-
-        #self._worker_queue.join()
         
         self.__cleanup()
 
