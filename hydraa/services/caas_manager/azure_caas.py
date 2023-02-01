@@ -629,15 +629,3 @@ class AzureCaas():
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
         
         self.__cleanup()
-
-
-
-
-
-
-
-
-
-
-    
-        
