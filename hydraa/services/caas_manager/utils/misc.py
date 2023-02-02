@@ -95,7 +95,7 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     setattr(logging, levelName, levelNum)
     setattr(logging.getLoggerClass(), methodName, logForLevel)
     setattr(logging, methodName, logToRoot)
-    logging.basicConfig(filename=path , format='%(asctime)s | %(filename)s: %(message)s')
+    logging.basicConfig(filename=path , format='%(asctime)s-%(module)s: %(message)s')
     logging.getLogger(__name__).setLevel("TRACE")
 
     return logging.getLogger(__name__)

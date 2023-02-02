@@ -2,7 +2,8 @@ import uuid
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
+LTYPE  = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
+OPTYPE = ['chameleon', 'jetstream2']
 
 
 # --------------------------------------------------------------------
@@ -88,13 +89,18 @@ class AzureVM:
 
 
 class OpenStackVM:
-    def __init__(self, launch_type, flavor_id: str, image_id: str,  **input_kwargs):
+    def __init__(self, provider, launch_type, flavor_id: str, image_id: str,  **input_kwargs):
 
         self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
         self.VmId           = None
         self.LaunchType     = launch_type
         self.FlavorId       = flavor_id
         self.ImageId        = image_id
+
+        if provider not in OPTYPE:
+            raise ValueError('OpenStack VM provider must be one of {0}'.format(OPTYPE))
+
+        self.Provider       = provider
         self.SecurityGroups = input_kwargs.get('security_groups', '')
         self.Network        = input_kwargs.get('networks', '')
         self.KeyPair        = input_kwargs.get('keypair', [])

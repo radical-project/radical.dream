@@ -69,7 +69,17 @@ class CaasManager:
                                                   'run_id': self.AwsCaas.run_id,
                                                   'in_q'  : self.AwsCaas.incoming_q,
                                                   'out_q' : self.AwsCaas.outgoing_q}
-                
+
+            # TODO: merge Jet2cass and ChiCaas in one class 
+            if provider == JET2:
+                cred = self._proxy._load_credentials(JET2)
+                vmx  = next(v for v in vms if v.Provider == JET2)
+                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                self._registered_managers[JET2] = {'class' : self.Jet2Caas,
+                                                   'run_id': self.Jet2Caas.run_id,
+                                                   'in_q'  : self.Jet2Caas.incoming_q,
+                                                   'out_q' : self.Jet2Caas.outgoing_q}
+
 
         self._terminate  = mt.Event()
         self._get_result = mt.Thread(target=self._get_results, name="CaaSManagerResult")

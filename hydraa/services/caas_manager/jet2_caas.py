@@ -1,12 +1,12 @@
 import os
 import sys
-import copy
-import math
 import time
 import uuid
 import errno
+import queue
 import atexit
 import openstack
+import threading
 
 from openstack.cloud import exc
 
@@ -33,7 +33,8 @@ class Jet2Caas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, asynchronous, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
+                                          log, prof, DryRun=False):
 
         self.manager_id = manager_id
 
@@ -49,14 +50,15 @@ class Jet2Caas():
         self.remote   = None
         self.cluster  = None
 
-        self.run_id   = str(uuid.uuid4())
         self._task_id = 0      
 
+        self.vm     = VM
+        self.run_id = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
-        self.launch_type  =  None
+
         self._run_cost    = 0
         self.runs_tree    = OrderedDict()
 
@@ -66,26 +68,35 @@ class Jet2Caas():
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, JET2, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 
+        self.logger   = log
         self.profiler = prof(name=__name__, path=self.sandbox)
+
+        self.incoming_q = queue.Queue()
+        self.outgoing_q = queue.Queue()
+
+        self._terminate = threading.Event()
+
+        self.start_thread = threading.Thread(target=self.start, name='Jet2CaaS')
+        self.start_thread.daemon = True
+
+        if not self.start_thread.is_alive():
+            self.start_thread.start()
 
         atexit.register(self._shutdown)
     
 
-    def run(self, VM, tasks, service=False, budget=0, time=0):
-        if self.status:
-            pass
-            self.__cleanup()
+    def start(self):
 
-        self.vm          = VM
-        self.status      = ACTIVE
-        self.launch_type = VM.LaunchType
+        if self.status:
+            print('Manager already started')
+            return self.run_id
 
         print("starting run {0}".format(self.run_id))
 
         self.profiler.prof('prep_start', uid=self.run_id)
 
         self.image    = self.create_or_find_image()
-        self.flavor   = self.client.compute.find_flavor(VM.FlavorId)
+        self.flavor   = self.client.compute.find_flavor(self.vm.FlavorId)
         self.security = self.create_security_with_rule()
         self.keypair  = self.create_or_find_keypair()
 
@@ -100,22 +111,52 @@ class Jet2Caas():
         self.ip = self.create_and_assign_floating_ip()
         self.profiler.prof('ip_create_stop', uid=self.run_id)
 
-        print("server created with public ip: {0}".format(self.ip))
+        self.logger.trace("server created with public ip: {0}".format(self.ip))
 
         #FIXME: VM should have a username instead of hard coded ubuntu
-        self.remote  = ssh.Remote(self.vm.KeyPair, 'ubuntu', self.ip)
+        self.remote  = ssh.Remote(self.vm.KeyPair, 'ubuntu', self.ip, self.logger)
 
         # containers per pod
         cluster_size = self.server.flavor.vcpus - 1
     
         self.cluster = kubernetes.Cluster(self.run_id, self.remote, cluster_size,
-                                                                    self.sandbox)
+                                                       self.sandbox, self.logger)
 
         self.cluster.bootstrap_local()
 
-        self.submit(tasks)
+        self.status = ACTIVE
 
         self.runs_tree[self.run_id] =  self._pods_book
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _get_work(self):
+
+        bulk = list()
+        max_bulk_size = 100
+        max_bulk_time = 2        # seconds
+        min_bulk_time = 0.1      # seconds
+
+        while not self._terminate.is_set():
+            now = time.time()  # time of last submission
+            # collect tasks for min bulk time
+            # NOTE: total collect time could actually be max_time + min_time
+            while time.time() - now < max_bulk_time:
+                try:
+                    task = self.incoming_q.get(block=True, timeout=min_bulk_time)
+                except queue.Empty:
+                        task = None
+                
+                if task:
+                        bulk.append(task)
+                
+                if len(bulk) >= max_bulk_size:
+                        break
+
+            if bulk:
+                self.submit(bulk)
+                bulk = list()
 
 
     # --------------------------------------------------------------------------
@@ -167,7 +208,7 @@ class Jet2Caas():
         except Exception as e:
             # FIXME: check rules exist by id not by exceptions type
             if security_rule_exist in e.args:
-                print('security rules exist')
+                self.logger.trace('security rules exist')
                 pass
             else:
                 raise Exception(e)
@@ -181,15 +222,15 @@ class Jet2Caas():
 
         keypair = None
         if self.vm.KeyPair:
-            print('Checking user provided ssh keypair')
+            self.logger.trace('Checking user provided ssh keypair')
             keypair = self.client.compute.find_keypair(self.vm.KeyPair)
 
         if not keypair:
-            print("creating ssh key Pair")
-            key_name = 'id_rsa_{0}'.format(self.run_id)
+            self.logger.trace("creating ssh key Pair")
+            key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
-            ssh_dir_path     = '{0}/.ssh'.format(self.sandbox)
+            ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
 
             os.mkdir(ssh_dir_path, 0o700)
 
@@ -237,7 +278,7 @@ class Jet2Caas():
         if self.vm.Network:
             network = self.client.network.find_network(self.vm.Network)
             if network and network.id:
-                print('network {0} found'.format(network.name))
+                self.logger.trace('network {0} found'.format(network.name))
                 return network
         
         
@@ -294,7 +335,7 @@ class Jet2Caas():
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
 
-        print('creating {0}'.format(server_name))
+        self.logger.trace('creating {0}'.format(server_name))
         server = self.client.create_server(name=server_name,
                                            image=image.id,
                                            flavor=flavor.id,
@@ -306,7 +347,7 @@ class Jet2Caas():
         if not security.name == 'default':
             self.client.add_server_security_groups(server, [security.name])
         
-        print('server is ACTIVE')
+        self.logger.trace('server is active')
         
         return server
 
@@ -323,11 +364,10 @@ class Jet2Caas():
             ctask.id          = self._task_id
             ctask.name        = 'ctask-{0}'.format(self._task_id)
             ctask.provider    = JET2
-            ctask.launch_type = self.launch_type
+            ctask.launch_type = self.vm.LaunchType
 
             self._tasks_book[str(ctask.id)] = ctask.name
-            print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
-                                                                        end='\r')
+            self.logger.trace('submitting tasks {0}'.format(ctask.id))
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -381,7 +421,6 @@ class Jet2Caas():
 
         caller = sys._getframe().f_back.f_code.co_name
         self._task_id     = 0
-        self.launch_type  = None
         self._run_cost    = 0
         self._tasks_book.clear()
 
@@ -395,7 +434,7 @@ class Jet2Caas():
             self.server   = None
 
             self._pods_book.clear()
-            print('done')
+            self.logger.trace('done')
 
 
     # --------------------------------------------------------------------------
@@ -404,9 +443,11 @@ class Jet2Caas():
 
         if not self.server:
             return
-        
+
+        self.logger.trace("termination started")
+
         if self.vm.KeyPair:
-            print('deleting ssh keys')
+            self.logger.trace('deleting ssh keys')
             for k in self.vm.KeyPair:
                 try:
                     os.remove(k)
@@ -415,29 +456,29 @@ class Jet2Caas():
                         raise e
 
             if self.keypair.id:
-                print('deleting key-name from cloud storage')
+                self.logger.trace('deleting key-name from cloud storage')
                 self.client.delete_keypair(self.keypair.id)
 
         # delete all subnet
         if self.network:
             if not self.network.name == "auto_allocated_network":
-                print('deleting subnets')
+                self.logger.trace('deleting subnets')
                 for subnet in self.network.subnet_ids:
                     self.client.network.delete_subnet(subnet, ignore_missing=False)
         
         # deleting the server
         if self.server:
-            print('deleting server')
+            self.logger.trace('deleting server')
             self.client.delete_server(self.server.id)
 
             if self.ip:
-                print('deleting allocated ip')
+                self.logger.trace('deleting allocated ip')
                 self.client.delete_floating_ip(self.ip)
 
         # delete the networks
         # FIXME: unassigne and delete the public IP
         if self.network:
-            print('deleting networks')
+            self.logger.trace('deleting networks')
             if not self.network.name == "auto_allocated_network":
                 while True:
                     try:
@@ -445,7 +486,7 @@ class Jet2Caas():
                         break
                     except exc.exceptions.ConflictException:
                         time.sleep(0.1)
-                print('network is deleted')
+                self.logger.trace('network is deleted')
 
         # FIXME: delete only security groups that we created
         if self.security:
@@ -460,7 +501,6 @@ class Jet2Caas():
                 print('deleting security rules')
                 for rule in self.vm.Rules:
                     self.client.delete_security_group_rule(rule)
-        
-        print('shutting down')
+
         self.__cleanup()
 
