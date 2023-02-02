@@ -224,7 +224,7 @@ class Cluster:
             if done_pods:
                 self.logger.trace('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter))
                 if self.pod_counter == int(done_pods):
-                    self.logger.trace('{0} Pods finished with status "Completed"'.format(done_pods))
+                    self.logger.trace('{0} pods finished with status "Completed"'.format(done_pods))
                     break
                 else:
                     time.sleep(5)
