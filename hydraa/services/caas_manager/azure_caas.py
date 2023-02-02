@@ -140,7 +140,7 @@ class AzureCaas():
 
         else:  
             pass
-        
+
         # call get work to pull tasks
         self._get_work()
 

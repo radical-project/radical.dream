@@ -124,6 +124,9 @@ class Jet2Caas():
 
         self.cluster.bootstrap_local()
 
+        # call get work to pull tasks
+        self._get_work()
+
         self.status = ACTIVE
 
         self.runs_tree[self.run_id] =  self._pods_book

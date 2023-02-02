@@ -25,12 +25,13 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 #
 class Cluster:
 
-    def __init__(self, run_id, remote, cluster_size, sandbox):
+    def __init__(self, run_id, remote, cluster_size, sandbox, log):
         
         self.id           = run_id
         self.remote       = remote
         self.pod_counter  = 0
         self.sandbox      = sandbox
+        self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
         self.size         = cluster_size
 
@@ -41,11 +42,11 @@ class Cluster:
     def restart(self):
         self.stop()
         self.start()
-    
+
     def delete_completed_pods(self):
         self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
         return True
-    
+
 
     # --------------------------------------------------------------------------
     #
@@ -62,40 +63,41 @@ class Cluster:
     
 
     def bootstrap_local(self):
-        
+
         """
         deploy kubernetes cluster K8s on chi
         """
-        print('Building MicroK8s cluster on the remote machine')
+        self.logger.trace('Building MicroK8s cluster on the remote machine')
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
         boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
+        
         self.remote.put(boostrapper)
-        self.remote.run("chmod +x deploy_kuberentes_local.sh")
+        self.remote.run("chmod +x deploy_kuberentes_local.sh", logger=True)
 
         # FIXME: for now we use snap to install microk8s and
         # we sometimes fail: https://bugs.launchpad.net/snapd/+bug/1826662
         # as a workaround we wait for snap to be loaded
-        self.remote.run("sudo snap wait system seed.loaded")
+        self.remote.run("sudo snap wait system seed.loaded", logger=True)
 
         # upload the bootstrapper code to the remote machine
-        self.remote.run("./deploy_kuberentes_local.sh")
+        self.remote.run("./deploy_kuberentes_local.sh", logger=True)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
         self.profiler.prof('cluster_warmup_start', uid=self.id)
         while True:
             # wait for the microk8s to be ready
-            stream = self.remote.run('sudo microk8s status --wait-ready')
+            stream = self.remote.run('sudo microk8s status --wait-ready', logger=True)
 
             # check if the cluster is ready to submit the pod
             if "microk8s is running" in stream.stdout:
-                print('Booting Kuberentes cluster successful')
+                self.logger.trace('Booting Kuberentes cluster successful')
                 break
             else:
-                print('Waiting for Kuberentes cluster to be running')
+                self.logger.trace('Waiting for Kuberentes cluster to be running')
                 time.sleep(1)
         
         # the default ttl for Microk8s cluster to keep the historical
@@ -179,7 +181,7 @@ class Cluster:
 
             pods.append(sn_pod)
             pods_names.append(pod_name)
-            
+
             self.pod_counter +=1
         
         self.profiler.prof('create_pod_stop', uid=pod_id)
@@ -217,12 +219,12 @@ class Cluster:
                 done_pods = self.remote.run(cmd, hide=True).stdout.strip()
             else:
                 out, err, _ = sh_callout(cmd, shell=True)
-                done_pods = int(out.strip())
+                done_pods   = int(out.strip())
 
             if done_pods:
-                print('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
+                self.logger.trace('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter))
                 if self.pod_counter == int(done_pods):
-                    print('{0} Pods finished with status "Completed"'.format(done_pods))
+                    self.logger.trace('{0} Pods finished with status "Completed"'.format(done_pods))
                     break
                 else:
                     time.sleep(5)
@@ -254,14 +256,14 @@ class Cluster:
             self.remote.put(depolyment_file)
             cmd = 'kubectl apply -f {0}'.format(name)
             # deploy the pods.json on the cluster
-            self.remote.run(cmd)
-        
+            self.remote.run(cmd, logger=True)
+
         # we are in the embeded mode
         else:
             # just invoke a shell process
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
             out, err, _ = sh_callout(cmd, shell=True)
-            print(out, err)
+            self.logger.trace('{0} {1}'.format(out, err))
 
         #FIXME: create a monitering of the pods/containers
         
@@ -353,7 +355,7 @@ class Cluster:
                                 i +=1
 
                         else:
-                            print('Pods did not finish yet or failed')
+                            self.logger.trace('Pods did not finish yet or failed')
 
             os.remove('pod_status.json')
 
@@ -412,14 +414,14 @@ class Cluster:
         """
 
         def get_profiles(ids):
-            print('Registering a profiles checkpoint')
+            self.logger.trace('registering a profiles checkpoint')
             fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
 
             df.to_csv(fname)
-            print('Checkpoint profiles saved to {0}'.format(fname))
+            self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
 
         ids = 0
         # iterate until the stop_event is triggered
@@ -472,7 +474,7 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def stop(self):
-        self.remote.run('sudo microk8s stop')
+        self.remote.run('sudo microk8s stop', logger=True)
 
 
     def delete(self):

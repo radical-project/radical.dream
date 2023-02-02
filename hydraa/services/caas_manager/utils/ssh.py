@@ -22,14 +22,27 @@ class Remote:
     
     def put(self, file):
         self.conn.put(file)
-    
+
 
     # TODO: pass *args and **kwargs to run method
     def run(self, cmd, hide=False, logger=False):
+
+        # supress the output and 
+        # redirect both cmd out/err to the logger
         if logger:
             run = self.conn.run(cmd, hide=True)
-            self.logger.trace('{0}, stderr{1}'.format(run.stdout.split('\n'),
-                                                      run.stderr.split('\n')))
+            if run.stdout:
+                out = run.stdout.split('\n')
+                for l in out:
+                    self.logger.trace(l)
+
+            if run.stderr:
+                err = run.stderr.split('\n')
+                for l in err:
+                    self.logger.trace(l)
+        
+        # otherwise let fabric.run prints
+        # the stdout/stderr by default
         else:
             run = self.conn.run(cmd, hide=hide)
 
