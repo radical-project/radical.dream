@@ -27,7 +27,8 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
                                                  ResourceRequirements,
                                                  OperatingSystemTypes)
 
-from hydraa.services.caas_manager.utils import kubernetes
+from hydraa.services.caas_manager.utils      import kubernetes
+
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -47,9 +48,11 @@ CPCG  = 6   # Number of containers per container group
 CGPRG = 60  # Number of container groups per resource group
 
 
+
+
 class AzureCaas():
     def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
-                                               prof, DryRun=False):
+                                          log, prof, DryRun=False):
         
 
         self.manager_id = manager_id
@@ -77,8 +80,7 @@ class AzureCaas():
         self.vm        = VM
         self.vm.Region = cred['region_name']
 
-        self.run_id    = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
-
+        self.run_id   = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
         self.run_cost = 0
 
         self.runs_tree = OrderedDict()
@@ -89,6 +91,7 @@ class AzureCaas():
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, AZURE, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 
+        self.logger   = log
         self.profiler = prof(name=__name__, path=self.sandbox)
 
         self.incoming_q = queue.Queue()
@@ -239,11 +242,13 @@ class AzureCaas():
         # are to be created
         self._resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
 
-        print("Creating resource group '{0}'...".format(self._resource_group_name))
+        self.logger.trace("creating resource group {0}".format(self._resource_group_name))
         self.res_client.resource_groups.create_or_update(self._resource_group_name,
-                                                   {'location': self.vm.Region})
+                                                     {'location': self.vm.Region})
 
         resource_group = self.res_client.resource_groups.get(self._resource_group_name)
+
+        self.logger.trace("resource group {0} is created".format(self._resource_group_name))
 
         return resource_group
 
@@ -297,8 +302,7 @@ class AzureCaas():
             ctask.launch_type = self.vm.LaunchType 
 
             self._tasks_book[str(ctask.id)] = ctask.name
-            print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
-                                                                        end='\r')
+            self.logger.trace('submitting tasks {0}'.format(ctask.id))
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -351,8 +355,7 @@ class AzureCaas():
                 containers.append(container)
 
                 self._tasks_book[str(ctask.id)] = ctask.name
-                print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
-                                                                            end='\r')
+                self.logger.trace('submitting tasks {0}'.format(ctask.id))
 
                 self._task_id +=1
 
@@ -396,6 +399,7 @@ class AzureCaas():
                 statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
 
             except AttributeError:
+                self.logger.warning('no task statuses avilable yet, sleeping')
                 time.sleep(0.2)
 
         return statuses
@@ -412,9 +416,6 @@ class AzureCaas():
             self.AKS_Cluster.wait()
             return
 
-        UP = "\x1B[3A"
-        CLR = "\x1B[0K"
-        print("\n\n")
         while True:
             statuses = self._get_task_statuses(self._container_group_names)
             if statuses:
@@ -425,17 +426,19 @@ class AzureCaas():
                 if stopped:
                     for task in stopped:
                         self.outgoing_q.put(task)
-                        print('task result sent to queue')
+                        self.logger.trace('task result sent to queue')
 
                 if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
                     break
 
-                #print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
-                #        len(pending), CLR, len(running), CLR, len(stopped), CLR))
+                self.logger.trace("Pending: {0} Running: {1} Stopped: {2}".format(len(pending),
+                                                                                  len(running),
+                                                                                  len(stopped)))
 
-            time.sleep(0.2)
+            time.sleep(0.5)
 
-        #print('Finished, {0} tasks stopped with status: {1}'.format(len(statuses), statuses))
+        self.logger.trace('Finished, {0} tasks stopped with status: {1}'.format(len(statuses),
+                                                                                    statuses))
 
     # --------------------------------------------------------------------------
     #
@@ -528,14 +531,14 @@ class AzureCaas():
         resource_group {azure.mgmt.resource.resources.models.ResourceGroup}
                     -- The resource group containing the container group(s).
         """
-        print("Listing container groups in resource group '{0}'...".format(
-            resource_group.name))
+        self.logger.trace("Listing container groups in resource group {0}".format(
+                                                             resource_group.name))
 
         container_groups = self._con_client.container_groups.list_by_resource_group(
                                                                 resource_group.name)
 
         for container_group in container_groups:
-            print("  {0}".format(container_group.name))
+            self.logger.trace("found  {0}".format(container_group.name))
 
 
     # --------------------------------------------------------------------------
@@ -553,7 +556,8 @@ class AzureCaas():
         container_grps = math.ceil(batch_size / CPCG)
 
         if container_grps > CGPRG:
-            raise Exception('container groups per ({0}) resource group > ({1})'.format(container_grps, CGPRG))
+            raise Exception('container groups per ({0}) resource group > ({1})'.format(container_grps,
+                                                                                               CGPRG))
 
         # If we cannot split the
         # number into exactly 'container_grps of 10' parts
@@ -610,7 +614,7 @@ class AzureCaas():
             self._container_group_names.clear()
 
             self.runs_tree.clear()
-            print('cleanup done')
+            self.logger.trace('cleanup done')
 
 
     # --------------------------------------------------------------------------
@@ -619,13 +623,13 @@ class AzureCaas():
         if not self._resource_group_name and self.status == False:
             return
         
-        print("termination started")
+        self.logger.trace("termination started")
 
         for key, val in self._container_group_names.items():
-            print(("terminating container group {0}".format(key)))
+            self.logger.trace(("terminating container group {0}".format(key)))
             del_op = self._con_client.container_groups.begin_delete(self._resource_group_name, key)
         
-        print(("terminating resource group {0}".format(self._resource_group_name)))
+        self.logger.trace(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
         
         self.__cleanup()

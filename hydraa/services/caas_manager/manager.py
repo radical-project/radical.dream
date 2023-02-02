@@ -4,7 +4,6 @@ import threading     as mt
 import radical.utils as ru
 
 from typing                 import List
-from pathlib                import Path
 from hydraa.cloud_vm        import vm
 from hydraa.cloud_task.task import Task
 from hydraa.providers.proxy import proxy
@@ -51,12 +50,13 @@ class CaasManager:
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
         sandbox = misc.create_sandbox(_id)
+        log     = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
 
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
                 vmx  = next(v for v in vms if isinstance(v, vm.AzureVM))
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, prof)
+                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
                 self._registered_managers[AZURE] = {'class' : self.AzureCaas,
                                                     'run_id': self.AzureCaas.run_id,
                                                     'in_q'  : self.AzureCaas.incoming_q,
@@ -64,7 +64,7 @@ class CaasManager:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
                 vmx  = next(v for v in vms if isinstance(v, vm.AwsVM))
-                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, prof)
+                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
                 self._registered_managers[AWS] = {'class' : self.AwsCaas,
                                                   'run_id': self.AwsCaas.run_id,
                                                   'in_q'  : self.AwsCaas.incoming_q,
@@ -89,7 +89,6 @@ class CaasManager:
             pass
         if provider == AZURE:
             pass
-        
         if provider == GCLOUD:
             raise NotImplementedError
 
@@ -167,8 +166,11 @@ class CaasManager:
 
         if provider:
             if provider in self._proxy._loaded_providers:
+                print('terminating manager {0}'.format(self._registered_managers[provider]))
                 self._registered_managers[provider]['class']._shutdown()
 
         else:
+            print('shutting down all managers and wait for resource termination')
             for manager_k, manager_attrs in self._registered_managers.items():
+                print('terminating manager {0}'.format(manager_k))
                 manager_attrs['class']._shutdown()

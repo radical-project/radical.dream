@@ -13,6 +13,7 @@ from itertools import islice
 from datetime import datetime
 from collections import OrderedDict
 
+
 from hydraa.services.caas_manager.utils    import kubernetes
 from hydraa.services.cost_manager.aws_cost import AwsCost
 from hydraa.services.maas_manager.aws_maas import AwsMaas
@@ -50,7 +51,7 @@ class AwsCaas():
     """
 
     def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
-                                               prof, DryRun=False):
+                                          log, prof, DryRun=False):
 
         self.manager_id = manager_id
 
@@ -100,7 +101,9 @@ class AwsCaas():
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, AWS, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 
+        self.logger   = log
         self.profiler = prof(name=__name__, path=self.sandbox)
+         
 
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
@@ -202,10 +205,12 @@ class AwsCaas():
             self.create_ecs_service()
 
         if self.vm.LaunchType in FARGATE:
+            self.logger.trace('Fargate VM type')
             self.ECS_cluster = self.create_cluster()
             self._wait_clusters(self.ECS_cluster)
 
         if self.vm.LaunchType in EC2:
+            self.logger.trace('EC2 VM type')
             self.ECS_cluster = self.create_cluster()
             self._wait_clusters(self.ECS_cluster)
             self.create_ec2_instance(self.vm)
@@ -454,21 +459,21 @@ class AwsCaas():
         # FIXME: check for existing clusters, if multiple clusters with "hydraa"
         #        found, then ask the user which one to use.
         if clusters:
-            print('checking for existing hydraa cluster')
+            self.logger.trace('checking for existing hydraa cluster')
             
             if 'hydraa' in clusters[0]:
-                print('hydraa cluster found: {0}'.format(clusters[0]))
+                self.logger.trace('hydraa cluster found: {0}'.format(clusters[0]))
                 self.cluster_name = clusters[0]
                 return clusters[0]
             else:
-                print('not hydraa cluster found: {0}')
+                self.logger.trace('exisiting hydraa cluster not found')
 
         else:
-            print('no cluster found in this account')
+            self.logger.trace('no cluster found in this account')
 
         cluster_name = "hydraa_cluster_{0}".format(self.manager_id)
 
-        print('creating new cluster {0}'.format(cluster_name))
+        self.logger.trace('creating new cluster {0}'.format(cluster_name))
 
         self._ecs_client.create_cluster(clusterName=cluster_name)
         self.cluster_name = cluster_name
@@ -484,10 +489,10 @@ class AwsCaas():
         while True:
             statuses = self._get_cluster_statuses(cluster_name)
             if all([status == 'ACTIVE' for status in statuses]):
-                print('cluster {0} is active'.format(cluster_name))
+                self.logger.trace('cluster {0} is active'.format(cluster_name))
                 break
             time.sleep(WAIT_TIME)
-            print('ECS status for cluster {0}: {1}'.format(cluster_name, statuses))
+            self.logger.trace('ECS status for cluster {0}: {1}'.format(cluster_name, statuses))
 
 
     # --------------------------------------------------------------------------
@@ -569,7 +574,7 @@ class AwsCaas():
 
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
-        print('task {0} is registered'.format(family_id))
+        self.logger.trace('task {0} is registered'.format(family_id))
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
@@ -618,7 +623,7 @@ class AwsCaas():
                                                              executionRoleArn='arn:aws:iam::626113121967:role/ecsTaskExecutionRole')
 
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']      
-        print('task {0} is registered'.format(family_id))
+        self.logger.trace('task {0} is registered'.format(family_id))
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
@@ -648,11 +653,11 @@ class AwsCaas():
 
         for service in running_services['serviceArns']:
             if self.service_name in service:
-                print('service {0} already exist on cluster {1}'.format(self.service_name, self.cluster_name))
+                self.logger.trace('service {0} already exist on cluster {1}'.format(self.service_name, self.cluster_name))
 
                 return service
 
-        print('no exisitng service found, creating.....')
+        self.logger.trace('no exisitng service found, creating.....')
         response = self._ecs_client.create_service(cluster        = self.cluster_name,
                                                    serviceName    = self.service_name,
                                                    taskDefinition = self._task_name,
@@ -668,7 +673,7 @@ class AwsCaas():
 
 
 
-        print('service {0} created'.format(self.service_name))
+        self.logger.trace('service {0} created'.format(self.service_name))
 
         return response
 
@@ -709,8 +714,7 @@ class AwsCaas():
             ctask.launch_type = self.vm.LaunchType
 
             self._tasks_book[str(ctask.id)] = ctask.name
-            print(('submitting tasks {0}/{1}').format(ctask.id, len(ctasks) - 1),
-                                                                        end='\r')
+            self.logger.trace('submitting tasks {0}').format(ctask.id)
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -782,16 +786,16 @@ class AwsCaas():
             # submit tasks of size "batch_size"
             response = self._ecs_client.run_task(**kwargs)
             if response['failures']:
-                raise Exception(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
-                                        failure['reason']) for failure in response['failures']]))
+                self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                                             failure['reason']) for failure in response['failures']]))
 
             # attach the unique ARN to every task
             for i, task in enumerate(response['tasks']):
                 ctask = batch[i]
                 ctask.arn = task['taskArn']
                 self._tasks_book[str(ctask.arn)] = ctask.name
-                print(('submitting tasks {0}/{1}').format(ctask.id, len(self._tasks_book) - 1),
-                                                                                    end='\r')
+                self.logger.trace('submitting tasks {0}'.format(ctask.id))
+
             self._family_ids[family_id]['manager_id'] = self.manager_id
             self._family_ids[family_id]['run_id']     = self.run_id
             self._family_ids[family_id]['task_list']  = batch
@@ -939,9 +943,6 @@ class AwsCaas():
             self.EKS_cluster.wait()
             return
 
-        UP = "\x1B[3A"
-        CLR = "\x1B[0K"
-        print("\n\n")
         tasks = [t for t in self._tasks_book.keys()]
         while True:
             statuses = self._get_task_statuses(tasks, self.cluster_name)
@@ -952,17 +953,19 @@ class AwsCaas():
             if stopped:
                 for task in stopped:
                     self.outgoing_q.put(task)
-                    print('task result sent to queue')
+                    self.logger.trace('task result sent to queue')
             
             if all([status == 'STOPPED' for status in statuses]):
                 break
             
 
-            #print("{0}Pending: {1}{2}\nRunning: {3}{4}\nStopped: {5}{6}".format(UP,
-            #               len(pending), CLR, len(running), CLR, len(stopped), CLR))
+            self.logger.trace("Pending: {0} Running: {1} Stopped: {2}".format(len(pending),
+                                                                              len(running),
+                                                                              len(stopped)))
             time.sleep(0.5)
 
-        #print('Finished, {0} tasks stopped with status: {1}'.format(len(tasks), statuses))
+        self.logger.trace('Finished, {0} tasks stopped with status: {1}'.format(len(tasks),
+                                                                                 statuses))
 
 
     # --------------------------------------------------------------------------
@@ -1044,18 +1047,18 @@ class AwsCaas():
                         # TODO: maybe we should ask the users if they
                         # want to use that instance or not.
                         if instance["InstanceType"] == VM.InstanceID :
-                            print("found running instances of type {0}".format(instance["InstanceType"]))
+                            self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
 
                             return instance["InstanceId"]
 
-            print("no existing EC2 instance found")
+            self.logger.trace("no existing EC2 instance found with the same resource requirements")
 
             instances = self._ec2_resource.create_instances(**vm)
 
             for instance in instances:
-                print("launching EC2 instance {0}".format(instance.id))
+                self.logger.trace("waiting for EC2 instance {0} to be launched".format(instance.id))
                 instance.wait_until_running()
-                print("instance {0} has been started".format(instance.id))
+                self.logger.trace("EC2 instance: {0} has been launched".format(instance.id))
             
             VM.InstanceID = instance.id
 
@@ -1063,9 +1066,10 @@ class AwsCaas():
             while True:
                 res = self._ecs_client.describe_clusters(clusters = [self.cluster_name])
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
-                    print("instance {0} has been registered".format(instance.id))
+                    self.logger.trace("instance {0} has been registered".format(instance.id))
                     break
-                print('waiting for instance {0} to register'.format(instance.id), end = '\r')
+                self.logger.trace('waiting for instance {0} to register to {1}'.format(instance.id,
+                                                                                       self.cluster_name))
                 time.sleep(WAIT_TIME)
 
             return instance.id
@@ -1156,7 +1160,7 @@ class AwsCaas():
             self._family_ids.clear()
 
             self.region =  None
-            print('cleanup done')
+            self.logger.trace('cleanup done')
         
 
     # --------------------------------------------------------------------------
@@ -1167,10 +1171,9 @@ class AwsCaas():
         if not self.cluster_name and self.status == False:
             return
         
-        print("termination started")
+        self.logger.trace("termination started")
 
-        # Delete the ECS cluster and all of the associated
-        # resources.
+        # Delete all the resource and the associated tasks resouces
         if self.vm.LaunchType in EC2 or self.vm.LaunchType in FARGATE:
             try:
                 if self.service_name:
@@ -1184,14 +1187,13 @@ class AwsCaas():
             except:
                 pass
 
-            # degister all task definitions
+            # step-1 deregister all task definitions
             if self._family_ids:
                 for task_fam_key, task_fam_val in self._family_ids.items():
-                    # deregister task definition(s)
-                    print("deregistering task {0}".format(task_fam_val['ARN']))
+                    self.logger.trace("deregistering task {0}".format(task_fam_val['ARN']))
                     self._ecs_client.deregister_task_definition(taskDefinition=task_fam_val['ARN'])
 
-            # terminate virtual machine(s)
+            # step-2 terminate virtual machine(s)
             instances = self._ecs_client.list_container_instances(cluster=self.cluster_name)
             if instances["containerInstanceArns"]:
                 container_instance_resp = self._ecs_client.describe_container_instances(
@@ -1200,16 +1202,16 @@ class AwsCaas():
 
                 for ec2_instance in container_instance_resp["containerInstances"]:
                     istance_id = ec2_instance['ec2InstanceId']
-                    print("terminating instance {0}".format(istance_id))
+                    self.logger.trace("terminating instance {0}".format(istance_id))
                     self._ec2_client.terminate_instances(DryRun=False,
                                                          InstanceIds=[istance_id])
                     
                     waiter = self._ec2_client.get_waiter('instance_terminated')
                     waiter.wait(InstanceIds=[istance_id])
 
-            # finally delete the cluster
+            # step-3 delete the ECS cluster
             self._ecs_client.delete_cluster(cluster=self.cluster_name)
-            print("hydraa cluster {0} found and deleted".format(self.cluster_name))
+            self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
         
         if self.vm.LaunchType in EKS:
             self.EKS_cluster.shutdown()
