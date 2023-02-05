@@ -77,17 +77,20 @@ class Cluster:
         self.remote.put(boostrapper)
         self.remote.run("chmod +x deploy_kuberentes_local.sh", logger=True)
 
+
         # FIXME: for now we use snap to install microk8s and
         # we sometimes fail: https://bugs.launchpad.net/snapd/+bug/1826662
         # as a workaround we wait for snap to be loaded
         self.remote.run("sudo snap wait system seed.loaded", logger=True)
-
+        
+ 
         # upload the bootstrapper code to the remote machine
         self.remote.run("./deploy_kuberentes_local.sh", logger=True)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
         self.profiler.prof('cluster_warmup_start', uid=self.id)
+
         while True:
             # wait for the microk8s to be ready
             stream = self.remote.run('sudo microk8s status --wait-ready', logger=True)
@@ -99,7 +102,7 @@ class Cluster:
             else:
                 self.logger.trace('Waiting for Kuberentes cluster to be running')
                 time.sleep(1)
-        
+
         # the default ttl for Microk8s cluster to keep the historical
         # event is 5m we increase it to 24 hours
         set_ttl = ''
@@ -110,6 +113,8 @@ class Cluster:
         # the price of restarting microk8s to enable the new ttl
         self.remote.run(set_ttl)
         self.restart()
+
+
         self.profiler.prof('cluster_warmup_stop', uid=self.id)
 
 
@@ -126,6 +131,8 @@ class Cluster:
             return
 
 
+    # --------------------------------------------------------------------------
+    #
     def generate_pods(self, ctasks):
 
         pods            = []
@@ -134,7 +141,6 @@ class Cluster:
         self.profiler.prof('schedule_pods_start', uid=self.id)
         batches         = self.schedule(ctasks)
         self.profiler.prof('schedule_pods_stop', uid=self.id)
-
 
         depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
@@ -154,7 +160,7 @@ class Cluster:
                 pod_mem = "{0}Mi".format(ctask.memory)
 
                 resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                        limits={"cpu": pod_cpu, "memory": pod_mem})
+                                                          limits={"cpu": pod_cpu, "memory": pod_mem})
 
                 pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                             resources = resources, command = ctask.cmd, env = envs)
@@ -203,7 +209,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def wait(self):
+    def wait_pods(self):
         # FIXME: for some reason the completed pods
         #        are reported incorrectley, making
         #        the cluster hold the resources
@@ -212,7 +218,7 @@ class Cluster:
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
         cmd += '| grep Completed* | wc -l'
-        
+
         while True:
             done_pods = 0
             if self.remote:
@@ -274,7 +280,7 @@ class Cluster:
     #
     def schedule(self, tasks):
 
-        task_batch = copy.deepcopy(tasks)
+        task_batch = copy.copy(tasks)
         batch_size = len(task_batch)
         if not batch_size:
             raise Exception('Batch size can not be 0')
@@ -318,6 +324,59 @@ class Cluster:
            task_batch[:batch]
            del task_batch[:batch]
         return(objs_batch)
+
+
+    def _get_task_statuses(self, pod_id=None):
+
+        cmd = "kubectl get pods -A -o json > tasks_status.json"
+
+        if self.remote:
+            self.remote.run(cmd, hide=True)
+            self.remote.get('tasks_status.json')
+        
+        with open('tasks_status.json', 'r') as f:
+            response = json.load(f)
+
+        statuses   = []
+        stopped    = []
+        failed     = [] 
+        running    = []
+        failed_state  = ['OOMKilled', 'Error', 'ContainerCannotRun', 'DeadlineExceeded']
+        waiting_state = ['waiting', 'Waiting']
+        if response:
+            items = response['items']
+            for item in items:
+                if item['kind'] == 'Pod':
+                    # this is a hydraa pod
+                    if item['metadata']['name'].startswith('hydraa-pod-'):
+                        # check if this pod completed successfully
+                        for cond in item['status'].get('conditions', []):
+                            it = item['status']
+                            # check if we have a completion tag
+                            if cond.get('reason', None) == 'PodCompleted':
+                                # check if the completion tag is true
+                                if cond['status'] == 'True':
+                                    for c in it['containerStatuses']:
+                                        if list(c['state'].values())[0]['reason'] == 'Completed':
+                                            if list(c['state'].values())[0]['exitCode'] == 0:
+                                                stopped.append(c['name'])
+                                            else:
+                                                failed.append(c['name'])
+    
+                                        elif list(c['state'].values())[0]['reason'] in failed_state:
+                                            failed.append(c['name'])
+                                        elif list(c['state'][0]) in waiting_state:
+                                            running.append(c['name'])
+
+            self.logger.trace('failed tasks " {0}'.format(failed))
+            self.logger.trace('stopped tasks" {0}'.format(stopped))
+            self.logger.trace('running tasks" {0}'.format(running))
+
+            statuses.append(stopped)
+            statuses.append(failed)
+            statuses.append(running)
+
+            return statuses
 
 
     # --------------------------------------------------------------------------

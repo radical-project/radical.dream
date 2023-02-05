@@ -141,6 +141,10 @@ class Jet2Caas():
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
+        self.wait_thread = threading.Thread(target=self._wait_tasks, name='Jet2CaaSWatcher')
+        self.wait_thread.daemon = True
+
+
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
             # collect tasks for min bulk time
@@ -159,7 +163,12 @@ class Jet2Caas():
 
             if bulk:
                 self.submit(bulk)
-                bulk = list()
+
+            if not self.asynchronous:
+                if not self.wait_thread.is_alive():
+                    self.wait_thread.start()
+
+            bulk = list()
 
 
     # --------------------------------------------------------------------------
@@ -369,8 +378,9 @@ class Jet2Caas():
             ctask.provider    = JET2
             ctask.launch_type = self.vm.LaunchType
 
-            self._tasks_book[str(ctask.id)] = ctask.name
+            self._tasks_book[str(ctask.id)] = ctask
             self.logger.trace('submitting tasks {0}'.format(ctask.id))
+
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -386,10 +396,55 @@ class Jet2Caas():
         
         self.profiler.prof('submit_batch_start', uid=self.run_id)
 
-        # watch the pods in the cluster
-        self.cluster.wait()
 
-        self.profiles()
+        #self.profiles()
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _wait_tasks(self):
+
+        if self.asynchronous:
+            raise Exception('Task wait is not supported in asynchronous mode')
+
+        while not self._terminate.is_set():
+            # this is expensive operation
+            statuses = self.cluster._get_task_statuses()
+
+            stopped = statuses[0]
+            failed  = statuses[1]
+            running = statuses[2]
+
+            for task in self._tasks_book.values():  
+                if task.name in stopped:
+                    if task.done():
+                        continue
+                    else:
+                        task.set_result('Done')
+                        self.logger.trace('sending {0} to output queue'.format(task.name))
+                        self.outgoing_q.put(task.name)
+
+                # FIXME: better approach?
+                elif task.name in failed:
+                    try:
+                        # check if the task marked failed
+                        # or not and wait for 0.1s
+                        exc = task.exception(0.1)
+                        if exc:
+                            # we already marked it
+                            continue
+                    except TimeoutError:
+                        # never marked so mark it.
+                        task.set_exception('Failed')
+                        self.outgoing_q.put(task.name)
+
+                elif task.name in running:
+                    if task.running():
+                        continue
+                    else:
+                        task.set_running_or_notify_cancel()
+                
+                time.sleep(WAIT_TIME)
 
 
     # --------------------------------------------------------------------------
