@@ -12,6 +12,7 @@ from openstack.cloud import exc
 
 from collections import OrderedDict
 from hydraa.services.caas_manager.utils import ssh
+from hydraa.services.caas_manager.utils import misc
 from hydraa.services.caas_manager.utils import kubernetes
 
 
@@ -46,7 +47,7 @@ class Jet2Caas():
         self.network  = None
         self.security = None
         self.server   = None
-        self.ip       = None 
+        self.ips      = []
         self.remote   = None
         self.cluster  = None
 
@@ -103,26 +104,34 @@ class Jet2Caas():
         self.profiler.prof('prep_stop', uid=self.run_id)
 
         self.profiler.prof('server_create_start', uid=self.run_id)
-        self.server = self._create_server(self.image, self.flavor,
-                                      self.keypair, self.security)
+        
+        self.server = self._create_server(self.image, self.flavor, self.keypair,
+                              self.security, self.vm.MinCount, self.vm.MaxCount)
         self.profiler.prof('server_create_stop', uid=self.run_id)
 
         self.profiler.prof('ip_create_start', uid=self.run_id)
-        self.ip = self.create_and_assign_floating_ip()
+
+        self.assign_ips()
+
         self.profiler.prof('ip_create_stop', uid=self.run_id)
 
-        self.logger.trace("server created with public ip: {0}".format(self.ip))
+        self.vm.Servers = self.list_servers()
 
-        #FIXME: VM should have a username instead of hard coded ubuntu
-        self.remote  = ssh.Remote(self.vm.KeyPair, 'ubuntu', self.ip, self.logger)
+        self.vm.Remotes = {}
+        for server in self.vm.Servers:
+            public_ip = server['Networks']['auto_allocated_network'][1]
+            
+            #FIXME: VM should have a username instead of hard coded ubuntu
+            self.vm.Remotes[server['Name']] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
+                                                                                  self.logger)
 
         # containers per pod
         cluster_size = self.server.flavor.vcpus - 1
-    
-        self.cluster = kubernetes.Cluster(self.run_id, self.remote, cluster_size,
-                                                       self.sandbox, self.logger)
 
-        self.cluster.bootstrap_local()
+        self.cluster = kubernetes.Cluster(self.run_id, self.vm, cluster_size,
+                                                   self.sandbox, self.logger)
+
+        self.cluster.bootstrap()
 
         # call get work to pull tasks
         self._get_work()
@@ -200,22 +209,6 @@ class Jet2Caas():
         try:
             if security.id:
                 return security
-                print('creating ssh and ping rules')
-                ssh_rule = self.client.create_security_group_rule(security.id,
-                                                                  port_range_min=22,
-                                                                  port_range_max=22,
-                                                                  protocol='tcp',
-                                                                  direction='ingress',
-                                                                  remote_ip_prefix='0.0.0.0/0')
-                
-                ping_rule = self.client.create_security_group_rule(security.id,
-                                                                   port_range_max=None,
-                                                                   port_range_min=None,
-                                                                   protocol='icmp',
-                                                                   direction='ingress',
-                                                                   remote_ip_prefix='0.0.0.0/0',
-                                                                   ethertype='IPv4')
-                self.vm.Rules = [ssh_rule.id, ping_rule.id]
 
         except Exception as e:
             # FIXME: check rules exist by id not by exceptions type
@@ -296,54 +289,35 @@ class Jet2Caas():
         
         network = self.client.network.find_network('auto_allocated_network')
         return network
+
+    # --------------------------------------------------------------------------
+    #
+    def list_servers(self):
+        servers = misc.sh_callout('openstack server list -f json', shell=True, munch=True)
         
-        # if we could not find it, then let's create a network with
-        # subnet
-        '''
-        else:
-            network_name = 'hydraa-newtwork-{0}'.format(self.run_id)
-            subnet_name  = 'hydraa-subnet-{0}'.format(self.run_id)
-
-            print('creating network {0}'.format(network_name))
-            network = self.client.network.create_network(name=network_name)
-
-            # add a subnet for the network
-            self.client.network.create_subnet(name=subnet_name,
-                                              network_id=network.id,
-                                              ip_version='4',
-                                              cidr='10.0.2.0/24',
-                                              gateway_ip='10.0.2.1')
-
-            return network
-        '''
+        return servers
 
 
     # --------------------------------------------------------------------------
     #
-    def create_and_assign_floating_ip(self):
-        
-        # FIXME: Openstack has a bug that it does not show
-        # the assigned ip address to that server.
-        # As a workaround: we list the ips, we get
-        # the status and the creattion timestamp
-        # we sort them and get the last one got created
-        assigned_ips = self.client.list_floating_ips()
-        ips = {}
-        for assigned_ip in assigned_ips:
-            if not assigned_ip.status == 'DONW':
-                if assigned_ip.attached:
-                    creation_ts = assigned_ip.created_at
-                    ips[assigned_ip.floating_ip_address] = creation_ts
-        
-        # sort them by value (creation_ts)
-        sorted_ips = dict(sorted(ips.items(), key=lambda x: x[1]))
+    def assign_ips(self):
 
-        return list(sorted_ips)[-1]
+        servers = self.list_servers()
+        cmd = 'openstack server add floating ip'
+        for server in servers:
+            if server['Name'].startswith('hydraa_Server'):
+                name = server['Name']
+                if  server['Status'] == 'ACTIVE':
+                    if len(server['Networks']['auto_allocated_network']) <=1:
+                        #FIXME: find a way to do it in OpenStack Python SDK
+                        ip = self.client.create_floating_ip()['floating_ip_address']
+                        misc.sh_callout('{0} {1} {2}'.format(cmd, name, ip), shell=True)
+                        self.logger.trace('assigned ip {0} to vm {1}'.format(name, ip))
 
 
     # --------------------------------------------------------------------------
     #
-    def _create_server(self, image, flavor, key_pair, security):
+    def _create_server(self, image, flavor, key_pair, security, min_count, max_count):
 
         server_name = 'hydraa_Server-{0}'.format(self.run_id)
 
@@ -351,7 +325,9 @@ class Jet2Caas():
         server = self.client.create_server(name=server_name,
                                            image=image.id,
                                            flavor=flavor.id,
-                                           key_name=key_pair.name)
+                                           key_name=key_pair.name,
+                                           min_count=min_count,
+                                           max_count=max_count)
         
         # Wait for a server to reach ACTIVE status.
         self.client.wait_for_server(server)
@@ -523,42 +499,17 @@ class Jet2Caas():
                 self.logger.trace('deleting subnets')
                 for subnet in self.network.subnet_ids:
                     self.client.network.delete_subnet(subnet, ignore_missing=False)
-        
+
         # deleting the server
         if self.server:
-            self.logger.trace('deleting server')
-            self.client.delete_server(self.server.id)
+            for server in self.vm.Servers:
+                self.logger.trace('deleting server')
+                self.client.delete_server(server)
 
-            if self.ip:
-                self.logger.trace('deleting allocated ip')
-                self.client.delete_floating_ip(self.ip)
-
-        # delete the networks
-        # FIXME: unassigne and delete the public IP
-        if self.network:
-            self.logger.trace('deleting networks')
-            if not self.network.name == "auto_allocated_network":
-                while True:
-                    try:
-                        self.client.network.delete_network(self.network, ignore_missing=False)
-                        break
-                    except exc.exceptions.ConflictException:
-                        time.sleep(0.1)
-                self.logger.trace('network is deleted')
-
-        # FIXME: delete only security groups that we created
-        if self.security:
-            return
-            print('deleting security groups')
-            for sec in self.client.list_security_groups():
-                if not self.security.name == 'default':
-                    self.client.delete_security_group(self.security.id)
-            
-            if self.vm.Rules:
-                return
-                print('deleting security rules')
-                for rule in self.vm.Rules:
-                    self.client.delete_security_group_rule(rule)
+            if self.ips:
+                for ip in self.ips:
+                    self.logger.trace('deleting allocated ip')
+                    self.client.delete_floating_ip(ip)
 
         self.__cleanup()
 

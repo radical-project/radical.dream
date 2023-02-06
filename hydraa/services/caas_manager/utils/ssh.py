@@ -25,12 +25,12 @@ class Remote:
 
 
     # TODO: pass *args and **kwargs to run method
-    def run(self, cmd, hide=False, logger=False):
+    def run(self, cmd, hide=False, logger=False, **kwargs):
 
         # supress the output and 
         # redirect both cmd out/err to the logger
         if logger:
-            run = self.conn.run(cmd, hide=True)
+            run = self.conn.run(cmd, hide=True, **kwargs)
             if run.stdout:
                 out = run.stdout.split('\n')
                 for l in out:
@@ -44,7 +44,7 @@ class Remote:
         # otherwise let fabric.run prints
         # the stdout/stderr by default
         else:
-            run = self.conn.run(cmd, hide=hide)
+            run = self.conn.run(cmd, hide=hide, **kwargs)
 
         return run
 

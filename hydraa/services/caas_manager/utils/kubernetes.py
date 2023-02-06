@@ -25,24 +25,37 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 #
 class Cluster:
 
-    def __init__(self, run_id, remote, cluster_size, sandbox, log):
+    def __init__(self, run_id, vm, cluster_size, sandbox, log):
         
         self.id           = run_id
-        self.remote       = remote
+        self.vm           = vm
+        self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
         self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = cluster_size
+        self.size         = cluster_size        
+        self.active_nodes  = 0
 
+        self.updater_lock = mt.Lock()
+
+
+    # --------------------------------------------------------------------------
+    #
     def start(self):
         self.remote.run('sudo microk8s start')
         return True
 
+
+    # --------------------------------------------------------------------------
+    #
     def restart(self):
         self.stop()
         self.start()
 
+
+    # --------------------------------------------------------------------------
+    #
     def delete_completed_pods(self):
         self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
         return True
@@ -62,60 +75,74 @@ class Cluster:
                 thread.join()
     
 
-    def bootstrap_local(self):
+    def bootstrap(self):
 
-        """
-        deploy kubernetes cluster K8s on chi
-        """
-        self.logger.trace('Building MicroK8s cluster on the remote machine')
+        def _boottrap(node):
 
-        self.profiler.prof('bootstrap_start', uid=self.id)
+            self.logger.trace('building MicroK8s')
+            self.profiler.prof('bootstrap_start', uid=self.id)
+    
+            # add entries for all node to the hosts file of each node
+            for server in self.vm.Servers:
+                name = server['Name']
+                ip   = server['Networks']['auto_allocated_network'][0]
+                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name),
+                                                                        logger=True)
 
-        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-        boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
-        
-        self.remote.put(boostrapper)
-        self.remote.run("chmod +x deploy_kuberentes_local.sh", logger=True)
+            loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+            boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
 
+            self.logger.trace('upload bootstrap.sh')
+            node.put(boostrapper)
 
-        # FIXME: for now we use snap to install microk8s and
-        # we sometimes fail: https://bugs.launchpad.net/snapd/+bug/1826662
-        # as a workaround we wait for snap to be loaded
-        self.remote.run("sudo snap wait system seed.loaded", logger=True)
-        
- 
-        # upload the bootstrapper code to the remote machine
-        self.remote.run("./deploy_kuberentes_local.sh", logger=True)
+            self.logger.trace('change bootstrap.sh permession')
+            node.run("chmod +x bootstrap_kubernetes.sh", logger=True)
 
-        self.profiler.prof('bootstrap_stop', uid=self.id)
+            self.logger.trace('invoke bootstrap.sh')
+            # run bootstrapper code to the remote machine
+            # https://github.com/fabric/fabric/issues/2129
+            node.run("./bootstrap_kubernetes.sh", in_stream=False)
 
-        self.profiler.prof('cluster_warmup_start', uid=self.id)
+            self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        while True:
-            # wait for the microk8s to be ready
-            stream = self.remote.run('sudo microk8s status --wait-ready', logger=True)
+            self.profiler.prof('cluster_warmup_start', uid=self.id)
 
-            # check if the cluster is ready to submit the pod
-            if "microk8s is running" in stream.stdout:
-                self.logger.trace('Booting Kuberentes cluster successful')
-                break
-            else:
-                self.logger.trace('Waiting for Kuberentes cluster to be running')
-                time.sleep(1)
+            while True:
+                # wait for the microk8s to be ready
+                stream = node.run('sudo microk8s status --wait-ready', logger=True)
 
-        # the default ttl for Microk8s cluster to keep the historical
-        # event is 5m we increase it to 24 hours
-        set_ttl = ''
-        set_ttl += 'sudo sed -i s/--event-ttl=5m/--event-ttl=1440m/ '
-        set_ttl += '/var/snap/microk8s/current/args/kube-apiserver'
-        
-        # we are modifying a service of microk8s, we have to pay
-        # the price of restarting microk8s to enable the new ttl
-        self.remote.run(set_ttl)
-        self.restart()
+                # check if the cluster is ready to submit the pod
+                if "microk8s is running" in stream.stdout:
+                    self.logger.trace('booting Kuberentes cluster successful')
+                    with self.updater_lock:
+                        self.active_nodes +=1
+                    break
+                else:
+                    self.logger.trace('waiting for Kuberentes cluster to be running')
+                    time.sleep(2)
 
+            self.profiler.prof('cluster_warmup_stop', uid=self.id)
 
-        self.profiler.prof('cluster_warmup_stop', uid=self.id)
+        # bootstrap on all nodes
+        for node_name, node_conn in self.remote.items():
+            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn,), name='Thread-'+node_name)
+            run_bootstrap.daemon = True
+            run_bootstrap.start()
+
+        # wait for all nodes
+        while self.active_nodes < len(self.vm.Servers):
+            time.sleep(1)
+
+        # workers connection
+        self.worker_nodes = list(self.remote.values())[1:]
+
+        # master node connection
+        self.remote  = list(self.remote.values())[0]
+
+        # add worker nodes to master node
+        for worker_node in self.worker_nodes:
+            self.join_master(worker_node)
+            self.logger.trace('worker node joined master')
 
 
     # --------------------------------------------------------------------------
@@ -333,6 +360,8 @@ class Cluster:
         if self.remote:
             self.remote.run(cmd, hide=True)
             self.remote.get('tasks_status.json')
+        else:
+            sh_callout(cmd, shell=True)
         
         with open('tasks_status.json', 'r') as f:
             response = json.load(f)
@@ -520,14 +549,25 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def join_master(self):
+    def add_node(self):
         """
         This method should allow
         x worker nodes to join the
         master node (different vms or
         pms) 
         """
-        pass
+        ret = self.remote.run('sudo microk8s add-node')
+        token = ret.stdout.split('\n')[7]
+        return token
+
+
+    # --------------------------------------------------------------------------
+    #
+    def join_master(self, worker):
+
+        token = self.add_node()
+        if 'microk8s' in token:
+            worker.run('sudo {0}'.format(token))
 
 
     # --------------------------------------------------------------------------

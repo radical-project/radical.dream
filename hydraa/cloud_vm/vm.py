@@ -89,13 +89,16 @@ class AzureVM:
 
 
 class OpenStackVM:
-    def __init__(self, provider, launch_type, flavor_id: str, image_id: str,  **input_kwargs):
+    def __init__(self, provider, launch_type, flavor_id: str, image_id: str, min_count=1,
+                                                            max_count=1, **input_kwargs):
 
         self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
         self.VmId           = None
         self.LaunchType     = launch_type
         self.FlavorId       = flavor_id
         self.ImageId        = image_id
+        self.MinCount       = min_count
+        self.MaxCount       = max_count
 
         if provider not in OPTYPE:
             raise ValueError('OpenStack VM provider must be one of {0}'.format(OPTYPE))
@@ -116,6 +119,8 @@ class OpenStackVM:
         self.required_kwargs['image_id']     = self.ImageId
         self.required_kwargs['flavor_id']    = self.FlavorId
         self.required_kwargs['launch_type']  = self.LaunchType
+        self.required_kwargs['min_count']    = self.MinCount
+        self.required_kwargs['max_count']    = self.MaxCount 
 
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs
