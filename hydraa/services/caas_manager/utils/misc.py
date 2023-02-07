@@ -61,6 +61,12 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     Comprehensively adds a new logging level to the `logging` module and the
     currently configured logging class.
 
+    Why?
+    using logger with Jupyter notebook or interactivley via IPython
+    triggers others **imported packages loggers and then we have to disable
+    them one by one. This approach prevents other loggers from intruding on
+    our session.
+
     `levelName` becomes an attribute of the `logging` module with the value
     `levelNum`. `methodName` becomes a convenience method for both `logging`
     itself and the class returned by `logging.getLoggerClass()` (usually just

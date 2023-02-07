@@ -118,7 +118,6 @@ class CaasManager:
                 manager_attrs['class']._get_run_status(run_id)
 
 
-
     # --------------------------------------------------------------------------
     #
     def get_run_tree(self, run_id, provider=None):
@@ -150,7 +149,6 @@ class CaasManager:
                         print('task {0} from manager {1} is done'.format(task, manager_k))
                 except queue.Empty:
                     continue
-
 
 
     # --------------------------------------------------------------------------

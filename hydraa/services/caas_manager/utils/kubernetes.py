@@ -24,8 +24,33 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 # --------------------------------------------------------------------------
 #
 class Cluster:
+    """
+    This is a multithreaded base Kuberentes class that 
+    is build on the top of microK8s Kuberentes flavor.
+    This cluster can:
+
+    1- Manager multiple nodes across different physical and
+       virtual nodes.
+    
+    2- Schedule and partion containers into pods based on
+       the cluster size.
+    
+    3- Moniter and collect tasks/containers/pods results and 
+       performance metrics.
+    """
 
     def __init__(self, run_id, vm, cluster_size, sandbox, log):
+        """
+        The constructor for Cluster class.
+
+        Parameters:
+            run_id       (str)      : Unique id deliverd by the controller manager.
+            vm           (hydraa.vm): A AWS/Azure/OpenStack Hydraa VM.
+            cluster_size (int)      : The number of cores each node has.
+            sandbox      (str)      : A path for the folder of hydraa manager.
+            log          (logging)  : A logger object.
+        
+        """
         
         self.id           = run_id
         self.vm           = vm
@@ -34,8 +59,8 @@ class Cluster:
         self.sandbox      = sandbox
         self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = cluster_size        
-        self.active_nodes  = 0
+        self.size         = cluster_size     
+        self.active_nodes = 0
 
         self.updater_lock = mt.Lock()
 
@@ -43,6 +68,12 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def start(self):
+        """
+        The function to start the internal micok8s cluster.
+
+        Returns:
+            bool: True if passed.
+        """
         self.remote.run('sudo microk8s start')
         return True
 
@@ -50,14 +81,44 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def restart(self):
+        """
+        The function to start and stop the internal micok8s
+        cluster.
+
+        Returns:
+            bool: True if passed.
+        """
         self.stop()
         self.start()
 
 
     # --------------------------------------------------------------------------
     #
+    def recover(self):
+        """
+        The function to recover the internal micok8s cluster if
+        stuck in halt.
+        """
+        
+        self.remote.run('snap remove microk8s')
+        self.remote.run('sudo snap install microk8s')
+
+
+
+    # --------------------------------------------------------------------------
+    #
     def delete_completed_pods(self):
-        self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
+        """
+        The function to delete completed pods
+        if needed by the user. This function is mainly used if the user
+        want to resue the cluster after exceeding the recommended 110 pods
+        per cluster.
+
+        Returns:
+            bool: True if passed.
+        """
+        cmd = 'kubectl delete pod --field-selector=status.phase==Succeeded'
+        self.remote.run(cmd)
         return True
 
 
@@ -65,7 +126,14 @@ class Cluster:
     #
     def stop_background(self, stop_event, threads):
         """
-        stop the background task gracefully before exiting
+        The function to stop the background tasks (threads)
+        gracefully before exiting
+
+        Parameters:
+            stop_event (threading.Event): An event to trigger termination
+                                          of each thread.
+            
+            threads (list)              : List of threads to stop.
         """
         # request the background thread stop
         stop_event.set()
@@ -73,9 +141,23 @@ class Cluster:
         for thread in threads:
             if thread.is_alive():
                 thread.join()
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def bootstrap(self):
+        """
+        The function to build Kuberentes n nodes (1 master) (n-1) workers
+        using n virtual or physical machines and wait for them to finish.
+
+        For each node this function does:
+
+        1- Adding hosts (ip and name) to each node.
+        2- Bootstrap Kuberentes on each node.
+        3- Wait for each not to become active
+        4- Request join token from the master for each worker node.
+        5- Join each worker to the master node.
+        """
 
         def _boottrap(node):
 
@@ -167,6 +249,18 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def generate_pods(self, ctasks):
+        """
+        This function generates a deployment_file (pods) from a set of 
+        scheduled tasks.
+
+        Parameters:
+            ctasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            deployment_file (str) : path for the deployment file.
+            pods_names      (list): list of generated pods names.
+            batches         (list): the actual tasks batches.
+        """
 
         pods            = []
         pods_names      = []
@@ -273,11 +367,19 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def submit(self, ctasks):
-
-        # upload the pods file before bootstrapping
-        # FIXME: we get socket closed if we did it
-        # in the reverse order, because we modify 
-        # the firewall of the node
+        
+        """
+        This function to coordiante the submission of list of tasks.
+        to the cluster main node.
+        
+        Parameters:
+            ctasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            deployment_file (str) : path for the deployment file.
+            pods_names      (list): list of generated pods names.
+            batches         (list): the actual tasks batches.
+        """
 
         self.profiler.prof('generate_pods_start', uid=self.id)
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
@@ -303,8 +405,6 @@ class Cluster:
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
             out, err, _ = sh_callout(cmd, shell=True)
             self.logger.trace('{0} {1}'.format(out, err))
-
-        #FIXME: create a monitering of the pods/containers
         
         return depolyment_file, pods_names, batches
 
@@ -312,6 +412,18 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def schedule(self, tasks):
+
+        """
+        This function to schedule set of tasks into a smaller batches of tasks
+        to fit the Kubernetes cluster node size.
+
+        Parameters:
+            tasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            objs_batch (list): a sliced list of list of tasks.
+
+        """
 
         task_batch = copy.copy(tasks)
         batch_size = len(task_batch)
@@ -356,12 +468,25 @@ class Cluster:
            objs_batch.append(task_batch[:batch])
            task_batch[:batch]
            del task_batch[:batch]
+
         return(objs_batch)
 
 
     # --------------------------------------------------------------------------
     #
     def _get_task_statuses(self, pod_id=None):
+
+        """
+        This function to generate a json with the current containers statuses
+        and collect STOPPED, RUNNING and FAILED containers to report them back
+        to the controller manager.
+
+        Parameters:
+            pod_id (str): A name for the pod
+        
+        Returns:
+            statuses (list): a list of list for all of the task statuses.
+        """
 
         cmd = "kubectl get pods -A -o json"
         response = None
