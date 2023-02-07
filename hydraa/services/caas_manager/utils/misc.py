@@ -6,11 +6,11 @@ import subprocess as sp
 from pathlib import Path
 
 
-null  = None
-true  = True
-false = False
-HOME  = str(Path.home())
+TRUE=true=True
+NONE=null=None
+FALSE=false=False
 
+HOME  = str(Path.home())
 
 def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False):
     '''

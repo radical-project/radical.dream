@@ -120,7 +120,7 @@ class Jet2Caas():
         self.vm.Remotes = {}
         for server in self.vm.Servers:
             public_ip = server['Networks']['auto_allocated_network'][1]
-            
+
             #FIXME: VM should have a username instead of hard coded ubuntu
             self.vm.Remotes[server['Name']] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
                                                                                   self.logger)
@@ -293,7 +293,8 @@ class Jet2Caas():
     # --------------------------------------------------------------------------
     #
     def list_servers(self):
-        servers = misc.sh_callout('openstack server list -f json', shell=True, munch=True)
+        servers = misc.sh_callout('openstack server list -f json', shell=True,
+                                                                   munch=True)
         
         return servers
 
@@ -504,7 +505,7 @@ class Jet2Caas():
         if self.server:
             for server in self.vm.Servers:
                 self.logger.trace('deleting server')
-                self.client.delete_server(server)
+                self.client.delete_server(server['Name'])
 
             if self.ips:
                 for ip in self.ips:

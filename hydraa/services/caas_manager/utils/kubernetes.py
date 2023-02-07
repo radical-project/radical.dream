@@ -86,8 +86,9 @@ class Cluster:
             for server in self.vm.Servers:
                 name = server['Name']
                 ip   = server['Networks']['auto_allocated_network'][0]
-                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name),
-                                                                        logger=True)
+                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name))
+                
+                self.logger.trace("{0} {1} added".format(ip, name))
 
             loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
             boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
@@ -96,7 +97,7 @@ class Cluster:
             node.put(boostrapper)
 
             self.logger.trace('change bootstrap.sh permession')
-            node.run("chmod +x bootstrap_kubernetes.sh", logger=True)
+            node.run("chmod +x bootstrap_kubernetes.sh")
 
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
@@ -109,7 +110,7 @@ class Cluster:
 
             while True:
                 # wait for the microk8s to be ready
-                stream = node.run('sudo microk8s status --wait-ready', logger=True)
+                stream = node.run('sudo microk8s status --wait-ready')
 
                 # check if the cluster is ready to submit the pod
                 if "microk8s is running" in stream.stdout:
@@ -129,20 +130,24 @@ class Cluster:
             run_bootstrap.daemon = True
             run_bootstrap.start()
 
-        # wait for all nodes
+        # wait for all nodes to come up
+        self.logger.trace('waiting for all nodes to come up')
         while self.active_nodes < len(self.vm.Servers):
             time.sleep(1)
 
-        # workers connection
-        self.worker_nodes = list(self.remote.values())[1:]
+        # only join workers when nodes > 1
+        if len(self.vm.Servers) > 1:
+            
+            # workers connections
+            self.worker_nodes = list(self.remote.values())[1:]
 
-        # master node connection
-        self.remote  = list(self.remote.values())[0]
+            # master node connection
+            self.remote  = list(self.remote.values())[0]
 
-        # add worker nodes to master node
-        for worker_node in self.worker_nodes:
-            self.join_master(worker_node)
-            self.logger.trace('worker node joined master')
+            # add worker nodes to master node
+            for worker_node in self.worker_nodes:
+                self.join_master(worker_node)
+                self.logger.trace('worker node joined master')
 
 
     # --------------------------------------------------------------------------
@@ -355,16 +360,12 @@ class Cluster:
 
     def _get_task_statuses(self, pod_id=None):
 
-        cmd = "kubectl get pods -A -o json > tasks_status.json"
-
+        cmd = "kubectl get pods -A -o json"
+        response = None
         if self.remote:
-            self.remote.run(cmd, hide=True)
-            self.remote.get('tasks_status.json')
+            response = self.remote.run(cmd, hide=True, munch=True)
         else:
-            sh_callout(cmd, shell=True)
-        
-        with open('tasks_status.json', 'r') as f:
-            response = json.load(f)
+            sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
         stopped    = []
