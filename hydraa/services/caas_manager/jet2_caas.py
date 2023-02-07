@@ -385,27 +385,31 @@ class Jet2Caas():
             raise Exception('Task wait is not supported in asynchronous mode')
 
         while not self._terminate.is_set():
-            # this is expensive operation
+
             statuses = self.cluster._get_task_statuses()
 
             stopped = statuses[0]
             failed  = statuses[1]
             running = statuses[2]
 
-            for task in self._tasks_book.values():  
+            self.logger.trace('failed tasks " {0}'.format(failed))
+            self.logger.trace('stopped tasks" {0}'.format(stopped))
+            self.logger.trace('running tasks" {0}'.format(running))
+
+            for task in self._tasks_book.values():
                 if task.name in stopped:
                     if task.done():
                         continue
                     else:
                         task.set_result('Done')
-                        self.logger.trace('sending {0} to output queue'.format(task.name))
+                        self.logger.trace('sending done {0} to output queue'.format(task.name))
                         self.outgoing_q.put(task.name)
 
                 # FIXME: better approach?
                 elif task.name in failed:
                     try:
                         # check if the task marked failed
-                        # or not and wait for 0.1s
+                        # or not and wait for 0.1s to return
                         exc = task.exception(0.1)
                         if exc:
                             # we already marked it
@@ -413,6 +417,7 @@ class Jet2Caas():
                     except TimeoutError:
                         # never marked so mark it.
                         task.set_exception('Failed')
+                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
                         self.outgoing_q.put(task.name)
 
                 elif task.name in running:
@@ -420,8 +425,9 @@ class Jet2Caas():
                         continue
                     else:
                         task.set_running_or_notify_cancel()
-                
-                time.sleep(WAIT_TIME + 2)
+
+
+            time.sleep(5)
 
 
     # --------------------------------------------------------------------------

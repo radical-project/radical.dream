@@ -526,10 +526,6 @@ class Cluster:
                                         elif list(c['state'][0]) in waiting_state:
                                             running.append(c['name'])
 
-            self.logger.trace('failed tasks " {0}'.format(failed))
-            self.logger.trace('stopped tasks" {0}'.format(stopped))
-            self.logger.trace('running tasks" {0}'.format(running))
-
             statuses.append(stopped)
             statuses.append(failed)
             statuses.append(running)

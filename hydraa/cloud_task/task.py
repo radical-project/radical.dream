@@ -165,10 +165,6 @@ class Task(Future):
     def image(self, image) -> list:
         self.__image = image
 
-    @property
-    def result(self):
-        pass
-
     
     def exit_code(self):
         pass
