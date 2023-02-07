@@ -421,7 +421,7 @@ class Jet2Caas():
                     else:
                         task.set_running_or_notify_cancel()
                 
-                time.sleep(WAIT_TIME)
+                time.sleep(WAIT_TIME + 2)
 
 
     # --------------------------------------------------------------------------

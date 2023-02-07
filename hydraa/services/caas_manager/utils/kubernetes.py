@@ -86,13 +86,14 @@ class Cluster:
             for server in self.vm.Servers:
                 name = server['Name']
                 ip   = server['Networks']['auto_allocated_network'][0]
-                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name))
-                
-                self.logger.trace("{0} {1} added".format(ip, name))
+                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name),
+                                                                        logger=True)
+
+                self.logger.trace("{0} {1} added to /etc/hosts".format(ip, name))
 
             loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+            
             boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-
             self.logger.trace('upload bootstrap.sh')
             node.put(boostrapper)
 
@@ -102,7 +103,7 @@ class Cluster:
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
-            node.run("./bootstrap_kubernetes.sh", in_stream=False)
+            node.run("./bootstrap_kubernetes.sh", in_stream=False, logger=True)
 
             self.profiler.prof('bootstrap_stop', uid=self.id)
 
@@ -110,7 +111,7 @@ class Cluster:
 
             while True:
                 # wait for the microk8s to be ready
-                stream = node.run('sudo microk8s status --wait-ready')
+                stream = node.run('sudo microk8s status --wait-ready', in_stream=False)
 
                 # check if the cluster is ready to submit the pod
                 if "microk8s is running" in stream.stdout:
@@ -126,7 +127,7 @@ class Cluster:
 
         # bootstrap on all nodes
         for node_name, node_conn in self.remote.items():
-            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn,), name='Thread-'+node_name)
+            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn,), name='Thread-'+ node_name)
             run_bootstrap.daemon = True
             run_bootstrap.start()
 
@@ -358,6 +359,8 @@ class Cluster:
         return(objs_batch)
 
 
+    # --------------------------------------------------------------------------
+    #
     def _get_task_statuses(self, pod_id=None):
 
         cmd = "kubectl get pods -A -o json"
@@ -413,15 +416,11 @@ class Cluster:
     #
     def get_pod_status(self):
 
-        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
+        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         if self.remote:
-            self.remote.run(cmd, hide=True)
-            self.remote.get('pod_status.json')
+            response = self.remote.run(cmd, hide=True, munch=True)
         else:
             sh_callout(cmd, shell=True)
-
-        with open('pod_status.json', 'r') as f:
-            response = json.load(f)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -446,8 +445,6 @@ class Cluster:
                         else:
                             self.logger.trace('Pods did not finish yet or failed')
 
-            os.remove('pod_status.json')
-
             return df
     
 
@@ -455,14 +452,11 @@ class Cluster:
     #
     def get_pod_events(self):
         
-        cmd = 'kubectl get events -A -o json > pod_events.json' 
+        cmd = 'kubectl get events -A -o json' 
         if self.remote:
-            self.remote.run(cmd, hide=True)
-            self.remote.get('pod_events.json')
+            response = self.remote.run(cmd, hide=True, munch=True)
         else:
             sh_callout(cmd, shell=True)
-        with open('pod_events.json', 'r') as f:
-            response = json.load(f)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
@@ -478,8 +472,6 @@ class Cluster:
                             reason_lts = self.convert_time(it.get('lastTimestamp', 0.0))
                             df.loc[id] = (cid, reason, reason_fts, reason_lts)
                             id +=1
-
-        os.remove('pod_events.json')
 
         return df
 
@@ -557,7 +549,7 @@ class Cluster:
         master node (different vms or
         pms) 
         """
-        ret = self.remote.run('sudo microk8s add-node')
+        ret = self.remote.run('sudo microk8s add-node', logger=True, in_stream=False)
         token = ret.stdout.split('\n')[7]
         return token
 
@@ -568,7 +560,7 @@ class Cluster:
 
         token = self.add_node()
         if 'microk8s' in token:
-            worker.run('sudo {0}'.format(token))
+            worker.run('sudo {0}'.format(token), logger=True, in_stream=False)
 
 
     # --------------------------------------------------------------------------
