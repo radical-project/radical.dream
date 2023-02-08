@@ -25,8 +25,23 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 #
 class Cluster:
     """
-    This is a multithreaded base Kuberentes class that 
-    is build on the top of microK8s Kuberentes flavor.
+    This is a multithreaded Kuberentes base class that 
+    is build on the top of microK8s Kuberentes flavor 
+    (or any falvor). 
+    
+    This cluster controlls:
+
+    1- Node(s) is a worker machine in Kubernetes and may be
+       either a virtual or a physical machine, depending on
+       the cluster.
+    
+    2- Pod(s) effectively a unit of work. It is a way to describe
+      a series of containers.
+    
+    3- Container(s) a unit of software that packages code and its
+       dependencies so the application.
+
+
     This cluster can:
 
     1- Manager multiple nodes across different physical and
@@ -167,7 +182,8 @@ class Cluster:
             # add entries for all node to the hosts file of each node
             for server in self.vm.Servers:
                 name = server['Name']
-                ip   = server['Networks']['auto_allocated_network'][0]
+                network = server['Networks'].values()
+                ip = next(iter(network))[1]
                 node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name),
                                                                         logger=True)
 
