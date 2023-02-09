@@ -12,14 +12,16 @@ boot_kubernetes_ubuntu_PM () {
     fi
 
     # You need to configure your firewall to allow pod-to-pod and pod-to-internet communication
-    sudo ufw allow in on cni0 && sudo ufw allow out on cni0
+    #sudo ufw allow in on cni0 && sudo ufw allow out on cni0
 
-    sudo ufw default allow routed
+    #sudo ufw default allow routed
 
     # Enable storage addons
     sudo microk8s enable dns dashboard storage
 
     # create a fake kubectl binary
+    # so we do not use microk8s kubectl
+    # and only use kubectl
     touch $HOME/kubectl
     sudo echo -e "#!/bin/sh \n sudo microk8s kubectl $"@"" >  $HOME/kubectl
     chmod +x $HOME/kubectl

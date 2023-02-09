@@ -1,12 +1,14 @@
-import sys
-import socket
 from typing import OrderedDict
+from concurrent.futures import Future
 
-class Task(object):
+class Task(Future):
     """
     Base class for a cloud Task instance.
     """
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+
         self.id       = int
         self.name     = str
         self.run_id   = None
@@ -28,7 +30,7 @@ class Task(object):
 
     def name(self):
         return self.name
-    
+
 
     def id(self):
         return self.id
@@ -37,7 +39,8 @@ class Task(object):
     def run_id(self):
         """represents the run id that the task belongs to"""
         return self.run_id
-    
+
+
     def port(self):
         """represents the port of a task"""
         return self.port
@@ -133,7 +136,6 @@ class Task(object):
     def state(self, state):
         self.__state = state
 
-
     
     @property
     def events(self) -> OrderedDict:
@@ -162,10 +164,6 @@ class Task(object):
     @image.setter
     def image(self, image) -> list:
         self.__image = image
-
-    @property
-    def result(self):
-        pass
 
     
     def exit_code(self):

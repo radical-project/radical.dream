@@ -24,34 +24,131 @@ TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 # --------------------------------------------------------------------------
 #
 class Cluster:
+    """
+    This is a multithreaded Kuberentes base class that 
+    is build on the top of microK8s Kuberentes flavor 
+    (or any falvor). 
+    
+    This cluster controlls:
 
-    def __init__(self, run_id, remote, cluster_size, sandbox):
+    1- Node(s) is a worker machine in Kubernetes and may be
+       either a virtual or a physical machine, depending on
+       the cluster.
+    
+    2- Pod(s) effectively a unit of work. It is a way to describe
+      a series of containers.
+    
+    3- Container(s) a unit of software that packages code and its
+       dependencies so the application.
+
+
+    This cluster can:
+
+    1- Manager multiple nodes across different physical and
+       virtual nodes.
+    
+    2- Schedule and partion containers into pods based on
+       the cluster size.
+    
+    3- Moniter and collect tasks/containers/pods results and 
+       performance metrics.
+    """
+
+    def __init__(self, run_id, vm, cluster_size, sandbox, log):
+        """
+        The constructor for Cluster class.
+
+        Parameters:
+            run_id       (str)      : Unique id deliverd by the controller manager.
+            vm           (hydraa.vm): A AWS/Azure/OpenStack Hydraa VM.
+            cluster_size (int)      : The number of cores each node has.
+            sandbox      (str)      : A path for the folder of hydraa manager.
+            log          (logging)  : A logger object.
+        
+        """
         
         self.id           = run_id
-        self.remote       = remote
+        self.vm           = vm
+        self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
+        self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = cluster_size
+        self.size         = cluster_size     
+        self.active_nodes = 0
 
+        self.updater_lock = mt.Lock()
+
+
+    # --------------------------------------------------------------------------
+    #
     def start(self):
+        """
+        The function to start the internal micok8s cluster.
+
+        Returns:
+            bool: True if passed.
+        """
         self.remote.run('sudo microk8s start')
         return True
 
+
+    # --------------------------------------------------------------------------
+    #
     def restart(self):
+        """
+        The function to start and stop the internal micok8s
+        cluster.
+
+        Returns:
+            bool: True if passed.
+        """
         self.stop()
         self.start()
-    
+
+
+    # --------------------------------------------------------------------------
+    #
+    def recover(self):
+        """
+        The function to recover the internal micok8s cluster if
+        stuck in halt.
+        """
+        
+        self.remote.run('snap remove microk8s')
+        self.remote.run('sudo snap install microk8s')
+
+
+
+    # --------------------------------------------------------------------------
+    #
     def delete_completed_pods(self):
-        self.remote.run('kubectl delete pod --field-selector=status.phase==Succeeded')
+        """
+        The function to delete completed pods
+        if needed by the user. This function is mainly used if the user
+        want to resue the cluster after exceeding the recommended 110 pods
+        per cluster.
+
+        Returns:
+            bool: True if passed.
+        """
+        cmd = 'kubectl delete pod --field-selector=status.phase==Succeeded'
+        self.remote.run(cmd)
         return True
-    
+
 
     # --------------------------------------------------------------------------
     #
     def stop_background(self, stop_event, threads):
         """
-        stop the background task gracefully before exiting
+        The function to stop the background tasks (threads)
+        gracefully before exiting
+
+        Parameters:
+            stop_event (threading.Event): An event to trigger termination
+                                          of each thread.
+            
+            threads (list)              : List of threads to stop.
         """
         # request the background thread stop
         stop_event.set()
@@ -59,56 +156,102 @@ class Cluster:
         for thread in threads:
             if thread.is_alive():
                 thread.join()
+
+
+    # --------------------------------------------------------------------------
+    #
+    def bootstrap(self):
+        """
+        The function to build Kuberentes n nodes (1 master) (n-1) workers
+        using n virtual or physical machines and wait for them to finish.
+
+        For each node this function does:
+
+        1- Adding hosts (ip and name) to each node.
+        2- Bootstrap Kuberentes on each node.
+        3- Wait for each not to become active
+        4- Request join token from the master for each worker node.
+        5- Join each worker to the master node.
+        """
+
+        def _boottrap(node_conn, node_name):
+
+            self.logger.trace('building microK8s')
+            self.profiler.prof('bootstrap_start', uid=self.id)
+
+            # fix a bug in Chi and cloud-init: truncated hostname.
+            self.logger.trace('setting up node hostname')
+            node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
     
+            # add entries for all node to the hosts file of each node
+            for server in self.vm.Servers:
+                name = server['Name']
+                network = server['Networks'].values()
+                fixed_ip = next(iter(network))[0]
+                node_conn.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(fixed_ip, name),
+                                                                                   logger=True)
 
-    def bootstrap_local(self):
-        
-        """
-        deploy kubernetes cluster K8s on chi
-        """
-        print('Building MicroK8s cluster on the remote machine')
+                self.logger.trace("{0} {1} added to /etc/hosts".format(fixed_ip, name))
 
-        self.profiler.prof('bootstrap_start', uid=self.id)
+            loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
 
-        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-        boostrapper = "{0}config/deploy_kuberentes_local.sh".format(loc)
-        self.remote.put(boostrapper)
-        self.remote.run("chmod +x deploy_kuberentes_local.sh")
+            boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
+            self.logger.trace('upload bootstrap.sh')
+            node_conn.put(boostrapper)
 
-        # FIXME: for now we use snap to install microk8s and
-        # we sometimes fail: https://bugs.launchpad.net/snapd/+bug/1826662
-        # as a workaround we wait for snap to be loaded
-        self.remote.run("sudo snap wait system seed.loaded")
+            self.logger.trace('change bootstrap.sh permession')
+            node_conn.run("chmod +x bootstrap_kubernetes.sh")
 
-        # upload the bootstrapper code to the remote machine
-        self.remote.run("./deploy_kuberentes_local.sh")
+            self.logger.trace('invoke bootstrap.sh')
+            # run bootstrapper code to the remote machine
+            # https://github.com/fabric/fabric/issues/2129
+            node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, logger=True)
 
-        self.profiler.prof('bootstrap_stop', uid=self.id)
+            self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        self.profiler.prof('cluster_warmup_start', uid=self.id)
-        while True:
-            # wait for the microk8s to be ready
-            stream = self.remote.run('sudo microk8s status --wait-ready')
+            self.profiler.prof('cluster_warmup_start', uid=self.id)
 
-            # check if the cluster is ready to submit the pod
-            if "microk8s is running" in stream.stdout:
-                print('Booting Kuberentes cluster successful')
-                break
-            else:
-                print('Waiting for Kuberentes cluster to be running')
-                time.sleep(1)
-        
-        # the default ttl for Microk8s cluster to keep the historical
-        # event is 5m we increase it to 24 hours
-        set_ttl = ''
-        set_ttl += 'sudo sed -i s/--event-ttl=5m/--event-ttl=1440m/ '
-        set_ttl += '/var/snap/microk8s/current/args/kube-apiserver'
-        
-        # we are modifying a service of microk8s, we have to pay
-        # the price of restarting microk8s to enable the new ttl
-        self.remote.run(set_ttl)
-        self.restart()
-        self.profiler.prof('cluster_warmup_stop', uid=self.id)
+            while True:
+                # wait for the microk8s to be ready
+                stream = node_conn.run('sudo microk8s status --wait-ready', in_stream=False)
+
+                # check if the cluster is ready to submit the pod
+                if "microk8s is running" in stream.stdout:
+                    self.logger.trace('booting Kuberentes cluster successful')
+                    with self.updater_lock:
+                        self.active_nodes +=1
+                    break
+                else:
+                    self.logger.trace('waiting for Kuberentes cluster to be running')
+                    time.sleep(2)
+
+            self.profiler.prof('cluster_warmup_stop', uid=self.id)
+
+        # bootstrap on all nodes
+        for node_name, node_conn in self.remote.items():
+            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn, node_name,),
+                                                           name='Thread-'+ node_name)
+            run_bootstrap.daemon = True
+            run_bootstrap.start()
+
+        # wait for all nodes to come up
+        self.logger.trace('waiting for all nodes to come up')
+        while self.active_nodes < len(self.vm.Servers):
+            time.sleep(1)
+
+        # only join workers when nodes > 1
+        if len(self.vm.Servers) > 1:
+
+            # workers connections
+            self.worker_nodes = list(self.remote.values())[1:]
+
+            # master node connection
+            self.remote  = list(self.remote.values())[0]
+
+            # add worker nodes to master node
+            for worker_node in self.worker_nodes:
+                self.join_master(worker_node)
+                self.logger.trace('worker node joined master')
 
 
     # --------------------------------------------------------------------------
@@ -124,7 +267,21 @@ class Cluster:
             return
 
 
+    # --------------------------------------------------------------------------
+    #
     def generate_pods(self, ctasks):
+        """
+        This function generates a deployment_file (pods) from a set of 
+        scheduled tasks.
+
+        Parameters:
+            ctasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            deployment_file (str) : path for the deployment file.
+            pods_names      (list): list of generated pods names.
+            batches         (list): the actual tasks batches.
+        """
 
         pods            = []
         pods_names      = []
@@ -132,7 +289,6 @@ class Cluster:
         self.profiler.prof('schedule_pods_start', uid=self.id)
         batches         = self.schedule(ctasks)
         self.profiler.prof('schedule_pods_stop', uid=self.id)
-
 
         depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
@@ -152,7 +308,7 @@ class Cluster:
                 pod_mem = "{0}Mi".format(ctask.memory)
 
                 resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                        limits={"cpu": pod_cpu, "memory": pod_mem})
+                                                          limits={"cpu": pod_cpu, "memory": pod_mem})
 
                 pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                             resources = resources, command = ctask.cmd, env = envs)
@@ -179,7 +335,7 @@ class Cluster:
 
             pods.append(sn_pod)
             pods_names.append(pod_name)
-            
+
             self.pod_counter +=1
         
         self.profiler.prof('create_pod_stop', uid=pod_id)
@@ -201,7 +357,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def wait(self):
+    def wait_pods(self):
         # FIXME: for some reason the completed pods
         #        are reported incorrectley, making
         #        the cluster hold the resources
@@ -210,19 +366,19 @@ class Cluster:
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
         cmd += '| grep Completed* | wc -l'
-        
+
         while True:
             done_pods = 0
             if self.remote:
                 done_pods = self.remote.run(cmd, hide=True).stdout.strip()
             else:
                 out, err, _ = sh_callout(cmd, shell=True)
-                done_pods = int(out.strip())
+                done_pods   = int(out.strip())
 
             if done_pods:
-                print('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
+                self.logger.trace('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter))
                 if self.pod_counter == int(done_pods):
-                    print('{0} Pods finished with status "Completed"'.format(done_pods))
+                    self.logger.trace('{0} pods finished with status "Completed"'.format(done_pods))
                     break
                 else:
                     time.sleep(5)
@@ -232,11 +388,19 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def submit(self, ctasks):
-
-        # upload the pods file before bootstrapping
-        # FIXME: we get socket closed if we did it
-        # in the reverse order, because we modify 
-        # the firewall of the node
+        
+        """
+        This function to coordiante the submission of list of tasks.
+        to the cluster main node.
+        
+        Parameters:
+            ctasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            deployment_file (str) : path for the deployment file.
+            pods_names      (list): list of generated pods names.
+            batches         (list): the actual tasks batches.
+        """
 
         self.profiler.prof('generate_pods_start', uid=self.id)
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
@@ -254,16 +418,14 @@ class Cluster:
             self.remote.put(depolyment_file)
             cmd = 'kubectl apply -f {0}'.format(name)
             # deploy the pods.json on the cluster
-            self.remote.run(cmd)
-        
+            self.remote.run(cmd, logger=True)
+
         # we are in the embeded mode
         else:
             # just invoke a shell process
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
             out, err, _ = sh_callout(cmd, shell=True)
-            print(out, err)
-
-        #FIXME: create a monitering of the pods/containers
+            self.logger.trace('{0} {1}'.format(out, err))
         
         return depolyment_file, pods_names, batches
 
@@ -272,7 +434,19 @@ class Cluster:
     #
     def schedule(self, tasks):
 
-        task_batch = copy.deepcopy(tasks)
+        """
+        This function to schedule set of tasks into a smaller batches of tasks
+        to fit the Kubernetes cluster node size.
+
+        Parameters:
+            tasks (list): a batch of tasks (HYDRAA.Task)
+        
+        Returns:
+            objs_batch (list): a sliced list of list of tasks.
+
+        """
+
+        task_batch = copy.copy(tasks)
         batch_size = len(task_batch)
         if not batch_size:
             raise Exception('Batch size can not be 0')
@@ -315,22 +489,80 @@ class Cluster:
            objs_batch.append(task_batch[:batch])
            task_batch[:batch]
            del task_batch[:batch]
+
         return(objs_batch)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _get_task_statuses(self, pod_id=None):
+
+        """
+        This function to generate a json with the current containers statuses
+        and collect STOPPED, RUNNING and FAILED containers to report them back
+        to the controller manager.
+
+        Parameters:
+            pod_id (str): A name for the pod
+        
+        Returns:
+            statuses (list): a list of list for all of the task statuses.
+        """
+
+        cmd = "kubectl get pods -A -o json"
+        response = None
+        if self.remote:
+            response = self.remote.run(cmd, hide=True, munch=True)
+        else:
+            sh_callout(cmd, shell=True, munch=True)
+
+        statuses   = []
+        stopped    = []
+        failed     = [] 
+        running    = []
+        failed_state  = ['OOMKilled', 'Error', 'ContainerCannotRun', 'DeadlineExceeded']
+        waiting_state = ['waiting', 'Waiting']
+        if response:
+            items = response['items']
+            for item in items:
+                if item['kind'] == 'Pod':
+                    # this is a hydraa pod
+                    if item['metadata']['name'].startswith('hydraa-pod-'):
+                        # check if this pod completed successfully
+                        for cond in item['status'].get('conditions', []):
+                            it = item['status']
+                            # check if we have a completion tag
+                            if cond.get('reason', None) == 'PodCompleted':
+                                # check if the completion tag is true
+                                if cond['status'] == 'True':
+                                    for c in it['containerStatuses']:
+                                        if list(c['state'].values())[0]['reason'] == 'Completed':
+                                            if list(c['state'].values())[0]['exitCode'] == 0:
+                                                stopped.append(c['name'])
+                                            else:
+                                                failed.append(c['name'])
+    
+                                        elif list(c['state'].values())[0]['reason'] in failed_state:
+                                            failed.append(c['name'])
+                                        elif list(c['state'][0]) in waiting_state:
+                                            running.append(c['name'])
+
+            statuses.append(stopped)
+            statuses.append(failed)
+            statuses.append(running)
+
+            return statuses
 
 
     # --------------------------------------------------------------------------
     #
     def get_pod_status(self):
 
-        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json > pod_status.json'
+        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         if self.remote:
-            self.remote.run(cmd, hide=True)
-            self.remote.get('pod_status.json')
+            response = self.remote.run(cmd, hide=True, munch=True)
         else:
             sh_callout(cmd, shell=True)
-
-        with open('pod_status.json', 'r') as f:
-            response = json.load(f)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -353,9 +585,7 @@ class Cluster:
                                 i +=1
 
                         else:
-                            print('Pods did not finish yet or failed')
-
-            os.remove('pod_status.json')
+                            self.logger.trace('Pods did not finish yet or failed')
 
             return df
     
@@ -364,14 +594,11 @@ class Cluster:
     #
     def get_pod_events(self):
         
-        cmd = 'kubectl get events -A -o json > pod_events.json' 
+        cmd = 'kubectl get events -A -o json' 
         if self.remote:
-            self.remote.run(cmd, hide=True)
-            self.remote.get('pod_events.json')
+            response = self.remote.run(cmd, hide=True, munch=True)
         else:
             sh_callout(cmd, shell=True)
-        with open('pod_events.json', 'r') as f:
-            response = json.load(f)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
@@ -387,8 +614,6 @@ class Cluster:
                             reason_lts = self.convert_time(it.get('lastTimestamp', 0.0))
                             df.loc[id] = (cid, reason, reason_fts, reason_lts)
                             id +=1
-
-        os.remove('pod_events.json')
 
         return df
 
@@ -412,14 +637,14 @@ class Cluster:
         """
 
         def get_profiles(ids):
-            print('Registering a profiles checkpoint')
+            self.logger.trace('registering a profiles checkpoint')
             fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
 
             df.to_csv(fname)
-            print('Checkpoint profiles saved to {0}'.format(fname))
+            self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
 
         ids = 0
         # iterate until the stop_event is triggered
@@ -459,20 +684,31 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def join_master(self):
+    def add_node(self):
         """
         This method should allow
         x worker nodes to join the
         master node (different vms or
         pms) 
         """
-        pass
+        ret = self.remote.run('sudo microk8s add-node', logger=True, in_stream=False)
+        token = ret.stdout.split('\n')[7]
+        return token
+
+
+    # --------------------------------------------------------------------------
+    #
+    def join_master(self, worker):
+
+        token = self.add_node()
+        if 'microk8s' in token:
+            worker.run('sudo {0}'.format(token), logger=True, in_stream=False)
 
 
     # --------------------------------------------------------------------------
     #
     def stop(self):
-        self.remote.run('sudo microk8s stop')
+        self.remote.run('sudo microk8s stop', logger=True)
 
 
     def delete(self):

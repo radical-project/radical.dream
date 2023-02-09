@@ -23,6 +23,11 @@ parameters:
     - custom_constraint: blazar.reservation
     description: ID of the reservation to use for launching compute instances
     type: string
+  network_name:
+    constraints:
+    - custom_constraint: neutron.network
+    description: Network
+    type: string
 outputs:
   head_ip:
     description: The IP address of the head node
@@ -57,6 +62,7 @@ resources:
             __keyprivfile__ : /home/cc/.ssh/id_rsa
             __sshpubkey__   : { get_attr: [ansible_key,public_key] }
             __inv__         : { get_attr: [ansible_inventory,value] }
+            __inv-file__    : /home/cc/inventory
           template: |
             #!/bin/bash
             
@@ -75,22 +81,24 @@ resources:
               StrictHostKeyChecking no
               UserKnownHostsFile=/dev/null
             EOF
-            cat >/tmp/inventory <<EOF
+            cat >__inv-file__ <<EOF
             __inv__
             EOF
+            chown cc: __inv-file__
+            chmod 600 __inv-file__
   head_port:
     type: OS::Neutron::Port
     properties:
       admin_state_up: true
       name: head_port
-      network: 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1
+      network: { get_param: network_name }
       security_groups:
         - default
   ansible_head_ip_association:
     type: OS::Neutron::FloatingIPAssociation
     properties:
       floatingip_id: {get_resource: head_floating_ip}
-      port_id: {get_attr: [head, addresses, 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1, 0, port]}
+      port_id: {get_attr: [head, addresses, sharednet1, 0, port]}
   head_inventory:
     type: OS::Heat::Value
     properties:
@@ -113,7 +121,7 @@ resources:
           image: { get_param: image_name }
           key_name: { get_resource: ansible_key }
           networks:
-            - network: 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1
+            - network: { get_param: network_name }
           scheduler_hints: { reservation: { get_param: reservation_id } }
   worker_inventory:
     type: OS::Heat::Value
@@ -123,7 +131,7 @@ resources:
         repeat:
           for_each:
             <%name%>: { get_attr: [ worker, name ] }
-            <%ip%>  : { get_attr: [ worker, addresses, 1a03cf65-8fd6-4fce-94fd-bbaabe68a8e1, 0, addr ] }
+            <%ip%>  : { get_attr: [ worker, addresses, sharednet1, 0, addr ] }
           template: "<%name%> ansible_host=<%ip%> ansible_user=cc"
           permutations: false
   ansible_inventory:

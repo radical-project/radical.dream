@@ -2,7 +2,8 @@ import uuid
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-LTYPE = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
+LTYPE  = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
+OPTYPE = ['chameleon', 'jetstream2']
 
 
 # --------------------------------------------------------------------
@@ -58,7 +59,7 @@ class AwsVM:
         self.required_kwargs['ImageId']            = self.ImageId           
         self.required_kwargs['MinCount']           = self.MinCount          
         self.required_kwargs['MaxCount']           = self.MaxCount          
-        self.required_kwargs['InstanceType']       = self.InstanceType
+        self.required_kwargs['InstanceType']       = self.InstanceID
 
         user_data = self._user_data(cluster, self.UserData)
         self.required_kwargs['UserData']           = user_data
@@ -88,13 +89,21 @@ class AzureVM:
 
 
 class OpenStackVM:
-    def __init__(self, launch_type, flavor_id: str, image_id: str,  **input_kwargs):
+    def __init__(self, provider, launch_type, flavor_id: str, image_id: str, min_count=1,
+                                                            max_count=1, **input_kwargs):
 
         self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
         self.VmId           = None
         self.LaunchType     = launch_type
         self.FlavorId       = flavor_id
         self.ImageId        = image_id
+        self.MinCount       = min_count
+        self.MaxCount       = max_count
+
+        if provider not in OPTYPE:
+            raise ValueError('OpenStack VM provider must be one of {0}'.format(OPTYPE))
+
+        self.Provider       = provider
         self.SecurityGroups = input_kwargs.get('security_groups', '')
         self.Network        = input_kwargs.get('networks', '')
         self.KeyPair        = input_kwargs.get('keypair', [])
@@ -110,6 +119,8 @@ class OpenStackVM:
         self.required_kwargs['image_id']     = self.ImageId
         self.required_kwargs['flavor_id']    = self.FlavorId
         self.required_kwargs['launch_type']  = self.LaunchType
+        self.required_kwargs['min_count']    = self.MinCount
+        self.required_kwargs['max_count']    = self.MaxCount 
 
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs
