@@ -174,34 +174,38 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        def _boottrap(node):
+        def _boottrap(node_conn, node_name):
 
-            self.logger.trace('building MicroK8s')
+            self.logger.trace('building microK8s')
             self.profiler.prof('bootstrap_start', uid=self.id)
+
+            # fix a bug in Chi and cloud-init: truncated hostname.
+            self.logger.trace('setting up node hostname')
+            node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
     
             # add entries for all node to the hosts file of each node
             for server in self.vm.Servers:
                 name = server['Name']
                 network = server['Networks'].values()
-                ip = next(iter(network))[1]
-                node.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(ip, name),
-                                                                        logger=True)
+                fixed_ip = next(iter(network))[0]
+                node_conn.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(fixed_ip, name),
+                                                                                   logger=True)
 
-                self.logger.trace("{0} {1} added to /etc/hosts".format(ip, name))
+                self.logger.trace("{0} {1} added to /etc/hosts".format(fixed_ip, name))
 
             loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-            
+
             boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
             self.logger.trace('upload bootstrap.sh')
-            node.put(boostrapper)
+            node_conn.put(boostrapper)
 
             self.logger.trace('change bootstrap.sh permession')
-            node.run("chmod +x bootstrap_kubernetes.sh")
+            node_conn.run("chmod +x bootstrap_kubernetes.sh")
 
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
-            node.run("./bootstrap_kubernetes.sh", in_stream=False, logger=True)
+            node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, logger=True)
 
             self.profiler.prof('bootstrap_stop', uid=self.id)
 
@@ -209,7 +213,7 @@ class Cluster:
 
             while True:
                 # wait for the microk8s to be ready
-                stream = node.run('sudo microk8s status --wait-ready', in_stream=False)
+                stream = node_conn.run('sudo microk8s status --wait-ready', in_stream=False)
 
                 # check if the cluster is ready to submit the pod
                 if "microk8s is running" in stream.stdout:
@@ -225,7 +229,8 @@ class Cluster:
 
         # bootstrap on all nodes
         for node_name, node_conn in self.remote.items():
-            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn,), name='Thread-'+ node_name)
+            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn, node_name,),
+                                                           name='Thread-'+ node_name)
             run_bootstrap.daemon = True
             run_bootstrap.start()
 
@@ -236,7 +241,7 @@ class Cluster:
 
         # only join workers when nodes > 1
         if len(self.vm.Servers) > 1:
-            
+
             # workers connections
             self.worker_nodes = list(self.remote.values())[1:]
 

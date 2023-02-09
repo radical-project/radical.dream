@@ -81,6 +81,8 @@ class ChiCaas:
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
 
+        self._terminate = threading.Event()
+
         self.start_thread = threading.Thread(target=self.start, name='ChiCaaS')
         self.start_thread.daemon = True
 
@@ -102,9 +104,9 @@ class ChiCaas:
 
         self.profiler.prof('prep_start', uid=self.run_id)
 
-        self.image   = self.create_or_find_image()
-        self.flavor  = self.client.compute.find_flavor(self.vm.FlavorId)
-        self.keypair = self.create_or_find_keypair()
+        self.image    = self.create_or_find_image()
+        self.flavor   = self.client.compute.find_flavor(self.vm.FlavorId)
+        self.keypair  = self.create_or_find_keypair()
         self.security = self._create_security_with_rule()
 
         self.profiler.prof('prep_stop', uid=self.run_id)

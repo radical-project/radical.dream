@@ -84,10 +84,10 @@ class CaasManager:
                 cred = self._proxy._load_credentials(CHI)
                 vmx  = next(v for v in vms if v.Provider == CHI)
                 self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
-                self._registered_managers[CHI] = {'class'  : self.ChiCaas,
-                                                   'run_id': self.ChiCaas.run_id,
-                                                   'in_q'  : self.ChiCaas.incoming_q,
-                                                   'out_q' : self.ChiCaas.outgoing_q}
+                self._registered_managers[CHI] = {'class' : self.ChiCaas,
+                                                  'run_id': self.ChiCaas.run_id,
+                                                  'in_q'  : self.ChiCaas.incoming_q,
+                                                  'out_q' : self.ChiCaas.outgoing_q}
 
 
         self._terminate  = mt.Event()
@@ -162,7 +162,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, tasks: List[Task], service=False, budget=0, time=0):
+    def submit(self, tasks: List[Task]):
         """
         submit contianers and wait for them or not.
         """
@@ -170,6 +170,9 @@ class CaasManager:
             for task in tasks:
                 if task.provider == manager_k:
                     manager_attrs['in_q'].put(task)
+                
+                if task.provider not in self._registered_managers.keys():
+                    print('no manager ({0}) found for task {0}'.format(task.provider, task))
 
 
     # --------------------------------------------------------------------------
