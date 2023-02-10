@@ -8,8 +8,7 @@ import boto3
 import queue
 import atexit
 import threading
-
-from itertools import islice
+import itertools  as iter
 from datetime import datetime
 from collections import OrderedDict
 
@@ -240,6 +239,9 @@ class AwsCaas():
         max_bulk_size = 100
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
+        
+        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AwSCaaSWatcher')	
+        self.wait_thread.daemon = True
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -250,10 +252,10 @@ class AwsCaas():
                     task = self.incoming_q.get(block=True, timeout=min_bulk_time)
                 except queue.Empty:
                         task = None
-                
+
                 if task:
                         bulk.append(task)
-                
+
                 if len(bulk) >= max_bulk_size:
                         break
 
@@ -265,7 +267,8 @@ class AwsCaas():
                     self.submit(bulk, self.ECS_cluster)
 
                 if not self.asynchronous:
-                    self._wait_tasks()
+                    if not self.wait_thread.is_alive():
+                        self.wait_thread.start()
                 bulk = list()
 
 
@@ -605,17 +608,6 @@ class AwsCaas():
 
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
 
-        # FIXME: the `if` below should not exist. AWS allows
-        # to specify more than 1 container_def per task_def 
-        # (containers with depndecies) and can work as a workflow
-        # assuming that the task_def has enough vcpus and memory.
-        # Currently we are not considering if we have 
-        # enough reources to run N different containers
-        # per task_def. If we remove the if then it will fail
-        # with MEMORY_ERROR. 
-        if len(container_defs) > 1:
-            container_defs = [container_defs[0]]
-
         reg_task = self._ecs_client.register_task_definition(volumes=[],
                                                              family=family_id,
                                                              requiresCompatibilities=['EC2'],
@@ -759,47 +751,62 @@ class AwsCaas():
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
                 ctask.launch_type = self.vm.LaunchType
+                
                 containers.append(self.create_container_def(ctask))
+                
+                self._tasks_book[str(ctask.name)] = ctask
+
+                self.logger.trace('submitting tasks {0}'.format(ctask.name))
+
                 self._task_id +=1
 
+            try:
+                # FIXME: Pass the memory and cpu via a VM class
+                if self.vm.LaunchType in FARGATE:
+                    task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
+                    kwargs['platformVersion']      = 'LATEST'
+                    kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
+                                                                            'subnet-094da8d73899da51c',],
+                                                    'assignPublicIp'     : 'ENABLED',
+                                                    'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
-            # FIXME: Pass the memory and cpu via a VM class
-            if self.vm.LaunchType in FARGATE:
-                task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
-                kwargs['platformVersion']      = 'LATEST'
-                kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
-                                                                          'subnet-094da8d73899da51c',],
-                                                  'assignPublicIp'     : 'ENABLED',
-                                                  'securityGroups'     : ["sg-0702f37d21c55da64"]}}
+                # EC2 does not support Network config or platform version
+                if self.vm.LaunchType in EC2:
+                    family_id, task_def_arn = self.create_ec2_task_def(containers)
+
+                kwargs = {}
+                # count of tasks is count of pods
+                # FIXME: find a way to let the user make set
+                # the number of pods if they are identical
+                kwargs['count']         = 1
+                kwargs['cluster']       = cluster_name
+                kwargs['launchType']    = self.vm.LaunchType
+                kwargs['overrides']     = {}
+                kwargs['taskDefinition'] = task_def_arn
+
+                # submit tasks of size "batch_size"
+                response = self._ecs_client.run_task(**kwargs)
+                if response['failures']:
+                    self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                                                failure['reason']) for failure in response['failures']]))
+
+                # attach the unique ARN (i.e. pod id) to batch
+                self._family_ids[family_id]['task_arns'] = []
+
+                for i, task in enumerate(response['tasks']):
+                    self._family_ids[family_id]['task_arns'].append(task['taskArn'])
+
+                self._family_ids[family_id]['manager_id'] = self.manager_id
+                self._family_ids[family_id]['run_id']     = self.run_id
+                self._family_ids[family_id]['task_list']  = batch
+                self._family_ids[family_id]['batch_size'] = len(batch)
             
-            # EC2 does not support Network config or platform version
-            if self.vm.LaunchType in EC2:
-                family_id, task_def_arn = self.create_ec2_task_def(containers)
-
-            kwargs = {}
-            kwargs['count']         = len(batch)
-            kwargs['cluster']       = cluster_name
-            kwargs['launchType']    = self.vm.LaunchType
-            kwargs['overrides']     = {}
-            kwargs['taskDefinition'] = task_def_arn
-
-            # submit tasks of size "batch_size"
-            response = self._ecs_client.run_task(**kwargs)
-            if response['failures']:
-                self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
-                                             failure['reason']) for failure in response['failures']]))
-
-            # attach the unique ARN to every task
-            for i, task in enumerate(response['tasks']):
-                ctask = batch[i]
-                ctask.arn = task['taskArn']
-                self._tasks_book[str(ctask.arn)] = ctask.name
-                self.logger.trace('submitting tasks {0}'.format(ctask.id))
-
-            self._family_ids[family_id]['manager_id'] = self.manager_id
-            self._family_ids[family_id]['run_id']     = self.run_id
-            self._family_ids[family_id]['task_list']  = batch
-            self._family_ids[family_id]['batch_size'] = len(batch)
+            except Exception as e:
+                # upon failure mark the tasks
+                # as failed
+                for ctask in batch:
+                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
+                    ctask.set_exception(e)
 
 
     # --------------------------------------------------------------------------
@@ -885,17 +892,20 @@ class AwsCaas():
         """
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
-
-        if len(tasks) <= 100:
-            response = self._ecs_client.describe_tasks(tasks=list(tasks),
-                                                         cluster=cluster)
+        tasks_arns = list(iter.chain.from_iterable(tasks))
+        if len(tasks_arns) <= 100:
+            response = self._ecs_client.describe_tasks(tasks=tasks_arns,
+                                                        cluster=cluster)
             return [response['tasks']]
 
-        tasks         = iter(tasks)
+        tasks = iter(tasks)
         tasks_chuncks = []
-        for chunk in iter(lambda: tuple(islice(tasks, 100)), ()):
-            response = self._ecs_client.describe_tasks(tasks=list(chunk),
-                                                         cluster=cluster)
+
+        chunks = [tasks_arns[x:x+1] for x in range(0, len(tasks_arns), 100)]
+
+        for chunk in chunks:
+            response = self._ecs_client.describe_tasks(tasks=chunk,
+                                                   cluster=cluster)
 
             #FIXME: if we have a failure then update the tasks_book 
             #       with status/error code and print it.
@@ -921,11 +931,49 @@ class AwsCaas():
 
         Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
         """
+        stopped = []
+        failed  = []
+        running = []
+        '''
+        Lifecycle states: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle.html
+        '''
+
         tasks_chunks = self._describe_tasks(tasks, cluster)
         statuses = []
         for task_chunk in tasks_chunks:
             for task in task_chunk:
-                statuses.append(task['lastStatus'])
+                # the task (i.e. pod) stopped
+                if task['lastStatus'] == 'STOPPED':
+                    # if the pod stopped then mark all of 
+                    # its container as stopped
+                    for container in task['containers']:
+                        if container['exitCode'] == 0:
+                            stopped.append(container['name'])
+                        else:
+                            failed.append(container['name'])
+
+                # the task (i.e. pod) running
+                if task['lastStatus'] == 'RUNNING':
+                    for container in task['containers']:
+                        if container['lastStatus'] == 'STOPPED':
+                            if container['exitCode'] == 0:
+                                stopped.append(container['name'])
+                            else:
+                                failed.append(container['name'])
+
+                        elif container['lastStatus'] == 'RUNNING':
+                            running.append(container['name'])
+
+                # else it is transitioning 
+                elif task['lastStatus'] in ['PROVISIONING', 'PENDING', 'ACTIVATING',
+                                            'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'DELETED']:
+                                            for container in task['containers']:
+                                                running.append(container['name'])
+
+            statuses.append(stopped)
+            statuses.append(failed)
+            statuses.append(running)
+
         return statuses
 
 
@@ -943,29 +991,54 @@ class AwsCaas():
             self.EKS_cluster.wait()
             return
 
-        tasks = [t for t in self._tasks_book.keys()]
-        while True:
+        while not self._terminate.is_set():
+
+            # some other threads updates the task book so keep this
+            # thread updated as well with the latest task book entries
+            tasks = [t['task_arns'] for t in self._family_ids.values()]
+
+            # request the statuses for all task_arns
             statuses = self._get_task_statuses(tasks, self.cluster_name)
-            pending = list(filter(lambda pending: pending == 'PENDING', statuses))
-            running = list(filter(lambda running: running == 'RUNNING', statuses))
-            stopped = list(filter(lambda stopped: stopped == 'STOPPED', statuses))
 
-            if stopped:
-                for task in stopped:
-                    self.outgoing_q.put(task)
-                    self.logger.trace('task result sent to queue')
-            
-            if all([status == 'STOPPED' for status in statuses]):
-                break
-            
+            stopped = statuses[0]
+            failed  = statuses[1]
+            running = statuses[2]
 
-            self.logger.trace("Pending: {0} Running: {1} Stopped: {2}".format(len(pending),
-                                                                              len(running),
-                                                                              len(stopped)))
-            time.sleep(0.5)
+            self.logger.trace('failed tasks " {0}'.format(failed))
+            self.logger.trace('stopped tasks" {0}'.format(stopped))
+            self.logger.trace('running tasks" {0}'.format(running))
 
-        self.logger.trace('Finished, {0} tasks stopped with status: {1}'.format(len(tasks),
-                                                                                 statuses))
+            for task in self._tasks_book.values():
+                if task.name in stopped:
+                    if task.done():
+                        continue
+                    else:
+                        task.set_result('Done')
+                        self.logger.trace('sending done {0} to output queue'.format(task.name))
+                        self.outgoing_q.put(task.name)
+
+                # FIXME: better approach?
+                elif task.name in failed:
+                    try:
+                        # check if the task marked failed
+                        # or not and wait for 0.1s to return
+                        exc = task.exception(0.1)
+                        if exc:
+                            # we already marked it
+                            continue
+                    except TimeoutError:
+                        # never marked so mark it.
+                        task.set_exception('Failed')
+                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
+                        self.outgoing_q.put(task.name)
+
+                elif task.name in running:
+                    if task.running():
+                        continue
+                    else:
+                        task.set_running_or_notify_cancel()
+
+            time.sleep(1)
 
 
     # --------------------------------------------------------------------------
@@ -1079,7 +1152,7 @@ class AwsCaas():
     #
     def _schedule(self, tasks):
 
-        task_batch = copy.deepcopy(tasks)
+        task_batch = copy.copy(tasks)
         batch_size = len(task_batch)
 
         if not batch_size:
@@ -1172,6 +1245,8 @@ class AwsCaas():
             return
         
         self.logger.trace("termination started")
+
+        self._terminate.set()
 
         # Delete all the resource and the associated tasks resouces
         if self.vm.LaunchType in EC2 or self.vm.LaunchType in FARGATE:
