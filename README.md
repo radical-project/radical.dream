@@ -3,8 +3,9 @@
 from hydraa.cloud_vm import vm
 from hydraa import providers, services
 from hydraa.cloud_task.task import Task
+from hydraa import AZURE, AWS, CHI, JET2
 
-provider_mgr = providers.proxy(['aws', 'azure', 'jetstream2', 'chameleon')
+provider_mgr = providers.proxy([AZURE, AWS, CHI, JET2])
 
 service_mgr = services.manager
 
