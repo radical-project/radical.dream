@@ -901,7 +901,8 @@ class AwsCaas():
         tasks = iter(tasks)
         tasks_chuncks = []
 
-        chunks = [tasks_arns[x:x+1] for x in range(0, len(tasks_arns), 100)]
+        # break the task_arns into a chunks of 100
+        chunks = [tasks_arns[x:x+100] for x in range(0, len(tasks_arns), 100)]
 
         for chunk in chunks:
             response = self._ecs_client.describe_tasks(tasks=chunk,
