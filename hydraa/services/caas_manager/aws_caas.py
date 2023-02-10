@@ -805,7 +805,7 @@ class AwsCaas():
                 # upon failure mark the tasks
                 # as failed
                 for ctask in batch:
-                    self.logger.trace('failed to submit {0}, check task exception'.format(ctask.name))
+                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
                     ctask.set_exception(e)
 
 
