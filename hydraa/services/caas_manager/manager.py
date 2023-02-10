@@ -166,6 +166,9 @@ class CaasManager:
         """
         submit contianers and wait for them or not.
         """
+        if not isinstance(tasks, list):
+            tasks = [tasks]
+
         for manager_k, manager_attrs in self._registered_managers.items():
             for task in tasks:
                 if task.provider == manager_k:

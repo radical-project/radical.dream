@@ -239,6 +239,9 @@ class AwsCaas():
         max_bulk_size = 100
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
+        
+        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AwSCaaSWatcher')	
+        self.wait_thread.daemon = True
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -249,10 +252,10 @@ class AwsCaas():
                     task = self.incoming_q.get(block=True, timeout=min_bulk_time)
                 except queue.Empty:
                         task = None
-                
+
                 if task:
                         bulk.append(task)
-                
+
                 if len(bulk) >= max_bulk_size:
                         break
 
@@ -264,7 +267,8 @@ class AwsCaas():
                     self.submit(bulk, self.ECS_cluster)
 
                 if not self.asynchronous:
-                    self._wait_tasks()
+                    if not self.wait_thread.is_alive():
+                        self.wait_thread.start()
                 bulk = list()
 
 
@@ -747,54 +751,62 @@ class AwsCaas():
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
                 ctask.launch_type = self.vm.LaunchType
+                
                 containers.append(self.create_container_def(ctask))
+                
                 self._tasks_book[str(ctask.name)] = ctask
 
-                self.logger.trace('submitting tasks {0}'.format(ctask.id))
-                
+                self.logger.trace('submitting tasks {0}'.format(ctask.name))
+
                 self._task_id +=1
 
+            try:
+                # FIXME: Pass the memory and cpu via a VM class
+                if self.vm.LaunchType in FARGATE:
+                    task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
+                    kwargs['platformVersion']      = 'LATEST'
+                    kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
+                                                                            'subnet-094da8d73899da51c',],
+                                                    'assignPublicIp'     : 'ENABLED',
+                                                    'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
-            # FIXME: Pass the memory and cpu via a VM class
-            if self.vm.LaunchType in FARGATE:
-                task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
-                kwargs['platformVersion']      = 'LATEST'
-                kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
-                                                                          'subnet-094da8d73899da51c',],
-                                                  'assignPublicIp'     : 'ENABLED',
-                                                  'securityGroups'     : ["sg-0702f37d21c55da64"]}}
+                # EC2 does not support Network config or platform version
+                if self.vm.LaunchType in EC2:
+                    family_id, task_def_arn = self.create_ec2_task_def(containers)
+
+                kwargs = {}
+                # count of tasks is count of pods
+                # FIXME: find a way to let the user make set
+                # the number of pods if they are identical
+                kwargs['count']         = 1
+                kwargs['cluster']       = cluster_name
+                kwargs['launchType']    = self.vm.LaunchType
+                kwargs['overrides']     = {}
+                kwargs['taskDefinition'] = task_def_arn
+
+                # submit tasks of size "batch_size"
+                response = self._ecs_client.run_task(**kwargs)
+                if response['failures']:
+                    self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                                                failure['reason']) for failure in response['failures']]))
+
+                # attach the unique ARN (i.e. pod id) to batch
+                self._family_ids[family_id]['task_arns'] = []
+
+                for i, task in enumerate(response['tasks']):
+                    self._family_ids[family_id]['task_arns'].append(task['taskArn'])
+
+                self._family_ids[family_id]['manager_id'] = self.manager_id
+                self._family_ids[family_id]['run_id']     = self.run_id
+                self._family_ids[family_id]['task_list']  = batch
+                self._family_ids[family_id]['batch_size'] = len(batch)
             
-            # EC2 does not support Network config or platform version
-            if self.vm.LaunchType in EC2:
-                family_id, task_def_arn = self.create_ec2_task_def(containers)
-
-            kwargs = {}
-            # count of tasks is count of pods
-            # FIXME: find a way to let the user make set
-            # the number of pods if they are identical
-            kwargs['count']         = 1
-            kwargs['cluster']       = cluster_name
-            kwargs['launchType']    = self.vm.LaunchType
-            kwargs['overrides']     = {}
-            kwargs['taskDefinition'] = task_def_arn
-
-            # submit tasks of size "batch_size"
-            response = self._ecs_client.run_task(**kwargs)
-            if response['failures']:
-                self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
-                                             failure['reason']) for failure in response['failures']]))
-
-            # attach the unique ARN (i.e. pod id) to batch
-            self._family_ids[family_id]['task_arns'] = []
-
-            for i, task in enumerate(response['tasks']):
-                self._family_ids[family_id]['task_arns'].append(task['taskArn'])
-
-            self._family_ids[family_id]['manager_id'] = self.manager_id
-            self._family_ids[family_id]['run_id']     = self.run_id
-            self._family_ids[family_id]['task_list']  = batch
-            self._family_ids[family_id]['batch_size'] = len(batch)
-             
+            except Exception as e:
+                # upon failure mark the tasks
+                # as failed
+                for ctask in batch:
+                    self.logger.trace('failed to submit {0}, check task exception'.format(ctask.name))
+                    ctask.set_exception(e)
 
 
     # --------------------------------------------------------------------------
@@ -979,10 +991,15 @@ class AwsCaas():
             self.EKS_cluster.wait()
             return
 
-        tasks = [t['task_arns'] for t in self._family_ids.values()]
+        while not self._terminate.is_set():
 
-        while True:
+            # some other threads updates the task book so keep this
+            # thread updated as well with the latest task book entries
+            tasks = [t['task_arns'] for t in self._family_ids.values()]
+
+            # request the statuses for all task_arns
             statuses = self._get_task_statuses(tasks, self.cluster_name)
+
             stopped = statuses[0]
             failed  = statuses[1]
             running = statuses[2]
@@ -1021,7 +1038,7 @@ class AwsCaas():
                     else:
                         task.set_running_or_notify_cancel()
 
-            time.sleep(5)
+            time.sleep(1)
 
 
     # --------------------------------------------------------------------------
@@ -1228,6 +1245,8 @@ class AwsCaas():
             return
         
         self.logger.trace("termination started")
+
+        self._terminate.set()
 
         # Delete all the resource and the associated tasks resouces
         if self.vm.LaunchType in EC2 or self.vm.LaunchType in FARGATE:
