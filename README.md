@@ -14,11 +14,11 @@ vm1 = vm.AwsVM(launch_type='EC2', image_id='ami-061c10a2cb32f3491', min_count=1,
 
 vm2 = vm.AzureVM(launch_type='ACS', instance_id='Standard_B1s', min_count=1, max_count=1)
 
-vm3 = vm.OpenStackVM(provider='jetstream2', launch_type='KVM', flavor_id='g3.medium',
-                              image_id='Featured-Ubuntu20', min_count=2, max_count=2)
+vm3 = vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='g3.medium',
+                      image_id='Featured-Ubuntu20', min_count=2, max_count=2)
                            
-vm4 = vm.OpenStackVM(provider='chameleon', launch_type='KVM', flavor_id='m1.xlarge',
-                                 image_id='CC-Ubuntu20.04', min_count=2, max_count=2)
+vm4 = vm.OpenStackVM(provider=CHI, launch_type='KVM', flavor_id='m1.xlarge',
+                        image_id='CC-Ubuntu20.04', min_count=2, max_count=2)
 
 vms = [vm1, vm2, vm3, vm4]
 
@@ -50,7 +50,7 @@ def do_something():
     task.vcpus    = 2
     task.image    = "xxx/simulate"
     task.args     = result
-    task.provider = 'aws'
+    task.provider = AWS
     caas_mgr.submit(task)
     
     # wait for the task
