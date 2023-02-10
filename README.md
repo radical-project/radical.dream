@@ -45,16 +45,16 @@ def do_something():
     if task[10].done():
        result = task[10].result()
   
-       new_task = Task()
-       task.memory   = 100 #MB
-       task.vcpus    = 2
-       task.image    = "xxx/simulate"
-       task.args     = result
-       task.provider = AWS
-       caas_mgr.submit(task)
+       simul_task = Task()
+       simul_task.memory   = 100 #MB
+       simul_task.vcpus    = 2
+       simul_task.image    = "xxx/simulate"
+       simul_task.args     = result
+       simul_task.provider = AWS
+       caas_mgr.submit(simul_task)
     
     # wait for the task
-    task.done()
+    simul_task.done()
     
     print(task.result())
   
