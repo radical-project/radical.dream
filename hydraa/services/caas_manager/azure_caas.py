@@ -349,8 +349,7 @@ class AzureCaas():
                         tmp_var = var.split('=')
                         tmp_var = EnvironmentVariable(name=tmp_var[0], value=tmp_var[1])
                         az_vars.append(tmp_var)
-                
-                
+
                 container = Container(name=ctask.name,
                                       image=ctask.image,
                                       resources=container_resource_requirements,
