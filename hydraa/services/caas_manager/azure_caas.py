@@ -157,6 +157,9 @@ class AzureCaas():
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
+        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AzureCaaSWatcher')	
+        self.wait_thread.daemon = True
+
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
             # collect tasks for min bulk time
@@ -166,7 +169,7 @@ class AzureCaas():
                     task = self.incoming_q.get(block=True, timeout=min_bulk_time)
                 except queue.Empty:
                         task = None
-                
+
                 if task:
                         bulk.append(task)
                 
@@ -180,7 +183,8 @@ class AzureCaas():
                     self.submit(bulk)
 
                 if not self.asynchronous:
-                    self._wait_tasks()
+                    if not self.wait_thread.is_alive():
+                        self.wait_thread.start()
                 bulk = list()
 
 
@@ -354,7 +358,7 @@ class AzureCaas():
                                       environment_variables=az_vars)
                 containers.append(container)
 
-                self._tasks_book[str(ctask.id)] = ctask.name
+                self._tasks_book[str(ctask.name)] = ctask
                 self.logger.trace('submitting tasks {0}'.format(ctask.id))
 
                 self._task_id +=1
@@ -375,32 +379,48 @@ class AzureCaas():
 
         # FIXME: this function should performs a general task info pulling
         # (not only tasks statuses)
+        stopped  = []
+        failed   = []
+        running  = []
         statuses = []
+
         groups = [g for g in container_group_names.keys()]
         for group in groups:
             container_group = self._con_client.container_groups.get(self._resource_group_name,
                                                                                         group)
-
-            ctasks = container_group_names[group]['task_list']
-
-            try:
-                for i in range(len(ctasks)):
-                    ctasks[i].events = container_group.containers[i].instance_view.events
-                    ctasks[i].state  = container_group.containers[i].instance_view.current_state.state
-                    if ctasks[i].events:
-                        # detect if the task is hanging in wait but already failed
-                        for event in ctasks[i].events:
-                            if event.name == "Failed" and ctasks[i].state == "Waiting":
-                                ctasks[i].state = event.name
-                                container_group.containers[i].instance_view.current_state.state = event.name
+            
+            for container in container_group.as_dict()['containers']:
+                name           = container.get('name', '')
+                container_task = container.get('instance_view', {})
+                if name and container_task:
+                    try:
+                        if container_task['current_state']['state'] == 'Terminated':
+                            if  container_task['current_state']['exit_code'] == 0:
+                                stopped.append(name)
                             else:
-                                pass
-                    ctasks[i].exit_code = container_group.containers[0].instance_view.current_state.exit_code
-                statuses.extend(c.instance_view.current_state.state for c in container_group.containers)
+                                failed.append(name)
+                        
+                        elif container_task['current_state']['state'] == 'Running':
+                            running.append(name)
+                        
+                        elif container_task['current_state']['state'] == 'Waiting':
+                            events = container.get('events', {})
+                            if events:
+                                for e in events:
+                                    if e['name'] == 'Failed':
+                                        failed.append(name)
+                                    else:
+                                        pass
+                        else:
+                            running.append(name)
 
-            except AttributeError:
-                self.logger.warning('no task statuses avilable yet, sleeping')
-                time.sleep(0.2)
+                    except AttributeError:
+                        self.logger.warning('no task statuses avilable yet, sleeping')
+                        time.sleep(0.2)
+
+            statuses.append(stopped)
+            statuses.append(failed)
+            statuses.append(running)
 
         return statuses
 
@@ -416,29 +436,49 @@ class AzureCaas():
             self.AKS_Cluster.wait()
             return
 
-        while True:
+        while not self._terminate.is_set():
+
             statuses = self._get_task_statuses(self._container_group_names)
-            if statuses:
-                pending = list(filter(lambda pending: pending == 'Waiting'   , statuses))
-                running = list(filter(lambda running: running == 'Running'   , statuses))
-                stopped = list(filter(lambda stopped: stopped == 'Terminated', statuses))
+            stopped = statuses[0]
+            failed  = statuses[1]
+            running = statuses[2]
 
-                if stopped:
-                    for task in stopped:
-                        self.outgoing_q.put(task)
-                        self.logger.trace('task result sent to queue')
+            self.logger.trace('failed tasks " {0}'.format(failed))
+            self.logger.trace('stopped tasks" {0}'.format(stopped))
+            self.logger.trace('running tasks" {0}'.format(running))
 
-                if all([status == 'Terminated' or status == 'Failed' for status in statuses]):
-                    break
+            for task in self._tasks_book.values():
+                if task.name in stopped:
+                    if task.done():
+                        continue
+                    else:
+                        task.set_result('Done')
+                        self.logger.trace('sending done {0} to output queue'.format(task.name))
+                        self.outgoing_q.put(task.name)
 
-                self.logger.trace("Pending: {0} Running: {1} Stopped: {2}".format(len(pending),
-                                                                                  len(running),
-                                                                                  len(stopped)))
+                # FIXME: better approach?
+                elif task.name in failed:
+                    try:
+                        # check if the task marked failed
+                        # or not and wait for 0.1s to return
+                        exc = task.exception(0.1)
+                        if exc:
+                            # we already marked it
+                            continue
+                    except TimeoutError:
+                        # never marked so mark it.
+                        task.set_exception('Failed')
+                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
+                        self.outgoing_q.put(task.name)
 
-            time.sleep(0.5)
+                elif task.name in running:
+                    if task.running():
+                        continue
+                    else:
+                        task.set_running_or_notify_cancel()
 
-        self.logger.trace('Finished, {0} tasks stopped with status: {1}'.format(len(statuses),
-                                                                                    statuses))
+            time.sleep(1)
+
 
     # --------------------------------------------------------------------------
     #
@@ -545,7 +585,7 @@ class AzureCaas():
     #
     def _schedule(self, tasks):
 
-        task_batch = copy.deepcopy(tasks)
+        task_batch = copy.copy(tasks)
         batch_size = len(task_batch)
         if not batch_size:
             raise Exception('Batch size can not be 0')
