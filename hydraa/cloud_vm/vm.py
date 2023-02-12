@@ -14,6 +14,7 @@ class AwsVM:
                                         profile: dict, **input_kwargs):
 
         self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
+        self.Provider           = 'aws'
         self.ImageId            = image_id
         self.MinCount           = min_count
         self.MaxCount           = max_count
@@ -75,6 +76,7 @@ class AzureVM:
                                                       **input_kwargs):
 
         self.VmName             = 'AZURE_VM-{0}'.format(uuid.uuid4())
+        self.Provider           = 'azure'
         self.LaunchType         = launch_type
         self.InstanceID         = instance_id
         self.MinCount           = min_count
