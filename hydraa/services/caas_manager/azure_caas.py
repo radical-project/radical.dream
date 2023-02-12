@@ -343,10 +343,10 @@ class AzureCaas():
 
                 # the minimum memory for a container is 0.1 GB
                 # and it should be an increment of 0.1
-                memory = round(ctask.memory /1000, 1)
+                memory = round(ctask.memory / 1000, 1)
                 if memory < 0.1:
                     memory = 0.1
-                    self.logger.trace('setting task memory to {0}GB'.format(memory))                    
+                    self.logger.trace('setting task memory to {0} GB'.format(memory))                    
     
                 container_resource_requests = ResourceRequests(memory_in_gb=memory,
                                                                    cpu=ctask.vcpus)
