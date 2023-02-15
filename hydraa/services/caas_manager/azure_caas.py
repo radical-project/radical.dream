@@ -292,7 +292,10 @@ class AzureCaas():
         self._container_group_names[self._container_group_name] = OrderedDict()
 
         return self._container_group_name
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     def submit_to_aks(self, ctasks):
         """
         submit a single pod per batch of tasks
@@ -306,7 +309,7 @@ class AzureCaas():
             ctask.launch_type = self.vm.LaunchType 
 
             self._tasks_book[str(ctask.id)] = ctask.name
-            self.logger.trace('submitting tasks {0}'.format(ctask.id))
+            self.logger.trace('submitting tasks {0}'.format(ctask.name))
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -336,21 +339,28 @@ class AzureCaas():
                 ctask.id          = self._task_id
                 ctask.name        = 'ctask-{0}'.format(self._task_id)
                 ctask.provider    = AZURE
-                ctask.launch_type = self.vm.LaunchType 
+                ctask.launch_type = self.vm.LaunchType
 
-                container_resource_requests = ResourceRequests(memory_in_gb=ctask.memory,
-                                                                         cpu=ctask.vcpus)
+                # the minimum memory for a container is 0.1 GB
+                # and it should be an increment of 0.1
+                memory = round(ctask.memory / 1000, 1)
+                if memory < 0.1:
+                    memory = 0.1
+                    self.logger.trace('setting task memory to {0} GB'.format(memory))                    
+    
+                container_resource_requests = ResourceRequests(memory_in_gb=memory,
+                                                                   cpu=ctask.vcpus)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
 
+                # set env vars for each container
                 az_vars =[]
                 if ctask.env_var:
                     for var in ctask.env_var:
                         tmp_var = var.split('=')
                         tmp_var = EnvironmentVariable(name=tmp_var[0], value=tmp_var[1])
                         az_vars.append(tmp_var)
-                
-                
+
                 container = Container(name=ctask.name,
                                       image=ctask.image,
                                       resources=container_resource_requirements,
@@ -366,11 +376,20 @@ class AzureCaas():
             if not self._resource_group:
                 raise TypeError('resource group can not be empty')
 
-            contaier_group_name = self.create_container_group(self._resource_group, containers)
-            self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
-            self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
-            self._container_group_names[contaier_group_name]['task_list']     = batch
-            self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
+            try:
+                # create container groups and submit
+                contaier_group_name = self.create_container_group(self._resource_group, containers)
+                self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
+                self._container_group_names[contaier_group_name]['resource_name'] = self._resource_group_name
+                self._container_group_names[contaier_group_name]['task_list']     = batch
+                self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
+    
+            except Exception as e:
+                # upon failure mark the tasks
+                # as failed
+                for ctask in batch:
+                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
+                    ctask.set_exception(e)
 
 
     # --------------------------------------------------------------------------
@@ -439,44 +458,46 @@ class AzureCaas():
         while not self._terminate.is_set():
 
             statuses = self._get_task_statuses(self._container_group_names)
-            stopped = statuses[0]
-            failed  = statuses[1]
-            running = statuses[2]
+            if statuses:
+                stopped = statuses[0]
+                failed  = statuses[1]
+                running = statuses[2]
 
-            self.logger.trace('failed tasks " {0}'.format(failed))
-            self.logger.trace('stopped tasks" {0}'.format(stopped))
-            self.logger.trace('running tasks" {0}'.format(running))
+                self.logger.trace('failed tasks " {0}'.format(failed))
+                self.logger.trace('stopped tasks" {0}'.format(stopped))
+                self.logger.trace('running tasks" {0}'.format(running))
 
-            for task in self._tasks_book.values():
-                if task.name in stopped:
-                    if task.done():
-                        continue
-                    else:
-                        task.set_result('Done')
-                        self.logger.trace('sending done {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
-
-                # FIXME: better approach?
-                elif task.name in failed:
-                    try:
-                        # check if the task marked failed
-                        # or not and wait for 0.1s to return
-                        exc = task.exception(0.1)
-                        if exc:
-                            # we already marked it
+                for task in self._tasks_book.values():
+                    if task.name in stopped:
+                        if task.done():
                             continue
-                    except TimeoutError:
-                        # never marked so mark it.
-                        task.set_exception('Failed')
-                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
+                        else:
+                            task.set_result('Done')
+                            self.logger.trace('sending done {0} to output queue'.format(task.name))
+                            self.outgoing_q.put(task.name)
 
-                elif task.name in running:
-                    if task.running():
-                        continue
-                    else:
-                        task.set_running_or_notify_cancel()
+                    # FIXME: better approach?
+                    elif task.name in failed:
+                        try:
+                            # check if the task marked failed
+                            # or not and wait for 0.1s to return
+                            exc = task.exception(0.1)
+                            if exc:
+                                # we already marked it
+                                continue
+                        except TimeoutError:
+                            # never marked so mark it.
+                            task.set_exception('Failed')
+                            self.logger.trace('sending failed {0} to output queue'.format(task.name))
+                            self.outgoing_q.put(task.name)
 
+                    elif task.name in running:
+                        if task.running():
+                            continue
+                        else:
+                            task.set_running_or_notify_cancel()
+
+                time.sleep(1)
             time.sleep(1)
 
 
@@ -664,6 +685,8 @@ class AzureCaas():
             return
         
         self.logger.trace("termination started")
+
+        self._terminate.set()
 
         for key, val in self._container_group_names.items():
             self.logger.trace(("terminating container group {0}".format(key)))
