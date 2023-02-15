@@ -586,6 +586,8 @@ class ChiCaas:
         
         self.logger.trace("termination started")
 
+        self._terminate.set()
+
         if self.vm.KeyPair:
             self.logger.trace('deleting ssh keys')
             for k in self.vm.KeyPair:

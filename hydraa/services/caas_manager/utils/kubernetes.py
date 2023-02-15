@@ -11,9 +11,10 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc                  import sh_callout
-from kubernetes             import client
-from azure.cli.core         import get_default_cli
+from .misc          import sh_callout
+from hydraa         import CHI, JET2
+from kubernetes     import client
+from azure.cli.core import get_default_cli
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -179,10 +180,11 @@ class Cluster:
             self.logger.trace('building microK8s')
             self.profiler.prof('bootstrap_start', uid=self.id)
 
-            # fix a bug in Chi and cloud-init: truncated hostname.
-            self.logger.trace('setting up node hostname')
-            node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
-    
+            if self.vm.Provider == CHI:
+                # fix a bug in Chi and cloud-init: truncated hostname.
+                self.logger.trace('setting up node hostname')
+                node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
+
             # add entries for all node to the hosts file of each node
             for server in self.vm.Servers:
                 name = server['Name']
