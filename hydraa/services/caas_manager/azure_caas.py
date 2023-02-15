@@ -686,6 +686,8 @@ class AzureCaas():
         
         self.logger.trace("termination started")
 
+        self._terminate.set()
+
         for key, val in self._container_group_names.items():
             self.logger.trace(("terminating container group {0}".format(key)))
             del_op = self._con_client.container_groups.begin_delete(self._resource_group_name, key)
