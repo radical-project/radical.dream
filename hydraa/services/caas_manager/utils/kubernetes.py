@@ -20,7 +20,12 @@ from azure.cli.core import get_default_cli
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
+FAILED_STATE  = ['StartError','OOMKilled', 'Error', 'ContainerCannotRun',
+                 'DeadlineExceeded', 'CrashLoopBackOff', 'ImagePullBackOff',
+                 'RunContainerError', 'ImageInspectError']
+RUNNING_STATE = ['ContainerCreating', 'Started']
 
+COMPLETED_STATE = ['Completed', 'completed']
 
 # --------------------------------------------------------------------------
 #
@@ -516,38 +521,59 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
-            sh_callout(cmd, shell=True, munch=True)
+            response = sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
         stopped    = []
         failed     = [] 
         running    = []
-        failed_state  = ['OOMKilled', 'Error', 'ContainerCannotRun', 'DeadlineExceeded']
-        waiting_state = ['waiting', 'Waiting']
+
         if response:
             items = response['items']
             for item in items:
                 if item['kind'] == 'Pod':
                     # this is a hydraa pod
                     if item['metadata']['name'].startswith('hydraa-pod-'):
+                        already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):
                             it = item['status']
-                            # check if we have a completion tag
-                            if cond.get('reason', None) == 'PodCompleted':
-                                # check if the completion tag is true
-                                if cond['status'] == 'True':
-                                    for c in it['containerStatuses']:
-                                        if list(c['state'].values())[0]['reason'] == 'Completed':
+                            if cond.get('reason', ''):
+                                for c in it.get('containerStatuses', []):
+                                    if c['name'] in already_checked:
+                                        continue
+                                    # FIXME: container_msg should be injected in the 
+                                    # task object not logger
+                                    container_attr = list(c['state'].values())[0]
+                                    container_msg  = container_attr.get('message', '')
+                                    container_res  = container_attr.get('reason', '')
+                                    # case-1 terminated signal
+                                    if next(iter(c['state'])) == 'terminated':
+                                        if container_res in COMPLETED_STATE:
                                             if list(c['state'].values())[0]['exitCode'] == 0:
                                                 stopped.append(c['name'])
                                             else:
                                                 failed.append(c['name'])
-    
-                                        elif list(c['state'].values())[0]['reason'] in failed_state:
+                                                self.logger.trace(container_msg)
+
+                                        if container_res in FAILED_STATE:
+                                           failed.append(c['name'])
+                                           self.logger.trace(container_msg)
+
+                                    # case-2 running signal
+                                    if next(iter(c['state'])) == 'running':
+                                            if container_res in RUNNING_STATE:
+                                                running.append(c['name'])
+
+                                    # case-3 waiting signal
+                                    if next(iter(c['state'])) == 'waiting':
+                                        if container_res in RUNNING_STATE:
+                                             running.append(c['name'])
+                                        elif container_res in FAILED_STATE:
                                             failed.append(c['name'])
-                                        elif list(c['state'][0]) in waiting_state:
-                                            running.append(c['name'])
+                                            self.logger.trace(container_msg)
+
+                                    already_checked.append(c['name'])
 
             statuses.append(stopped)
             statuses.append(failed)
@@ -561,10 +587,11 @@ class Cluster:
     def get_pod_status(self):
 
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
+        response = None
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
-            sh_callout(cmd, shell=True)
+            response = sh_callout(cmd, shell=True, munch=True)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -600,7 +627,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
-            sh_callout(cmd, shell=True)
+            response = sh_callout(cmd, shell=True, munch=True)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
@@ -729,7 +756,7 @@ class AKS_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, run_id, vm, sandbox):
+    def __init__(self, run_id, vm, sandbox, log):
         self.id             = run_id
         self.cluster_name   = 'HydraaAksCluster'
         self.resource_group = vm.ResourceGroup
@@ -740,10 +767,13 @@ class AKS_Cluster(Cluster):
         self.instance       = vm.InstanceID
         self.region         = vm.Region
         self.config         = None
+        self.logger         = log
         self.stop_event     = mt.Event()
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
 
-        super().__init__(run_id, None, self.size, sandbox)
+        vm.Remotes = []
+
+        super().__init__(run_id, vm, self.size, sandbox, self.logger)
 
         self.watch_profiles.daemon = True
 
@@ -909,7 +939,8 @@ class AKS_Cluster(Cluster):
         depolyment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
-        self.watch_profiles.start()
+        if not self.watch_profiles.is_alive():
+            self.watch_profiles.start()
 
         return depolyment_file, pods_names, batches
 
