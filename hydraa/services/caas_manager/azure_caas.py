@@ -483,10 +483,10 @@ class AzureCaas():
                             # check if the task marked failed
                             # or not and wait for 0.1s to return
                             exc = task.exception(0.1)
+                            # we already marked it
                             if exc:
-                                # we already marked it
                                 continue
-                        except TimeoutError:
+                        except:
                             # never marked so mark it.
                             task.set_exception('Failed')
                             self.logger.trace('sending failed {0} to output queue'.format(task.name))

@@ -20,12 +20,15 @@ from azure.cli.core import get_default_cli
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
-FAILED_STATE  = ['StartError','OOMKilled', 'Error', 'ContainerCannotRun',
-                 'DeadlineExceeded', 'CrashLoopBackOff', 'ImagePullBackOff',
-                 'RunContainerError', 'ImageInspectError']
-RUNNING_STATE = ['ContainerCreating', 'Started']
 
+FAILED_STATE = ['Error', 'StartError','OOMKilled',
+                'ContainerCannotRun','DeadlineExceeded',
+                'CrashLoopBackOff', 'ImagePullBackOff',
+                'RunContainerError','ImageInspectError']
+
+RUNNING_STATE = ['ContainerCreating', 'Started']
 COMPLETED_STATE = ['Completed', 'completed']
+MAX_PODS        = 250
 
 # --------------------------------------------------------------------------
 #
@@ -761,19 +764,14 @@ class AKS_Cluster(Cluster):
         self.cluster_name   = 'HydraaAksCluster'
         self.resource_group = vm.ResourceGroup
         self.nodes          = vm.MinCount
-        self.max_pods       = 250
-        self.size           = 0
-        self.sandbox        = sandbox
-        self.instance       = vm.InstanceID
-        self.region         = vm.Region
         self.config         = None
-        self.logger         = log
         self.stop_event     = mt.Event()
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
 
         vm.Remotes = []
 
-        super().__init__(run_id, vm, self.size, sandbox, self.logger)
+        # we set size to 0 and we determine it later
+        super().__init__(run_id, vm, 0, sandbox, log)
 
         self.watch_profiles.daemon = True
 
@@ -789,13 +787,13 @@ class AKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
         if not self.size:
-            self.size = self.get_vm_size(self.instance, self.region) - 1
+            self.size = self.get_vm_size(self.vm.InstanceID) - 1
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
         cmd += '-n {0} '.format(self.cluster_name)
         cmd += '--enable-managed-identity '
-        cmd += '--node-vm-size {0} '.format(self.instance)
+        cmd += '--node-vm-size {0} '.format(self.vm.InstanceID)
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
@@ -946,25 +944,23 @@ class AKS_Cluster(Cluster):
 
 
 class EKS_Cluster(Cluster):
-    """Represents a single/multi node Kubrenetes cluster.
+    """Represents a single/multi node Elastic Kubrenetes Service cluster.
        This class asssumes that you did the one time
        preparational steps:
 
        1- AWS-> eksctl installed 
        2- AWS-> aws-iam-authenticator
+       2- In $HOME/.aws/credentials -> aws credentials
        2- Kuberenetes-> kubectl installed
 
        FIXME: For every run, export $KUBECONFIG
        NOTE : This class will overide any existing kubernetes config
     """
-    def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks):
+
+    def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id             = run_id
         self.cluster_name   = 'Hydraa-Eks-Cluster'
-        self.max_pods       = 250
-        self.size           = 0
-        self.sandbox        = sandbox
-        self.vm             = vm
         self.config         = None
         self.stop_event     = mt.Event()
 
@@ -973,10 +969,13 @@ class EKS_Cluster(Cluster):
         self.ec2            = ec2
         self.eks            = eks
         self.rclf           = rclf
+        self.prc            = prc
+
+        vm.Remotes          = []
 
         self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="EKS_profiles_watcher")
 
-        super().__init__(run_id, None, self.size, sandbox)
+        super().__init__(run_id, vm, 0, sandbox, log)
 
         self.watch_profiles.daemon = True
 
@@ -994,7 +993,6 @@ class EKS_Cluster(Cluster):
         #        zones.
         # https://github.com/weaveworks/eksctl/issues/817
 
-        Support_Zones = ['a', 'b']
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -1002,24 +1000,37 @@ class EKS_Cluster(Cluster):
         kube_config_file = self.configure()
 
         if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
+            self.size = self.get_vm_size(self.vm.InstanceID) - 1
         
-        cmd  = 'eksctl create cluster --name {0} '.format(self.cluster_name)
-        cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
-        cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, Support_Zones[0], Support_Zones[1])
-        cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-        cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
-        cmd += '--kubeconfig {0}'.format(kube_config_file)
-
-        print('Building EKS cluster..')
-
-        out, err, ret = sh_callout(cmd, shell=True)
+        # check if eksctl is intalled or not
+        out, err, ret = sh_callout('which eksctl', shell=True)
 
         if ret:
-            print(out, err)
-            raise Exception('Failed to build EKS cluster')
-        
-        print(out, err)
+            raise Exception('eksctl is required to build EKS cluster: {0}'.format(err))
+
+        eksctl_path = out.strip()
+
+        if eksctl_path:
+            self.logger.trace('eksctl found: {0}'.format(eksctl_path))
+    
+            print('Building EKS cluster..')
+            cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
+            cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+
+            if self.vm.Zones and len(self.vm.Zones) == 2:
+                cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
+            cmd += '--nodegroup-name {0} '.format(NodeGroupName)
+            cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
+            cmd += '--kubeconfig {0}'.format(kube_config_file)
+
+            out, err, ret = sh_callout(cmd, shell=True)
+
+        if ret:
+            raise Exception('failed to build EKS cluster: {0} {1}'.format(out, err))
+
+        print('EKS cluster is ready!')
+
+        self.logger.trace(out)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
@@ -1028,14 +1039,20 @@ class EKS_Cluster(Cluster):
     #
     def configure(self):
 
+        # we isolate the .kube/config for each
+        # service to prevent multiple services
+        # config overwritting each other
+        self.logger.trace('Creating .kube folder')
         config_file = self.sandbox + "/.kube/config"
-
-        print('Creating .kube folder')
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
+        self.logger.trace('setting EKS KUBECONFIG path to: {0}'.format(config_file))
+        #FIXME: what will happen if we have another
+        # process trying to access this env. var.?
+        os.environ['KUBECONFIG'] = config_file
+
         return config_file
-        
 
 
     # --------------------------------------------------------------------------
@@ -1067,15 +1084,13 @@ class EKS_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def get_vm_size(self, vm_id, region):
+    def get_vm_size(self, vm_id):
         '''
         Modified version of get_instances() from
         https://github.com/powdahound/ec2instances.info/blob/master/ec2.py
         AWS provides no simple API for retrieving all instance types
         '''
-        import boto3
-        pricing_client = boto3.client('pricing', region_name=region)
-        product_pager = pricing_client.get_paginator('get_products')
+        product_pager = self.prc.get_paginator('get_products')
 
         product_iterator = product_pager.paginate(
             ServiceCode='AmazonEC2', Filters=[
@@ -1142,24 +1157,25 @@ class EKS_Cluster(Cluster):
         depolyment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
-        self.watch_profiles.start()
+        if not self.watch_profiles.is_alive():
+            self.watch_profiles.start()
 
         return depolyment_file, pods_names, batches
 
 
     # --------------------------------------------------------------------------
     #
-    def delete(self):
+    def _delete(self):
         
-        cmd = 'eksctl delete cluster --name {0}'.format(self.cluster_name)
-
         print('Deleteing EKS cluster: {0}'.format(self.cluster_name))
-
+        cmd = 'eksctl delete cluster --name {0}'.format(self.cluster_name)
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     def shutdown(self):
         self.stop_background(self.stop_event, [self.watch_profiles])
-        self.delete()
+        self._delete()

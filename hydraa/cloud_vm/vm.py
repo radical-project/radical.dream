@@ -11,7 +11,7 @@ OPTYPE = ['chameleon', 'jetstream2']
 class AwsVM:
     def __init__(self, launch_type: str, image_id: str, min_count: int,
                       max_count: int, instance_id: str, user_data: str, 
-                                        profile: dict, **input_kwargs):
+                                profile: dict, zones=[],**input_kwargs):
 
         self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
         self.Provider           = 'aws'
@@ -22,6 +22,7 @@ class AwsVM:
         self.LaunchType         = launch_type
         self.UserData           = user_data
         self.IamInstanceProfile = profile
+        self.Zones              = zones
         self.KeyPair            = input_kwargs.get('keypair', None)
         self.TagSpecifications  = [{'ResourceType': 'instance',
                                     'Tags'        : [{'Key'  :'Name',
