@@ -135,7 +135,8 @@ class AzureCaas():
 
         if self.vm.LaunchType  in AKS:
             self.vm.ResourceGroup = self._resource_group
-            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, self.vm, self.sandbox)
+            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, self.vm, self.sandbox, 
+                                                                             self.logger)
             self.AKS_Cluster.bootstrap()
 
         else:  
@@ -308,8 +309,8 @@ class AzureCaas():
             ctask.provider    = AZURE
             ctask.launch_type = self.vm.LaunchType 
 
-            self._tasks_book[str(ctask.id)] = ctask.name
-            self.logger.trace('submitting tasks {0}'.format(ctask.name))
+            self._tasks_book[str(ctask.name)] = ctask
+            self.logger.trace('submitting tasks {0}'.format(ctask.id))
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -450,14 +451,14 @@ class AzureCaas():
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
-        
-        if self.vm.LaunchType  in AKS:
-            self.AKS_Cluster.wait()
-            return
 
         while not self._terminate.is_set():
 
-            statuses = self._get_task_statuses(self._container_group_names)
+            if self.vm.LaunchType  in AKS:
+                statuses = self.AKS_Cluster._get_task_statuses()
+            else:
+                statuses = self._get_task_statuses(self._container_group_names)
+
             if statuses:
                 stopped = statuses[0]
                 failed  = statuses[1]
@@ -482,10 +483,10 @@ class AzureCaas():
                             # check if the task marked failed
                             # or not and wait for 0.1s to return
                             exc = task.exception(0.1)
+                            # we already marked it
                             if exc:
-                                # we already marked it
                                 continue
-                        except TimeoutError:
+                        except:
                             # never marked so mark it.
                             task.set_exception('Failed')
                             self.logger.trace('sending failed {0} to output queue'.format(task.name))

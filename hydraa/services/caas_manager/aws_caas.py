@@ -171,32 +171,6 @@ class AwsCaas():
             print('Manager already started')
             return self.run_id
 
-        # TODO: In our scheduling mechanism we need to consider:
-        #       memory, cpu and number of instances besides tasks
-        #       per task_def and task_defs per cluster
-        if budget:
-            budget_calc = self._budget()
-            if not time:
-                raise Exception('estimated runtime is required')
-
-            run_cost =  budget_calc.get_cost(self.vm.LaunchType, tasks, time)
-
-            if run_cost > budget:
-                msg = '({0} USD > {1} USD)'.format(run_cost, budget)
-                user_in = input('run cost is higher than budget {0}, continue? yes/no: \n'.format(msg))
-                if user_in == 'no':
-                    return
-                if user_in == 'yes':
-                    pass
-                else:
-                    print('invalid input, abort')
-                    return
-
-            print('Estimated run_cost is: {0} USD'.format(round(run_cost, 4)))
-
-            BUDGET           = budget
-            self.cost        = run_cost
-
         print("starting run {0}".format(self.run_id))
 
         # check if this launch will be a service
@@ -217,10 +191,10 @@ class AwsCaas():
         
         # check if this is an EKS service
         if self.vm.LaunchType in EKS:
-            self.EKS_cluster = kubernetes.EKS_Cluster(self.run_id, self.sandbox,
-                                   self.vm, self._iam_client,self._clf_resource,
-                                           self._clf_client, self._ec2_resource,
-                                                               self._eks_client)
+            self.EKS_cluster = kubernetes.EKS_Cluster(run_id=self.run_id, sandbox=self.sandbox,
+                                     vm=self.vm, iam=self._iam_client, rclf=self._clf_resource,
+                            clf=self._clf_client, ec2=self._ec2_resource, eks=self._eks_client,
+                                                         prc=self._prc_client, log=self.logger)
             self.EKS_cluster.bootstrap()
 
         self.runs_tree[self.run_id] =  self._family_ids
@@ -705,13 +679,13 @@ class AwsCaas():
             ctask.provider    = AWS
             ctask.launch_type = self.vm.LaunchType
 
-            self._tasks_book[str(ctask.id)] = ctask.name
-            self.logger.trace('submitting tasks {0}').format(ctask.id)
+            self._tasks_book[str(ctask.name)] = ctask
+            self.logger.trace('submitting tasks {0}'.format(ctask.id))
             self._task_id +=1
 
         # submit to kubernets cluster
         depolyment_file, pods_names, batches = self.EKS_cluster.submit(ctasks)
-        
+
         # create entry for the pod in the pods book
         '''
         for idx, pod_name in enumerate(pods_names):
@@ -988,58 +962,62 @@ class AwsCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
 
-        if self.vm.LaunchType in EKS:
-            self.EKS_cluster.wait()
-            return
 
         while not self._terminate.is_set():
 
-            # some other threads updates the task book so keep this
-            # thread updated as well with the latest task book entries
-            tasks = [t['task_arns'] for t in self._family_ids.values()]
+            statuses = None
 
-            # request the statuses for all task_arns
-            statuses = self._get_task_statuses(tasks, self.cluster_name)
+            if self.vm.LaunchType in EKS:
+                statuses = self.EKS_cluster._get_task_statuses()
+            
+            else:
+                # some other threads updates the task book so keep this
+                # thread updated as well with the latest task book entries
+                tasks = [t['task_arns'] for t in self._family_ids.values()]
 
-            stopped = statuses[0]
-            failed  = statuses[1]
-            running = statuses[2]
+                # request the statuses for all task_arns
+                statuses = self._get_task_statuses(tasks, self.cluster_name)
 
-            self.logger.trace('failed tasks " {0}'.format(failed))
-            self.logger.trace('stopped tasks" {0}'.format(stopped))
-            self.logger.trace('running tasks" {0}'.format(running))
+            if statuses:
+                stopped = statuses[0]
+                failed  = statuses[1]
+                running = statuses[2]
 
-            for task in self._tasks_book.values():
-                if task.name in stopped:
-                    if task.done():
-                        continue
-                    else:
-                        task.set_result('Done')
-                        self.logger.trace('sending done {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
+                self.logger.trace('failed tasks " {0}'.format(failed))
+                self.logger.trace('stopped tasks" {0}'.format(stopped))
+                self.logger.trace('running tasks" {0}'.format(running))
 
-                # FIXME: better approach?
-                elif task.name in failed:
-                    try:
-                        # check if the task marked failed
-                        # or not and wait for 0.1s to return
-                        exc = task.exception(0.1)
-                        if exc:
-                            # we already marked it
+                for task in self._tasks_book.values():
+                    if task.name in stopped:
+                        if task.done():
                             continue
-                    except TimeoutError:
-                        # never marked so mark it.
-                        task.set_exception('Failed')
-                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
+                        else:
+                            task.set_result('Done')
+                            self.logger.trace('sending done {0} to output queue'.format(task.name))
+                            self.outgoing_q.put(task.name)
 
-                elif task.name in running:
-                    if task.running():
-                        continue
-                    else:
-                        task.set_running_or_notify_cancel()
+                    # FIXME: better approach?
+                    elif task.name in failed:
+                        try:
+                            # check if the task marked failed
+                            # or not and wait for 0.1s to return
+                            exc = task.exception(0.1)
+                            if exc:
+                                # we already marked it
+                                continue
+                        except:
+                            # never marked so mark it.
+                            task.set_exception('Failed')
+                            self.logger.trace('sending failed {0} to output queue'.format(task.name))
+                            self.outgoing_q.put(task.name)
 
-            time.sleep(1)
+                    elif task.name in running:
+                        if task.running():
+                            continue
+                        else:
+                            task.set_running_or_notify_cancel()
+
+                time.sleep(1)
 
 
     # --------------------------------------------------------------------------
