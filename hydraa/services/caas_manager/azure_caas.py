@@ -677,11 +677,13 @@ class AzureCaas():
 
             self.runs_tree.clear()
             self.logger.trace('cleanup done')
+            self.status = False
 
 
     # --------------------------------------------------------------------------
     #
     def _shutdown(self):
+        
         if not self._resource_group_name and self.status == False:
             return
         
@@ -691,7 +693,7 @@ class AzureCaas():
 
         for key, val in self._container_group_names.items():
             self.logger.trace(("terminating container group {0}".format(key)))
-            del_op = self._con_client.container_groups.begin_delete(self._resource_group_name, key)
+            self._con_client.container_groups.begin_delete(self._resource_group_name, key)
         
         self.logger.trace(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
