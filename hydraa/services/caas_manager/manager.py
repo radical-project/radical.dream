@@ -50,7 +50,8 @@ class CaasManager:
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
         sandbox = misc.create_sandbox(_id)
-        log     = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
+        log = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
+        self._terminate  = mt.Event()
 
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
@@ -89,12 +90,13 @@ class CaasManager:
                                                   'in_q'  : self.ChiCaas.incoming_q,
                                                   'out_q' : self.ChiCaas.outgoing_q}
 
+            
+            
+            self._get_result = mt.Thread(target=self._get_results, args=(self._registered_managers[provider],),
+                                                                                     name="CaaSManagerResult")
+            self._get_result.daemon = True
 
-        self._terminate  = mt.Event()
-        self._get_result = mt.Thread(target=self._get_results, name="CaaSManagerResult")
-        self._get_result.daemon = True
-
-        self._get_result.start()
+            self._get_result.start()
 
    
     # --------------------------------------------------------------------------
@@ -145,19 +147,20 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def _get_results(self):
+    def _get_results(self, manager_attrs):
         """
         check if the contianer is still executing or
         Done/failed
         """
+        manager_queue = manager_attrs['out_q']
+
         while not self._terminate.is_set():
-            for manager_k, manager_attrs in self._registered_managers.items():
-                try:
-                    task = manager_attrs['out_q'].get(block=True, timeout=0.1)
-                    if task:
-                        print('task {0} from manager {1} is done'.format(task, manager_k))
-                except queue.Empty:
-                    continue
+            try:
+                task = manager_queue.get(block=True, timeout=0.1)
+                if task:
+                    print('{0} is done'.format(task))
+            except queue.Empty:
+                continue
 
 
     # --------------------------------------------------------------------------
@@ -169,11 +172,15 @@ class CaasManager:
         if not isinstance(tasks, list):
             tasks = [tasks]
 
+        # NOTE: soon we will have an orchestrator to distribuite the tasks
+        # based on:
+        # 1- user provider preference (if user set the provider of the task)
+        # 2- or based on user resousource requirement (orchestrator decision)
         for manager_k, manager_attrs in self._registered_managers.items():
             for task in tasks:
                 if task.provider == manager_k:
                     manager_attrs['in_q'].put(task)
-                
+
                 if task.provider not in self._registered_managers.keys():
                     print('no manager ({0}) found for task {0}'.format(task.provider, task))
 

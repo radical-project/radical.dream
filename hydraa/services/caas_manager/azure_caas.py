@@ -35,7 +35,6 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 AKS       = ['AKS', 'aks']
 AZURE     = 'azure'
-ACTIVE    = True
 WAIT_TIME = 2
 AZURE_RGX = '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
 
@@ -104,6 +103,9 @@ class AzureCaas():
 
         if not self.start_thread.is_alive():
             self.start_thread.start()
+        
+        # now set the manager as active
+        self.status = True
 
         atexit.register(self._shutdown)
 
@@ -144,9 +146,6 @@ class AzureCaas():
 
         # call get work to pull tasks
         self._get_work()
-
-        # now set the manager as active
-        self.status = ACTIVE
 
 
     # --------------------------------------------------------------------------
@@ -657,36 +656,11 @@ class AzureCaas():
 
     # --------------------------------------------------------------------------
     #
-    def __cleanup(self):
-
-        caller = sys._getframe().f_back.f_code.co_name
-        self._container_group_names = OrderedDict()
-
-        self._task_id = 0
-        self.run_cost = 0
-        self._tasks_book.clear()
-
-        if caller == '_shutdown':
-            self.manager_id  = None
-            self.status      = False
-            self.res_client  = None
-            self._con_client = None
-
-            self._resource_group_name   = None
-            self._container_group_names.clear()
-
-            self.runs_tree.clear()
-            self.logger.trace('cleanup done')
-            self.status = False
-
-
-    # --------------------------------------------------------------------------
-    #
     def _shutdown(self):
-        
-        if not self._resource_group_name and self.status == False:
+
+        if not (self._resource_group_name and self.status):
             return
-        
+
         self.logger.trace("termination started")
 
         self._terminate.set()
@@ -698,4 +672,5 @@ class AzureCaas():
         self.logger.trace(("terminating resource group {0}".format(self._resource_group_name)))
         self.res_client.resource_groups.begin_delete(self._resource_group_name)
         
-        self.__cleanup()
+        self._resource_group_name = None
+        self.status = False
