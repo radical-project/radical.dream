@@ -22,7 +22,6 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 AWS       = 'aws'
 BUDGET    = 0
-ACTIVE    = True
 EKS       = ['EKS', 'eks']         # Elastic kubernetes Service
 EC2       = ['EC2', 'ec2']         # Elastic Cloud 
 ECS       = ['ECS', 'ecs']         # Elastic Container Service
@@ -115,6 +114,9 @@ class AwsCaas():
         if not self.start_thread.is_alive():
             self.start_thread.start()
 
+        # now set the manager as active
+        self.status = True
+
         atexit.register(self._shutdown)
 
     # --------------------------------------------------------------------------
@@ -202,8 +204,6 @@ class AwsCaas():
         # call get work to pull tasks
         self._get_work()
 
-        # now set the manager as active
-        self.status = ACTIVE
 
     # --------------------------------------------------------------------------
     #
@@ -1187,42 +1187,12 @@ class AwsCaas():
 
     # --------------------------------------------------------------------------
     #
-    def __cleanup(self):
-
-        caller = sys._getframe().f_back.f_code.co_name
-        self._task_id     = 0
-        self._run_cost    = 0
-        self._tasks_book.clear()
-
-        if caller == '_shutdown':
-            self.manager_id = None
-            self.status = False
-
-            self._ecs_client    = None
-            self._ec2_client    = None
-            self._iam_client    = None
-            self._prc_client    = None
-
-            self._ec2_resource  = None
-            self._dydb_resource = None
-
-            self.cluster_name = None
-            self.service_name = None
-
-            self._family_ids.clear()
-
-            self.region =  None
-            self.logger.trace('cleanup done')
-        
-
-    # --------------------------------------------------------------------------
-    #
     def _shutdown(self):
         """Shut everything down and delete task/service/instance/cluster"""
 
-        if not self.cluster_name and self.status == False:
+        if not (self.cluster_name and self.status):
             return
-        
+
         self.logger.trace("termination started")
 
         self._terminate.set()
@@ -1270,6 +1240,7 @@ class AwsCaas():
         if self.vm.LaunchType in EKS:
             self.EKS_cluster.shutdown()
 
-        self.__cleanup()
+        self.cluster_name = None
+        self.status = False
         
 

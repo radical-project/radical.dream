@@ -86,6 +86,8 @@ class Cluster:
         self.size         = cluster_size     
         self.active_nodes = 0
 
+        self.stop_event = mt.Event()
+        self.watch_profiles = mt.Thread(target=self._profiles_collector)
         self.updater_lock = mt.Lock()
 
 
@@ -126,7 +128,6 @@ class Cluster:
         
         self.remote.run('snap remove microk8s')
         self.remote.run('sudo snap install microk8s')
-
 
 
     # --------------------------------------------------------------------------
@@ -266,19 +267,6 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def watch(self):
-        cmd = 'kubectl get pods --watch'
-        try:
-            if self.remote:
-                self.remote.run(cmd)
-            else:
-                sh_callout(cmd,  shell=True)
-        except KeyboardInterrupt:
-            return
-
-
-    # --------------------------------------------------------------------------
-    #
     def generate_pods(self, ctasks):
         """
         This function generates a deployment_file (pods) from a set of 
@@ -363,36 +351,6 @@ class Cluster:
             text = f.write(text)
 
         return depolyment_file, pods_names, batches
-
-
-    # --------------------------------------------------------------------------
-    #
-    def wait_pods(self):
-        # FIXME: for some reason the completed pods
-        #        are reported incorrectley, making
-        #        the cluster hold the resources
-        #        after the execution finished.
-
-        cmd  = 'kubectl '
-        cmd += 'get pod --field-selector=status.phase=Succeeded '
-        cmd += '| grep Completed* | wc -l'
-
-        while True:
-            done_pods = 0
-            if self.remote:
-                done_pods = self.remote.run(cmd, hide=True).stdout.strip()
-            else:
-                out, err, _ = sh_callout(cmd, shell=True)
-                done_pods   = int(out.strip())
-
-            if done_pods:
-                self.logger.trace('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter))
-                if self.pod_counter == int(done_pods):
-                    self.logger.trace('{0} pods finished with status "Completed"'.format(done_pods))
-                    break
-                else:
-                    time.sleep(5)
-        return True
 
 
     # --------------------------------------------------------------------------
@@ -587,6 +545,17 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
+    def collect_profiles(self):
+
+        if not self.watch_profiles.is_alive():
+            self.watch_profiles.daemon = True
+            self.watch_profiles.start()
+
+            self.logger.trace('profilies collecting thread started')
+
+
+    # --------------------------------------------------------------------------
+    #
     def get_pod_status(self):
 
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
@@ -652,7 +621,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def checkpoint_profiles(self):
+    def _profiles_collector(self):
         """
         **This method should start as a background thread.
 
@@ -667,9 +636,10 @@ class Cluster:
         end of the execution.
         https://github.com/Azure/AKS/issues/2140
         """
+        ids = 0
 
-        def get_profiles(ids):
-            self.logger.trace('registering a profiles checkpoint')
+        def collect(ids):
+            self.logger.trace('collecting a profiles checkpoint')
             fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
@@ -678,14 +648,14 @@ class Cluster:
             df.to_csv(fname)
             self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
 
-        ids = 0
+
         # iterate until the stop_event is triggered
         while not self.stop_event.is_set():
             for t in range(3300, 0, -1):
                 if t == 1:
                     # save a checkpoint every ~ 55 minutes
-                    get_profiles(ids)
-                
+                    collect(ids)
+
                 # exit the loop if stop_event is true
                 if self.stop_event.is_set():
                     break
@@ -695,7 +665,7 @@ class Cluster:
 
             ids +=1
         # if we exist, then save a checkpoint as well
-        get_profiles(ids)
+        collect(ids)
 
 
     # --------------------------------------------------------------------------
@@ -765,20 +735,13 @@ class AKS_Cluster(Cluster):
         self.resource_group = vm.ResourceGroup
         self.nodes          = vm.MinCount
         self.config         = None
-        self.stop_event     = mt.Event()
-        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="AKS_profiles_watcher")
 
         vm.Remotes = []
 
         # we set size to 0 and we determine it later
         super().__init__(run_id, vm, 0, sandbox, log)
 
-        self.watch_profiles.daemon = True
-
-        #az_cli = get_default_cli()
-        #az_cli.invoke(['login', '--use-device-code'])
-
-        atexit.register(self.stop_background, self.stop_event, [self.watch_profiles])
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -787,7 +750,7 @@ class AKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
         if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID) - 1
+            self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
@@ -902,16 +865,6 @@ class AKS_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def wait(self):
-        # wait for all pods to finish
-        if super().wait():
-            self.profiler.prof('pods_finished', uid=self.id)
-            self.stop_event.set()
-            return True
-
-
-    # --------------------------------------------------------------------------
-    #
     def get_vm_size(self, vm_id, region):
 
         # obtain all of the vms in this region
@@ -937,10 +890,30 @@ class AKS_Cluster(Cluster):
         depolyment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
-        if not self.watch_profiles.is_alive():
-            self.watch_profiles.start()
+        super().collect_profiles()
 
         return depolyment_file, pods_names, batches
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def _delete(self):
+
+        print('deleteing AKS cluster: {0}'.format(self.cluster_name))
+        cmd = 'az aks delete --resource-group {0} --name {0}'.format(self.resource_group,
+                                                                       self.cluster_name)
+        out, err, _ = sh_callout(cmd, shell=True)
+
+        print(out, err)  
+
+
+    # --------------------------------------------------------------------------
+    #
+    def shutdown(self):
+
+        self.stop_event.set()
+        # self._delete()
+
 
 
 class EKS_Cluster(Cluster):
@@ -962,7 +935,6 @@ class EKS_Cluster(Cluster):
         self.id             = run_id
         self.cluster_name   = 'Hydraa-Eks-Cluster'
         self.config         = None
-        self.stop_event     = mt.Event()
 
         self.iam            = iam
         self.clf            = clf
@@ -973,11 +945,9 @@ class EKS_Cluster(Cluster):
 
         vm.Remotes          = []
 
-        self.watch_profiles = mt.Thread(target=self.checkpoint_profiles, name="EKS_profiles_watcher")
-
         super().__init__(run_id, vm, 0, sandbox, log)
 
-        self.watch_profiles.daemon = True
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -1141,14 +1111,6 @@ class EKS_Cluster(Cluster):
 
             print(out, err)
 
-    # --------------------------------------------------------------------------
-    #
-    def wait(self):
-        if super().wait():
-            self.profiler.prof('pods_finished', uid=self.id)
-            self.stop_event.set()
-            return True
-
 
     # --------------------------------------------------------------------------
     #
@@ -1157,8 +1119,7 @@ class EKS_Cluster(Cluster):
         depolyment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
-        if not self.watch_profiles.is_alive():
-            self.watch_profiles.start()
+        super().collect_profiles()
 
         return depolyment_file, pods_names, batches
 
@@ -1177,5 +1138,5 @@ class EKS_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
-        self.stop_background(self.stop_event, [self.watch_profiles])
+        self.stop_event.set()
         self._delete()
