@@ -196,9 +196,9 @@ class Cluster:
 
             # add entries for all node to the hosts file of each node
             for server in self.vm.Servers:
-                name = server['Name']
-                network = server['Networks'].values()
-                fixed_ip = next(iter(network))[0]
+                name = server.name
+                network = server.addresses.values()
+                fixed_ip = next(iter(network))[0]['addr']
                 node_conn.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(fixed_ip, name),
                                                                                    logger=True)
 

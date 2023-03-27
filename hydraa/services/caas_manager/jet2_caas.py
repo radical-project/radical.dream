@@ -115,15 +115,17 @@ class Jet2Caas():
 
         self.profiler.prof('ip_create_stop', uid=self.run_id)
 
+        self.assign_ssh_security_groups()
+
         self.vm.Servers = self.list_servers()
 
         self.vm.Remotes = {}
         for server in self.vm.Servers:
-            public_ip = server['Networks']['auto_allocated_network'][1]
+            public_ip = server.access_ipv4
 
             #FIXME: VM should have a username instead of hard coded ubuntu
-            self.vm.Remotes[server['Name']] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
-                                                                                  self.logger)
+            self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
+                                                                               self.logger)
 
         # containers per pod
         cluster_size = self.server.flavor.vcpus - 1
@@ -293,8 +295,7 @@ class Jet2Caas():
     # --------------------------------------------------------------------------
     #
     def list_servers(self):
-        servers = misc.sh_callout('openstack server list -f json', shell=True,
-                                                                   munch=True)
+        servers = self.client.list_servers()
         
         return servers
 
@@ -304,16 +305,46 @@ class Jet2Caas():
     def assign_ips(self):
 
         servers = self.list_servers()
-        cmd = 'openstack server add floating ip'
+        
         for server in servers:
-            if server['Name'].startswith('hydraa_Server'):
-                name = server['Name']
-                if  server['Status'] == 'ACTIVE':
-                    if len(server['Networks']['auto_allocated_network']) <=1:
-                        #FIXME: find a way to do it in OpenStack Python SDK
-                        ip = self.client.create_floating_ip()['floating_ip_address']
-                        misc.sh_callout('{0} {1} {2}'.format(cmd, name, ip), shell=True)
-                        self.logger.trace('assigned ip {0} to vm {1}'.format(name, ip))
+            # if the server has an ip assigned then skip it
+            if not server.access_ipv4:
+                self.client.add_auto_ip(server)
+                self.logger.trace('auto assigned ip {0} to vm {1}'.format(server.name, server.access_ipv4))
+            else:
+                self.logger.trace('vm {0} already has an ip assigned'.format(server.name, server.access_ipv4))
+
+
+    # --------------------------------------------------------------------------
+    #
+    def assign_ssh_security_groups(self):
+
+        # we always assume that the SSH group is prepaired by user for us
+        ssh_sec_group = None
+        for sec in self.client.list_security_groups():
+            if ('SSH' or 'ssh') in sec.name:
+                ssh_sec_group = sec
+
+        if ssh_sec_group:
+            servers = self.list_servers()
+            for server in servers:
+                ssh_is_associated = any([('SSH' or 'ssh') in d['name'] for d in server.security_groups])
+
+                # if ssh group already assigned then skip
+                if ssh_is_associated:
+                    self.logger.trace('vm {0} already has ssh security group {1}'.format(server.name,
+                                                                                    sec.get('name')))
+                    continue
+    
+                # if not ssh group associated then assign the ssh group
+                else:
+                    self.client.add_server_security_groups(server, ssh_sec_group)
+                    self.logger.trace('vm {0} assigned ssh security group {1}'.format(server.name,
+                                                                                 sec.get('name')))
+
+        # we could not find any group or SSH group
+        else:
+            raise Exception('No valid SSH security group found')
 
 
     # --------------------------------------------------------------------------
@@ -511,9 +542,9 @@ class Jet2Caas():
 
         # deleting the server
         if self.server:
-            for server in self.vm.Servers:
-                self.logger.trace('deleting server')
-                self.client.delete_server(server['Name'])
+            for server in self.list_servers():
+                self.client.delete_server(server.name)
+                self.logger.trace('server {0} is deleted'.format(server.name))
 
             if self.ips:
                 for ip in self.ips:
