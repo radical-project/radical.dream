@@ -29,6 +29,7 @@ FAILED_STATE = ['Error', 'StartError','OOMKilled',
 RUNNING_STATE = ['ContainerCreating', 'Started']
 COMPLETED_STATE = ['Completed', 'completed']
 MAX_PODS        = 250
+SLEEP = 2
 
 # --------------------------------------------------------------------------
 #
@@ -75,7 +76,6 @@ class Cluster:
             log          (logging)  : A logger object.
         
         """
-        
         self.id           = run_id
         self.vm           = vm
         self.remote       = vm.Remotes
@@ -108,14 +108,13 @@ class Cluster:
     #
     def restart(self):
         """
-        The function to start and stop the internal micok8s
-        cluster.
+        The function to restart a node of microk8s cluster.
 
         Returns:
             bool: True if passed.
         """
-        self.stop()
-        self.start()
+        self.remote.run('sudo snap restart microk8s')
+        return True
 
 
     # --------------------------------------------------------------------------
@@ -125,7 +124,6 @@ class Cluster:
         The function to recover the internal micok8s cluster if
         stuck in halt.
         """
-        
         self.remote.run('snap remove microk8s')
         self.remote.run('sudo snap install microk8s')
 
@@ -149,27 +147,6 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def stop_background(self, stop_event, threads):
-        """
-        The function to stop the background tasks (threads)
-        gracefully before exiting
-
-        Parameters:
-            stop_event (threading.Event): An event to trigger termination
-                                          of each thread.
-            
-            threads (list)              : List of threads to stop.
-        """
-        # request the background thread stop
-        stop_event.set()
-        # wait for the background thread to stop
-        for thread in threads:
-            if thread.is_alive():
-                thread.join()
-
-
-    # --------------------------------------------------------------------------
-    #
     def bootstrap(self):
         """
         The function to build Kuberentes n nodes (1 master) (n-1) workers
@@ -179,18 +156,17 @@ class Cluster:
 
         1- Adding hosts (ip and name) to each node.
         2- Bootstrap Kuberentes on each node.
-        3- Wait for each not to become active
+        3- Wait for each node to become active
         4- Request join token from the master for each worker node.
         5- Join each worker to the master node.
         """
 
+        print('building Kubernetes cluster started....')
+
         def _boottrap(node_conn, node_name):
 
-            self.logger.trace('building microK8s')
-            self.profiler.prof('bootstrap_start', uid=self.id)
-
             if self.vm.Provider == CHI:
-                # fix a bug in Chi and cloud-init: truncated hostname.
+                # a workaround a bug in Chi and cloud-init: truncated hostname.
                 self.logger.trace('setting up node hostname')
                 node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
 
@@ -216,11 +192,15 @@ class Cluster:
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
-            node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, logger=True)
 
-            self.profiler.prof('bootstrap_stop', uid=self.id)
+            try:
+                result = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True)
+            except Exception as e:
+                raise Exception('Failed to build Kuberentes cluster: {0}'.format(e))
 
-            self.profiler.prof('cluster_warmup_start', uid=self.id)
+            self.logger.trace(result.stdout)
+
+            self.profiler.prof('node_warmup_start', uid=self.id)
 
             while True:
                 # wait for the microk8s to be ready
@@ -228,15 +208,15 @@ class Cluster:
 
                 # check if the cluster is ready to submit the pod
                 if "microk8s is running" in stream.stdout:
-                    self.logger.trace('booting Kuberentes cluster successful')
+                    self.logger.trace('booting Kuberentes node successful')
                     with self.updater_lock:
                         self.active_nodes +=1
                     break
                 else:
-                    self.logger.trace('waiting for Kuberentes cluster to be running')
-                    time.sleep(2)
+                    self.logger.trace('waiting for Kuberentes node to be active')
+                    time.sleep(SLEEP)
 
-            self.profiler.prof('cluster_warmup_stop', uid=self.id)
+            self.profiler.prof('node_warmup_stop', uid=self.id)
 
         # bootstrap on all nodes
         for node_name, node_conn in self.remote.items():
@@ -245,24 +225,30 @@ class Cluster:
             run_bootstrap.daemon = True
             run_bootstrap.start()
 
+        self.profiler.prof('bootstrap_start', uid=self.id)
+
         # wait for all nodes to come up
-        self.logger.trace('waiting for all nodes to come up')
+        self.logger.trace('waiting for all Kuberentes nodes to be active')
         while self.active_nodes < len(self.vm.Servers):
-            time.sleep(1)
+            time.sleep(SLEEP)
 
         # only join workers when nodes > 1
         if len(self.vm.Servers) > 1:
-
             # workers connections
             self.worker_nodes = list(self.remote.values())[1:]
 
+            # FIXME: find a better way to represent master / worker nodes
             # master node connection
             self.remote  = list(self.remote.values())[0]
 
             # add worker nodes to master node
             for worker_node in self.worker_nodes:
                 self.join_master(worker_node)
-                self.logger.trace('worker node joined master')
+                self.logger.trace('worker node is active and joined master node')
+        
+        self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
 
 
     # --------------------------------------------------------------------------
@@ -661,7 +647,7 @@ class Cluster:
                     break
 
                 else:
-                    time.sleep(1)
+                    time.sleep(SLEEP)
 
             ids +=1
         # if we exist, then save a checkpoint as well
