@@ -271,33 +271,33 @@ class Cluster:
         pods_names      = []
 
         self.profiler.prof('schedule_pods_start', uid=self.id)
-        batches         = self.schedule(ctasks)
+        #batches         = self.schedule(ctasks)
         self.profiler.prof('schedule_pods_stop', uid=self.id)
 
         depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
-        for batch in batches:
+        for ctask in ctasks:
             pod_id     = str(self.pod_counter).zfill(6)
             containers = []
 
             self.profiler.prof('create_pod_start', uid=pod_id)
-            for ctask in batch:
-                envs = []
-                if ctask.env_var:
-                    for env in ctask.env_vars:
-                        pod_env  = client.V1EnvVar(name = env[0], value = env[1])
-                        envs.append(pod_env)
+            
+            envs = []
+            if ctask.env_var:
+                for env in ctask.env_vars:
+                    pod_env  = client.V1EnvVar(name = env[0], value = env[1])
+                    envs.append(pod_env)
 
-                pod_cpu = "{0}m".format(ctask.vcpus * 1000)
-                pod_mem = "{0}Mi".format(ctask.memory)
+            pod_cpu = "{0}m".format(ctask.vcpus * 1000)
+            pod_mem = "{0}Mi".format(ctask.memory)
 
-                resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                          limits={"cpu": pod_cpu, "memory": pod_mem})
+            resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
+                                                        limits={"cpu": pod_cpu, "memory": pod_mem})
 
-                pod_container = client.V1Container(name = ctask.name, image = ctask.image,
-                            resources = resources, command = ctask.cmd, env = envs)
-                
-                containers.append(pod_container)
+            pod_container = client.V1Container(name = ctask.name, image = ctask.image,
+                        resources = resources, command = ctask.cmd, env = envs)
+            
+            containers.append(pod_container)
             
             pod_name      = "hydraa-pod-{0}".format(pod_id)
             pod_metadata  = client.V1ObjectMeta(name = pod_name)
@@ -322,7 +322,7 @@ class Cluster:
 
             self.pod_counter +=1
         
-        self.profiler.prof('create_pod_stop', uid=pod_id)
+            self.profiler.prof('create_pod_stop', uid=pod_id)
 
         with open(depolyment_file, 'w') as f:
             for p in pods:
@@ -336,7 +336,8 @@ class Cluster:
         with open(depolyment_file, "w") as f:
             text = f.write(text)
 
-        return depolyment_file, pods_names, batches
+        #return depolyment_file, pods_names, batches
+        return depolyment_file, pods_names, []
 
 
     # --------------------------------------------------------------------------
