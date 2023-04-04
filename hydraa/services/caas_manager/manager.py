@@ -20,7 +20,7 @@ CHI    = 'chameleon'
 JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
-
+_id    = str(uuid.uuid4())
 # --------------------------------------------------------------------------
 #
 class CaasManager:
@@ -37,11 +37,14 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, proxy_mgr, vms, asynchronous):
+    def __init__(self, proxy_mgr, vms, tasks, asynchronous):
         
-        _id = str(uuid.uuid4())
+        
         self._registered_managers = {}
-        prof = ru.Profiler
+        self.prof = ru.Profiler
+        self.vms  = vms
+        self.asynchronous = asynchronous
+        self.tasks = tasks
 
         if proxy:
             self._proxy = proxy_mgr
@@ -49,23 +52,25 @@ class CaasManager:
         # TODO: add the created classes based on the loaded
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
-        sandbox = misc.create_sandbox(_id)
-        log = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
+        self.sandbox = misc.create_sandbox(_id)
+        self.log = misc.logger(path='{0}/{1}.log'.format(self.sandbox, 'caas_manager'))
         self._terminate  = mt.Event()
 
+
+    def start(self):
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                vmx  = next(v for v in vms if isinstance(v, vm.AzureVM))
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                vmx  = next(v for v in self.vms if isinstance(v, vm.AzureVM))
+                self.AzureCaas = AzureCaas(self.sandbox, _id, cred, vmx, self.asynchronous, self.log, self.prof)
                 self._registered_managers[AZURE] = {'class' : self.AzureCaas,
                                                     'run_id': self.AzureCaas.run_id,
                                                     'in_q'  : self.AzureCaas.incoming_q,
                                                     'out_q' : self.AzureCaas.outgoing_q}
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                vmx  = next(v for v in vms if isinstance(v, vm.AwsVM))
-                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                vmx  = next(v for v in self.vms if isinstance(v, vm.AwsVM))
+                self.AwsCaas = AwsCaas(self.sandbox, _id, cred, vmx, self.asynchronous, self.log, self.prof)
                 self._registered_managers[AWS] = {'class' : self.AwsCaas,
                                                   'run_id': self.AwsCaas.run_id,
                                                   'in_q'  : self.AwsCaas.incoming_q,
@@ -74,8 +79,8 @@ class CaasManager:
             # TODO: merge Jet2cass and ChiCaas in one class 
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
-                vmx  = next(v for v in vms if v.Provider == JET2)
-                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                vmx  = next(v for v in self.vms if v.Provider == JET2)
+                self.Jet2Caas = Jet2Caas(self.sandbox, _id, cred, vmx, self.asynchronous, self.log, self.prof)
                 self._registered_managers[JET2] = {'class' : self.Jet2Caas,
                                                    'run_id': self.Jet2Caas.run_id,
                                                    'in_q'  : self.Jet2Caas.incoming_q,
@@ -83,21 +88,22 @@ class CaasManager:
 
             if provider == CHI:
                 cred = self._proxy._load_credentials(CHI)
-                vmx  = next(v for v in vms if v.Provider == CHI)
-                self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                vmx  = next(v for v in self.vms if v.Provider == CHI)
+                self.ChiCaas = ChiCaas(self.sandbox, _id, cred, vmx, self.asynchronous, self.log, self.prof)
                 self._registered_managers[CHI] = {'class' : self.ChiCaas,
                                                   'run_id': self.ChiCaas.run_id,
                                                   'in_q'  : self.ChiCaas.incoming_q,
                                                   'out_q' : self.ChiCaas.outgoing_q}
-
             
+
+
+            self.submit(self.tasks)
             
             self._get_result = mt.Thread(target=self._get_results, args=(self._registered_managers[provider],),
                                                                                      name="CaaSManagerResult")
             self._get_result.daemon = True
 
             self._get_result.start()
-
    
     # --------------------------------------------------------------------------
     #

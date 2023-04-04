@@ -4,11 +4,14 @@ import radical.utils as ru
 
 
 class RadicalPilot():
-	def __init__(self, pdesc: rp.PilotDescription) -> None:
+	def __init__(self, pdesc: rp.PilotDescription, tasks) -> None:
 
 		self.pdesc = pdesc
+		self.tasks = tasks
 		self.check_pre_start()
+	
 
+	def start(self):
 		self.session = rp.Session()
 		self.pmgr   = rp.PilotManager(session=self.session)
 		self.tmgr   = rp.TaskManager(session=self.session)
@@ -16,6 +19,8 @@ class RadicalPilot():
 
 		# Register the pilot in a TaskManager object.
 		self.tmgr.add_pilots(pilot)
+
+		self.submit(self.tasks)
 
 
 	def check_pre_start(self):
@@ -41,7 +46,7 @@ class RadicalPilot():
 				td.executable     = task.cmd
 				td.ranks          = task.vcpus
 				td.memory         = task.memory
-				
+
 				tds.append(td)
 
 			# Submit the previously created task descriptions to the

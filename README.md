@@ -60,3 +60,62 @@ def do_something():
   
 ```
 
+What About HPC + Cloud?
+
+```python
+import os
+import radical.pilot as rp
+from hydraa.cloud_vm import vm
+from hydraa.cloud_task.task import Task
+from hydraa.services import service_manager
+from hydraa.services.hpc_manager import radical_pilot
+from hydraa import AZURE, AWS, JET2, providers, services
+
+
+os.environ["RADICAL_PILOT_DBURL"] = "mongodb://user:password@ip:port/db_name"
+
+pdsec = rp.PilotDescription()
+
+pdsec.cores = 4
+pdsec.runtime = 30
+pdsec.access_schema = 'local'
+pdsec.resource = 'local.locahost'
+
+
+hpc_tasks = []
+for i in range(4000):
+    task = Task()
+    task.vcpus  = 1
+    task.memory = 7
+    task.cmd    = ['/bin/echo noop']
+    hpc_tasks.append(task)
+
+
+hpc_manager = radical_pilot.RadicalPilot(pdsec, tasks)
+
+
+provider_mgr = providers.proxy([AZURE, JET2])
+vms = [vm.AzureVM(launch_type='AKS', instance_id='Standard_B4ms', min_count=1, max_count=1),
+       vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='g3.medium', image_id='Featured-Ubuntu20', min_count=2, max_count=2),]
+
+
+# 4000 for each provider
+cloud_tasks = []
+for i in range(8000):
+    task = Task()
+    task.memory = 7
+    task.vcpus  = 1
+    task.image  = "screwdrivercd/noop-container"
+    task.cmd    = ['/bin/echo', 'noop']
+    task.provider = AZURE if i % 2 == 0 else JET2
+    cloud_tasks.append(task)
+
+
+caas_manager = services.manager.CaasManager(provider_mgr, vms, cloud_tasks, asynchronous=False)
+
+
+managers = [hpc_manager, caas_manager]
+
+service_manager =  service_manager.service_manager()
+service_manager.submit()
+```
