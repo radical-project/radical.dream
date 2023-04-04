@@ -11,7 +11,7 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout
+from .misc          import sh_callout, inject_kubeconfig
 from hydraa         import CHI, JET2
 from kubernetes     import client
 from azure.cli.core import get_default_cli
@@ -85,6 +85,7 @@ class Cluster:
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
         self.size         = cluster_size     
         self.active_nodes = 0
+        self.kube_config  = None
 
         self.stop_event = mt.Event()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
@@ -359,6 +360,7 @@ class Cluster:
             if self.remote:
                 done_pods = self.remote.run(cmd, hide=True).stdout.strip()
             else:
+                cmd = inject_kubeconfig(cmd, self.kube_config)
                 out, err, _ = sh_callout(cmd, shell=True)
                 done_pods = int(out.strip())
 
@@ -415,6 +417,7 @@ class Cluster:
         else:
             # just invoke a shell process
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             out, err, _ = sh_callout(cmd, shell=True)
             self.logger.trace('{0} {1}'.format(out, err))
         
@@ -505,6 +508,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
@@ -586,6 +590,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         if response:
@@ -622,6 +627,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
@@ -787,7 +793,7 @@ class AKS_Cluster(Cluster):
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
-        self.configure()
+        self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
 
@@ -799,16 +805,25 @@ class AKS_Cluster(Cluster):
         
         # To manage a Kubernetes cluster, we use the Kubernetes CLI and kubectl
         # NOTE: kubectl is already installed if you use Azure Cloud Shell.
+
+        self.logger.trace('Creating .kube folder')
+        config_file = self.sandbox + "/.kube/config"
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
+
+        self.logger.trace('setting AKS KUBECONFIG path to: {0}'.format(config_file))
+
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
         cmd += '--resource-group {0} '.format(self.resource_group.name)
-        cmd += '--overwrite-existing'
+        cmd += '--name {0} '.format(self.cluster_name)
+        cmd += '--file {0}'.format(config_file)
 
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
 
-        return True
+        return config_file
 
 
     # --------------------------------------------------------------------------
@@ -990,7 +1005,7 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         self.profiler.prof('cofigure_start', uid=self.id)
-        kube_config_file = self.configure()
+        self.kube_config = self.configure()
 
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID) - 1
@@ -1014,7 +1029,7 @@ class EKS_Cluster(Cluster):
                 cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
             cmd += '--nodegroup-name {0} '.format(NodeGroupName)
             cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
-            cmd += '--kubeconfig {0}'.format(kube_config_file)
+            cmd += '--kubeconfig {0}'.format(self.kube_config)
 
             out, err, ret = sh_callout(cmd, shell=True)
 
@@ -1041,9 +1056,6 @@ class EKS_Cluster(Cluster):
         open(config_file, 'x')
 
         self.logger.trace('setting EKS KUBECONFIG path to: {0}'.format(config_file))
-        #FIXME: what will happen if we have another
-        # process trying to access this env. var.?
-        os.environ['KUBECONFIG'] = config_file
 
         return config_file
 
