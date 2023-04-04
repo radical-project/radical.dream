@@ -394,14 +394,6 @@ class Jet2Caas():
         # submit to kubernets cluster
         depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
         
-        # create entry for the pod in the pods book
-        for idx, pod_name in enumerate(pods_names):
-            self._pods_book[pod_name] = OrderedDict()
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batches[idx]
-            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
-            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        
         self.profiler.prof('submit_batch_start', uid=self.run_id)
 
 

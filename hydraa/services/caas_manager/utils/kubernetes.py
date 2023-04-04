@@ -342,6 +342,42 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
+    def wait_to_finish(self):
+        # FIXME: for some reason the completed pods
+        #        are reported incorrectley, making
+        #        the cluster hold the resources
+        #        after the execution finished.
+
+        cmd  = 'kubectl '
+        cmd += 'get pod --field-selector=status.phase=Succeeded '
+        cmd += '| grep Completed* | wc -l'
+        
+        self.profiler.prof('wait_pods_start', uid=self.id)
+
+        while not self.stop_event.is_set():
+            done_pods = 0
+            if self.remote:
+                done_pods = self.remote.run(cmd, hide=True).stdout.strip()
+            else:
+                out, err, _ = sh_callout(cmd, shell=True)
+                done_pods = int(out.strip())
+
+            if done_pods:
+                print('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
+                if not self.pod_counter:
+                    continue
+                if self.pod_counter == int(done_pods):
+                    print('{0} Pods finished with status "Completed"'.format(done_pods))
+                    break
+                else:
+                    time.sleep(5)
+        self.profiler.prof('wait_pods_stop', uid=self.id)
+
+        return True
+
+
+    # --------------------------------------------------------------------------
+    #
     def submit(self, ctasks):
         
         """

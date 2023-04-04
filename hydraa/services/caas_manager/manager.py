@@ -95,15 +95,14 @@ class CaasManager:
                                                   'in_q'  : self.ChiCaas.incoming_q,
                                                   'out_q' : self.ChiCaas.outgoing_q}
             
-
-
-            self.submit(self.tasks)
             
             self._get_result = mt.Thread(target=self._get_results, args=(self._registered_managers[provider],),
                                                                                      name="CaaSManagerResult")
             self._get_result.daemon = True
 
             self._get_result.start()
+
+        self.submit(self.tasks)
    
     # --------------------------------------------------------------------------
     #
