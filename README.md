@@ -118,4 +118,9 @@ managers = [hpc_manager, caas_manager]
 
 service_manager =  service_manager.service_manager(managers)
 service_manager.start()
+
+
+while True:
+    if all([task.done() for task in cloud_tasks]):
+        caas_manager.shutdown()
 ```

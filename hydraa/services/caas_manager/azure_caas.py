@@ -450,7 +450,8 @@ class AzureCaas():
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
-
+        
+        self.profiler.prof('wait_pods_start', uid=self.run_id)
         while not self._terminate.is_set():
 
             if self.vm.LaunchType  in AKS:
@@ -499,6 +500,7 @@ class AzureCaas():
 
                 time.sleep(1)
             time.sleep(1)
+        self.profiler.prof('wait_pods_stop', uid=self.run_id)
 
 
     # --------------------------------------------------------------------------

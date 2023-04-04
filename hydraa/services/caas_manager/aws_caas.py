@@ -962,7 +962,7 @@ class AwsCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
 
-
+        self.profiler.prof('wait_pods_start', uid=self.run_id)
         while not self._terminate.is_set():
 
             statuses = None
@@ -1018,6 +1018,7 @@ class AwsCaas():
                             task.set_running_or_notify_cancel()
 
                 time.sleep(1)
+        self.profiler.prof('wait_pods_stop', uid=self.run_id)
 
 
     # --------------------------------------------------------------------------
