@@ -91,7 +91,7 @@ for i in range(4000):
     hpc_tasks.append(task)
 
 
-hpc_manager = radical_pilot.RadicalPilot(pdsec, tasks)
+hpc_manager = radical_pilot.RadicalPilot(pdsec, hpc_tasks)
 
 
 provider_mgr = providers.proxy([AZURE, JET2])
@@ -116,6 +116,6 @@ caas_manager = services.manager.CaasManager(provider_mgr, vms, cloud_tasks, asyn
 
 managers = [hpc_manager, caas_manager]
 
-service_manager =  service_manager.service_manager()
-service_manager.submit()
+service_manager =  service_manager.service_manager(managers)
+service_manager.start()
 ```
