@@ -46,9 +46,9 @@ class RadicalPilot():
             for task in tasks:
                 # create a new task description, and fill it.
                 td = rp.TaskDescription()
-                td.executable     = task.cmd
-                td.ranks          = task.vcpus
-                td.memory         = task.memory
+                td.executable = task.cmd
+                td.ranks = task.vcpus
+                td.mem_per_rank = task.memory
 
                 tds.append(td)
 
