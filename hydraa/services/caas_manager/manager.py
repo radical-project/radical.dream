@@ -52,12 +52,13 @@ class CaasManager:
         # TODO: add the created classes based on the loaded
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
-        self.sandbox = misc.create_sandbox(_id)
-        self.log = misc.logger(path='{0}/{1}.log'.format(self.sandbox, 'caas_manager'))
+        self.sandbox = None
         self._terminate  = mt.Event()
 
 
-    def start(self):
+    def start(self, sandbox, _id):
+        self.sandbox = sandbox
+        self.log = misc.logger(path='{0}/{1}.log'.format(self.sandbox, 'caas_manager'))
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)

@@ -1,20 +1,28 @@
 import os
 import uuid
 import radical.pilot as rp
-import radical.utils as ru
+import radical.utils as ru 
+RP = 'radical.pilot'
 
 
 class RadicalPilot():
     def __init__(self, pdesc: rp.PilotDescription, tasks) -> None:
 
+        self.sandbox  = None
         self.pdesc = pdesc
+
         self.tasks = tasks
         self.run_id = str(uuid.uuid4())
         self.check_pre_start()
-    
 
-    def start(self):
+
+    def start(self, sandbox, id):
         print('starting run HPC-RP.{0}'.format(self.run_id))
+        
+        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
+        os.mkdir(self.sandbox, 0o777)
+
+        self.pdesc.sandbox = self.sandbox
         self.session = rp.Session()
         self.pmgr   = rp.PilotManager(session=self.session)
         self.tmgr   = rp.TaskManager(session=self.session)
