@@ -123,23 +123,25 @@ class proxy(object):
 
         if provider == JET2:
             try:
-                jet2_creds = {'auth_url'                     : os.environ['JET_AUTH_URL'],
-                              'application_credential_secret': os.environ['JET_APPLICATION_CREDENTIAL_SECRET'],
-                              'application_credential_id'    : os.environ['JET_APPLICATION_CREDENTIAL_ID']}
-                
+                jet2_creds = {'auth_url'                     : os.environ['JET_OS_AUTH_URL'],
+                              'auth_type'                    : os.environ['JET_OS_AUTH_TYPE'],
+                              'compute_api_version': 2,
+                              'identity_interface'           : os.environ['JET_OS_INTERFACE'],
+                              'application_credential_secret': os.environ['JET_OS_APPLICATION_CREDENTIAL_SECRET'],
+                              'application_credential_id'    : os.environ['JET_OS_APPLICATION_CREDENTIAL_ID']}
+
                 return jet2_creds
             except KeyError:
                 raise
-        
+
         if provider == CHI:
             try:
-                chi_creds = {'auth_url'           : os.environ['CHI_AUTH_URL'],
-                             'auth_type'          : os.environ['CHI_AUTH_TYPE'],
+                chi_creds = {'auth_url'           : os.environ['CHI_OS_AUTH_URL'],
+                             'auth_type'          : os.environ['CHI_OS_AUTH_TYPE'],
                              'compute_api_version': 2,
-                             'region_name'        : os.environ['CHI_REGION_NAME'],
-                             'identity_interface' : os.environ['CHI_INTERFACE'],
-                             'application_credential_secret': os.environ['CHI_APPLICATION_CREDENTIAL_SECRET'],
-                             'application_credential_id'    : os.environ['CHI_APPLICATION_CREDENTIAL_ID']}
+                             'identity_interface' : os.environ['CHI_OS_INTERFACE'],
+                             'application_credential_secret': os.environ['CHI_OS_APPLICATION_CREDENTIAL_SECRET'],
+                             'application_credential_id'    : os.environ['CHI_OS_APPLICATION_CREDENTIAL_ID']}
                 return chi_creds
             except KeyError:
                 raise
