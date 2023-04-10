@@ -191,18 +191,21 @@ class Cluster:
             node_conn.put(boostrapper)
 
             self.logger.trace('change bootstrap.sh permession')
-            node_conn.run("chmod +x bootstrap_kubernetes.sh")
+            res = node_conn.run("chmod +x bootstrap_kubernetes.sh", warn=True)
+
+            if res.return_code:
+                self.logger.trace('failed to build a Kuberentes node')
 
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
 
-            try:
-                result = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True)
-            except Exception as e:
-                raise Exception('Failed to build Kuberentes cluster: {0}'.format(e))
+            res = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True, warn=True)
 
-            self.logger.trace(result.stdout)
+            if res.return_code:
+                self.logger.trace('failed to build Kuberentes node: {0}'.format(res.stderr))
+            else:
+                self.logger.trace(res.stdout)
 
             self.profiler.prof('node_warmup_start', uid=self.id)
 
@@ -1064,7 +1067,7 @@ class EKS_Cluster(Cluster):
         out, err, ret = sh_callout('which eksctl', shell=True)
 
         if ret:
-            raise Exception('eksctl is required to build EKS cluster: {0}'.format(err))
+            print('eksctl is required to build EKS cluster: {0}'.format(err))
 
         eksctl_path = out.strip()
 
@@ -1084,7 +1087,8 @@ class EKS_Cluster(Cluster):
             out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
-            raise Exception('failed to build EKS cluster: {0} {1}'.format(out, err))
+            print('failed to build EKS cluster: {0} {1}'.format(err))
+            self.logger.trace(err)
 
         print('EKS cluster is ready!')
 
