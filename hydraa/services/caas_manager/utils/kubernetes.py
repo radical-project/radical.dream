@@ -28,6 +28,8 @@ FAILED_STATE = ['Error', 'StartError','OOMKilled',
 
 RUNNING_STATE = ['ContainerCreating', 'Started']
 COMPLETED_STATE = ['Completed', 'completed']
+BUSY            = 'Busy'
+READY           = 'Ready'
 MAX_PODS        = 250
 SLEEP = 2
 
@@ -86,6 +88,7 @@ class Cluster:
         self.size         = cluster_size     
         self.active_nodes = 0
         self.kube_config  = None
+        self.status       = None
 
         self.stop_event = mt.Event()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
@@ -162,7 +165,7 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building Kubernetes cluster started....')
+        print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
 
         def _boottrap(node_conn, node_name):
 
@@ -238,14 +241,14 @@ class Cluster:
             # workers connections
             self.worker_nodes = list(self.remote.values())[1:]
 
-            # FIXME: find a better way to represent master / worker nodes
-            # master node connection
-            self.remote  = list(self.remote.values())[0]
-
             # add worker nodes to master node
             for worker_node in self.worker_nodes:
                 self.join_master(worker_node)
                 self.logger.trace('worker node is active and joined master node')
+
+        # FIXME: find a better way to represent master / worker nodes
+        # master node connection
+        self.remote  = list(self.remote.values())[0]
         
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
@@ -281,8 +284,8 @@ class Cluster:
             pod_id     = str(self.pod_counter).zfill(6)
             containers = []
 
-            self.profiler.prof('create_pod_start', uid=pod_id)
-            
+            #self.profiler.prof('create_pod_start', uid=pod_id)
+    
             envs = []
             if ctask.env_var:
                 for env in ctask.env_vars:
@@ -297,9 +300,9 @@ class Cluster:
 
             pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                         resources = resources, command = ctask.cmd, env = envs)
-            
+
             containers.append(pod_container)
-            
+
             pod_name      = "hydraa-pod-{0}".format(pod_id)
             pod_metadata  = client.V1ObjectMeta(name = pod_name)
 
@@ -323,7 +326,7 @@ class Cluster:
 
             self.pod_counter +=1
         
-            self.profiler.prof('create_pod_stop', uid=pod_id)
+            #self.profiler.prof('create_pod_stop', uid=pod_id)
 
         with open(depolyment_file, 'w') as f:
             for p in pods:
@@ -333,7 +336,7 @@ class Cluster:
         with open(depolyment_file, "r") as f:
             text = f.read()
             text = text.replace("'", '"')
-        
+
         with open(depolyment_file, "w") as f:
             text = f.write(text)
 
@@ -344,35 +347,59 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def wait_to_finish(self):
-        # FIXME: for some reason the completed pods
-        #        are reported incorrectley, making
-        #        the cluster hold the resources
-        #        after the execution finished.
 
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
         cmd += '| grep Completed* | wc -l'
-        
+
+        cmd2 = 'kubectl get pods | grep -E "OutOfCPU|OutOfMemory|Error|CrashLoopBackOff|ImagePullBackOff|InvalidImageName|CreateContainerConfigError|RunContainerError|OOMKilled|ErrImagePull|Evicted" | wc -l'
+
         self.profiler.prof('wait_pods_start', uid=self.id)
 
-        while not self.stop_event.is_set():
+        while True:
             done_pods = 0
+            fail_pods = 0
             if self.remote:
-                done_pods = self.remote.run(cmd, hide=True).stdout.strip()
-            else:
-                cmd = inject_kubeconfig(cmd, self.kube_config)
-                out, err, _ = sh_callout(cmd, shell=True)
-                done_pods = int(out.strip())
+                res1 = self.remote.run(cmd, hide=True, warn=True)
+                res2 = self.remote.run(cmd2, hide=True, warn=True)
 
-            if done_pods:
-                print('Completed pods: {0}/{1}'.format(done_pods, self.pod_counter), end='\r')
+                # a workaround for OSError socket closed
+                # https://github.com/paramiko/paramiko/issues/998
+                # FIXME: https://github.com/AymenFJA/HYDRAA/issues/39
+                if res1.return_code or res2.return_code:
+                    self.logger.trace('waiter failed to obtain pods statuses')
+                else:
+                    done_pods = int(res1.stdout.strip())
+                    fail_pods = int(res2.stdout.strip())
+            else:
+                cmd  = inject_kubeconfig(cmd, self.kube_config)
+                cmd2 = inject_kubeconfig(cmd2, self.kube_config)
+                out, err, _ = sh_callout(cmd, shell=True)
+                out2, err2, _ = sh_callout(cmd2, shell=True)
+
+                done_pods = int(out.strip())
+                fail_pods = int(out2.strip())
+
+            if done_pods or fail_pods:
+                # logic error
                 if not self.pod_counter:
                     continue
+
                 if self.pod_counter == int(done_pods):
-                    print('{0} Pods finished with status "Completed"'.format(done_pods))
+                    print('{0} pods finished with status "Completed"'.format(done_pods))
+                    break
+
+                elif self.pod_counter == int(fail_pods):
+                    print('{0} pods failed'.format(fail_pods))
+                    break
+
+                elif int(sum([done_pods, fail_pods])) == self.pod_counter:
                     break
                 else:
-                    time.sleep(5)
+                    time.sleep(60)
+
+        self.status = READY
+
         self.profiler.prof('wait_pods_stop', uid=self.id)
 
         return True
@@ -408,19 +435,29 @@ class Cluster:
         # check if we are in remote mode or embeded mode
         if self.remote:
             # upload the pods file to the remote machine
+            # we redirect the output to /dev/null as it with
+            # pods > 16K it can lead to OSEerror and socket closed
             self.remote.put(depolyment_file)
-            cmd = 'kubectl apply -f {0}'.format(name)
-            # deploy the pods.json on the cluster
-            self.remote.run(cmd, logger=True)
+            cmd = 'kubectl apply -f {0} > /dev/null'.format(name)
+            res = self.remote.run(cmd, hide=True, warn=True)
+
+            if res.return_code:
+                raise Exception(res.stderr)
 
         # we are in the embeded mode
         else:
             # just invoke a shell process
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
             cmd = inject_kubeconfig(cmd, self.kube_config)
-            out, err, _ = sh_callout(cmd, shell=True)
-            self.logger.trace('{0} {1}'.format(out, err))
-        
+            out, err, ret = sh_callout(cmd, shell=True)
+
+            if ret:
+                raise Exception(err)
+
+        print('all pods are submitted')
+
+        self.status = BUSY
+
         return depolyment_file, pods_names, batches
 
 
@@ -971,7 +1008,10 @@ class EKS_Cluster(Cluster):
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id             = run_id
-        self.cluster_name   = 'Hydraa-Eks-Cluster'
+        import string
+        import random
+        _id                 = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        self.cluster_name   = 'Hydraa-Eks-Cluster-{0}'.format(_id)
         self.config         = None
 
         self.iam            = iam

@@ -144,6 +144,9 @@ class AzureCaas():
         else:  
             pass
 
+        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AzureCaaSWatcher')	
+        self.wait_thread.daemon = True
+
         # call get work to pull tasks
         self._get_work()
 
@@ -153,12 +156,9 @@ class AzureCaas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 100
+        max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
-
-        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AzureCaaSWatcher')	
-        self.wait_thread.daemon = True
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -451,57 +451,10 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
         
-        self.profiler.prof('wait_pods_start', uid=self.run_id)
-        while not self._terminate.is_set():
+        self.AKS_Cluster.wait_to_finish()
 
-            if self.vm.LaunchType  in AKS:
-                statuses = self.AKS_Cluster._get_task_statuses()
-            else:
-                statuses = self._get_task_statuses(self._container_group_names)
-
-            if statuses:
-                stopped = statuses[0]
-                failed  = statuses[1]
-                running = statuses[2]
-
-                self.logger.trace('failed tasks " {0}'.format(failed))
-                self.logger.trace('stopped tasks" {0}'.format(stopped))
-                self.logger.trace('running tasks" {0}'.format(running))
-
-                for task in self._tasks_book.values():
-                    if task.name in stopped:
-                        if task.done():
-                            continue
-                        else:
-                            task.set_result('Done')
-                            self.logger.trace('sending done {0} to output queue'.format(task.name))
-                            self.outgoing_q.put(task.name)
-
-                    # FIXME: better approach?
-                    elif task.name in failed:
-                        try:
-                            # check if the task marked failed
-                            # or not and wait for 0.1s to return
-                            exc = task.exception(0.1)
-                            # we already marked it
-                            if exc:
-                                continue
-                        except:
-                            # never marked so mark it.
-                            task.set_exception('Failed')
-                            self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                            self.outgoing_q.put(task.name)
-
-                    elif task.name in running:
-                        if task.running():
-                            continue
-                        else:
-                            task.set_running_or_notify_cancel()
-
-                time.sleep(1)
-            time.sleep(1)
-        self.profiler.prof('wait_pods_stop', uid=self.run_id)
-
+        return
+    
 
     # --------------------------------------------------------------------------
     #

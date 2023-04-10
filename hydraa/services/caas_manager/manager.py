@@ -53,6 +53,7 @@ class CaasManager:
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
         self.sandbox = None
+        self._lock   = mt.Lock()
         self._terminate  = mt.Event()
 
 
@@ -160,11 +161,14 @@ class CaasManager:
         """
         manager_queue = manager_attrs['out_q']
 
+        done_tasks = 0
         while not self._terminate.is_set():
             try:
-                task = manager_queue.get(block=True, timeout=0.1)
+                with self._lock:
+                    task = manager_queue.get(block=True, timeout=0.1)
                 if task:
-                    print('{0} is done'.format(task))
+                    print('done tasks: ', done_tasks, end='\r')
+                    done_tasks += 1
             except queue.Empty:
                 continue
 
@@ -182,10 +186,14 @@ class CaasManager:
         # based on:
         # 1- user provider preference (if user set the provider of the task)
         # 2- or based on user resousource requirement (orchestrator decision)
+        tasks_counter = 0
         for manager_k, manager_attrs in self._registered_managers.items():
             for task in tasks:
                 if task.provider == manager_k:
-                    manager_attrs['in_q'].put(task)
+                    with self._lock:
+                        manager_attrs['in_q'].put(task)
+                    print('submitting tasks: ', tasks_counter, end='\r')
+                    tasks_counter +=1
 
                 if task.provider not in self._registered_managers.keys():
                     print('no manager ({0}) found for task {0}'.format(task.provider, task))
