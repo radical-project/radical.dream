@@ -500,7 +500,7 @@ class ChiCaas:
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
 
-        self.cluster.wait_to_finish()
+        self.cluster.wait_to_finish(self.outgoing_q)
 
         return
 

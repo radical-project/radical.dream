@@ -346,7 +346,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def wait_to_finish(self):
+    def wait_to_finish(self, outgoing_q):
 
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
@@ -356,9 +356,16 @@ class Cluster:
 
         self.profiler.prof('wait_pods_start', uid=self.id)
 
+        old_done  = 0
+        old_fail  = 0
+
         while True:
             done_pods = 0
             fail_pods = 0
+
+            old_done  = done_pods
+            old_fail  = fail_pods
+
             if self.remote:
                 res1 = self.remote.run(cmd, hide=True, warn=True)
                 res2 = self.remote.run(cmd2, hide=True, warn=True)
@@ -396,6 +403,9 @@ class Cluster:
                 elif int(sum([done_pods, fail_pods])) == self.pod_counter:
                     break
                 else:
+                    if old_done != done_pods or old_fail != fail_pods:
+                        msg = {'done': done_pods, 'failed': fail_pods}
+                        outgoing_q.put(msg)
                     time.sleep(60)
 
         self.status = READY

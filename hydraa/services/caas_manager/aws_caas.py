@@ -962,7 +962,7 @@ class AwsCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
 
-        self.EKS_cluster.wait_to_finish()
+        self.EKS_cluster.wait_to_finish(self.outgoing_q)
 
         return
             

@@ -53,7 +53,6 @@ class CaasManager:
         #       providers instead of only provider name. This
         #       will help for easier shutdown.
         self.sandbox = None
-        self._lock   = mt.Lock()
         self._terminate  = mt.Event()
 
 
@@ -161,14 +160,11 @@ class CaasManager:
         """
         manager_queue = manager_attrs['out_q']
 
-        done_tasks = 0
         while not self._terminate.is_set():
             try:
-                with self._lock:
-                    task = manager_queue.get(block=True, timeout=0.1)
-                if task:
-                    print('done tasks: ', done_tasks, end='\r')
-                    done_tasks += 1
+                msg = manager_queue.get(block=True, timeout=0.1)
+                if msg:
+                    print('manager {0} reported: {1}'.format(manager_attrs['class'].vm.Provider, msg))
             except queue.Empty:
                 continue
 
@@ -190,8 +186,7 @@ class CaasManager:
         for manager_k, manager_attrs in self._registered_managers.items():
             for task in tasks:
                 if task.provider == manager_k:
-                    with self._lock:
-                        manager_attrs['in_q'].put(task)
+                    manager_attrs['in_q'].put(task)
                     print('submitting tasks: ', tasks_counter, end='\r')
                     tasks_counter +=1
 

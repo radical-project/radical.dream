@@ -451,7 +451,7 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
         
-        self.AKS_Cluster.wait_to_finish()
+        self.AKS_Cluster.wait_to_finish(self.outgoing_q)
 
         return
     
