@@ -22,8 +22,7 @@ class RadicalPilot():
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 
-        self.pdesc.sandbox = self.sandbox
-        self.session = rp.Session()
+        self.session = rp.Session(cfg={'base':self.sandbox})
         self.pmgr   = rp.PilotManager(session=self.session)
         self.tmgr   = rp.TaskManager(session=self.session)
         pilot = self.pmgr.submit_pilots(self.pdesc)
