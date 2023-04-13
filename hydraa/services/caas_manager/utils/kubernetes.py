@@ -1087,7 +1087,7 @@ class EKS_Cluster(Cluster):
             out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
-            print('failed to build EKS cluster: {0} {1}'.format(err))
+            print('failed to build EKS cluster: {0}'.format(err))
             self.logger.trace(err)
 
         print('EKS cluster is ready!')
