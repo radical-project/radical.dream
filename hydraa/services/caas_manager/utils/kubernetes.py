@@ -193,9 +193,6 @@ class Cluster:
             self.logger.trace('change bootstrap.sh permession')
             res = node_conn.run("chmod +x bootstrap_kubernetes.sh", warn=True)
 
-            if res.return_code:
-                self.logger.trace('failed to build a Kuberentes node')
-
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
@@ -239,20 +236,22 @@ class Cluster:
         while self.active_nodes < len(self.vm.Servers):
             time.sleep(SLEEP)
 
-        # only join workers when nodes > 1
-        if len(self.vm.Servers) > 1:
-            # workers connections
-            self.worker_nodes = list(self.remote.values())[1:]
-
-            # add worker nodes to master node
-            for worker_node in self.worker_nodes:
-                self.join_master(worker_node)
-                self.logger.trace('worker node is active and joined master node')
 
         # FIXME: find a better way to represent master / worker nodes
         # master node connection
-        self.remote  = list(self.remote.values())[0]
-        
+        self.worker_nodes = list(self.remote.values())[1:]
+        self.remote = list(self.remote.values())[0]
+
+        # only join workers when nodes > 1
+        if len(self.vm.Servers) > 1:
+            if self.worker_nodes:
+                # add worker nodes to master node
+                for worker_node in self.worker_nodes:
+                    self.join_master(worker_node)
+                    self.logger.trace('worker node is active and joined master node')
+            else:
+                print('no active worker nodes found, skipping adding nodes to the master...')
+
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
         print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
