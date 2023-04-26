@@ -11,10 +11,10 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout
+from .misc          import sh_callout, inject_kubeconfig, generate_eks_id
 from hydraa         import CHI, JET2
 from kubernetes     import client
-from azure.cli.core import get_default_cli
+#from azure.cli.core import get_default_cli
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -28,6 +28,8 @@ FAILED_STATE = ['Error', 'StartError','OOMKilled',
 
 RUNNING_STATE = ['ContainerCreating', 'Started']
 COMPLETED_STATE = ['Completed', 'completed']
+BUSY            = 'Busy'
+READY           = 'Ready'
 MAX_PODS        = 250
 SLEEP = 2
 
@@ -85,6 +87,8 @@ class Cluster:
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
         self.size         = cluster_size     
         self.active_nodes = 0
+        self.kube_config  = None
+        self.status       = None
 
         self.stop_event = mt.Event()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
@@ -161,7 +165,7 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building Kubernetes cluster started....')
+        print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
 
         def _boottrap(node_conn, node_name):
 
@@ -187,18 +191,18 @@ class Cluster:
             node_conn.put(boostrapper)
 
             self.logger.trace('change bootstrap.sh permession')
-            node_conn.run("chmod +x bootstrap_kubernetes.sh")
+            res = node_conn.run("chmod +x bootstrap_kubernetes.sh", warn=True)
 
             self.logger.trace('invoke bootstrap.sh')
             # run bootstrapper code to the remote machine
             # https://github.com/fabric/fabric/issues/2129
 
-            try:
-                result = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True)
-            except Exception as e:
-                raise Exception('Failed to build Kuberentes cluster: {0}'.format(e))
+            res = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True, warn=True)
 
-            self.logger.trace(result.stdout)
+            if res.return_code:
+                self.logger.trace('failed to build Kuberentes node: {0}'.format(res.stderr))
+            else:
+                self.logger.trace(res.stdout)
 
             self.profiler.prof('node_warmup_start', uid=self.id)
 
@@ -232,20 +236,22 @@ class Cluster:
         while self.active_nodes < len(self.vm.Servers):
             time.sleep(SLEEP)
 
+
+        # FIXME: find a better way to represent master / worker nodes
+        # master node connection
+        self.worker_nodes = list(self.remote.values())[1:]
+        self.remote = list(self.remote.values())[0]
+
         # only join workers when nodes > 1
         if len(self.vm.Servers) > 1:
-            # workers connections
-            self.worker_nodes = list(self.remote.values())[1:]
+            if self.worker_nodes:
+                # add worker nodes to master node
+                for worker_node in self.worker_nodes:
+                    self.join_master(worker_node)
+                    self.logger.trace('worker node is active and joined master node')
+            else:
+                print('no active worker nodes found, skipping adding nodes to the master...')
 
-            # FIXME: find a better way to represent master / worker nodes
-            # master node connection
-            self.remote  = list(self.remote.values())[0]
-
-            # add worker nodes to master node
-            for worker_node in self.worker_nodes:
-                self.join_master(worker_node)
-                self.logger.trace('worker node is active and joined master node')
-        
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
         print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
@@ -369,18 +375,29 @@ class Cluster:
         # check if we are in remote mode or embeded mode
         if self.remote:
             # upload the pods file to the remote machine
+            # we redirect the output to /dev/null as it with
+            # pods > 16K it can lead to OSEerror and socket closed
             self.remote.put(depolyment_file)
-            cmd = 'kubectl apply -f {0}'.format(name)
-            # deploy the pods.json on the cluster
-            self.remote.run(cmd, logger=True)
+            cmd = 'kubectl apply -f {0} > /dev/null'.format(name)
+            res = self.remote.run(cmd, hide=True, warn=True)
+
+            if res.return_code:
+                raise Exception(res.stderr)
 
         # we are in the embeded mode
         else:
             # just invoke a shell process
             cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-            out, err, _ = sh_callout(cmd, shell=True)
-            self.logger.trace('{0} {1}'.format(out, err))
-        
+            cmd = inject_kubeconfig(cmd, self.kube_config)
+            out, err, ret = sh_callout(cmd, shell=True)
+
+            if ret:
+                raise Exception(err)
+
+        print('all pods are submitted')
+
+        self.status = BUSY
+
         return depolyment_file, pods_names, batches
 
 
@@ -468,6 +485,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
@@ -549,6 +567,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         if response:
@@ -585,6 +604,7 @@ class Cluster:
         if self.remote:
             response = self.remote.run(cmd, hide=True, munch=True)
         else:
+            cmd = inject_kubeconfig(cmd, self.kube_config)
             response = sh_callout(cmd, shell=True, munch=True)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
@@ -750,7 +770,7 @@ class AKS_Cluster(Cluster):
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
-        self.configure()
+        self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
 
@@ -762,16 +782,25 @@ class AKS_Cluster(Cluster):
         
         # To manage a Kubernetes cluster, we use the Kubernetes CLI and kubectl
         # NOTE: kubectl is already installed if you use Azure Cloud Shell.
+
+        self.logger.trace('Creating .kube folder')
+        config_file = self.sandbox + "/.kube/config"
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
+
+        self.logger.trace('setting AKS KUBECONFIG path to: {0}'.format(config_file))
+
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
         cmd += '--resource-group {0} '.format(self.resource_group.name)
-        cmd += '--overwrite-existing'
+        cmd += '--name {0} '.format(self.cluster_name)
+        cmd += '--file {0}'.format(config_file)
 
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
 
-        return True
+        return config_file
 
 
     # --------------------------------------------------------------------------
@@ -919,7 +948,7 @@ class EKS_Cluster(Cluster):
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id             = run_id
-        self.cluster_name   = 'Hydraa-Eks-Cluster'
+        self.cluster_name   = generate_eks_id(prefix='Hydraa-eks-cluster')
         self.config         = None
 
         self.iam            = iam
@@ -942,7 +971,7 @@ class EKS_Cluster(Cluster):
 
         # FIXME: let the user specify the kubernetes_v
         kubernetes_v  = '1.22'
-        NodeGroupName = "Hydraa-Eks-NodeGroup"
+        NodeGroupName = generate_eks_id(prefix='Hydraa-eks-nodegroup')
 
         # FIXME: Find a way to workaround
         #        the limited avilability
@@ -953,7 +982,7 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         self.profiler.prof('cofigure_start', uid=self.id)
-        kube_config_file = self.configure()
+        self.kube_config = self.configure()
 
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID) - 1
@@ -962,14 +991,14 @@ class EKS_Cluster(Cluster):
         out, err, ret = sh_callout('which eksctl', shell=True)
 
         if ret:
-            raise Exception('eksctl is required to build EKS cluster: {0}'.format(err))
+            print('eksctl is required to build EKS cluster: {0}'.format(err))
 
         eksctl_path = out.strip()
 
         if eksctl_path:
             self.logger.trace('eksctl found: {0}'.format(eksctl_path))
     
-            print('Building EKS cluster..')
+            print('Building eks cluster..')
             cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
             cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
 
@@ -977,12 +1006,13 @@ class EKS_Cluster(Cluster):
                 cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
             cmd += '--nodegroup-name {0} '.format(NodeGroupName)
             cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
-            cmd += '--kubeconfig {0}'.format(kube_config_file)
+            cmd += '--kubeconfig {0}'.format(self.kube_config)
 
             out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
-            raise Exception('failed to build EKS cluster: {0} {1}'.format(out, err))
+            print('failed to build EKS cluster: {0}'.format(err))
+            self.logger.trace(err)
 
         print('EKS cluster is ready!')
 
@@ -1004,9 +1034,6 @@ class EKS_Cluster(Cluster):
         open(config_file, 'x')
 
         self.logger.trace('setting EKS KUBECONFIG path to: {0}'.format(config_file))
-        #FIXME: what will happen if we have another
-        # process trying to access this env. var.?
-        os.environ['KUBECONFIG'] = config_file
 
         return config_file
 
