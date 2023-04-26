@@ -15,7 +15,7 @@ AZURE  = 'azure'
 GCLOUD = 'google'
 
 
-class proxy(object):
+class proxy:
     """ 
         For now we assume that the user can login only with a permenant credentials.
         best practice is:
@@ -25,10 +25,10 @@ class proxy(object):
         3- Check: https://docs.aws.amazon.com/general/latest/gr/aws-access-keys-best-practices.html
     """
 
-    def __init__(self, providers: list):
+    def __init__(self, providers):
 
         if not isinstance(providers, list):
-            self._providers = [providers]
+            providers = [providers]
 
         self._providers           = [pr.lower() for pr in providers]
         self._loaded_providers    = []
