@@ -1,5 +1,4 @@
 import os
-import json
 import boto3
 import openstack
 
@@ -39,16 +38,16 @@ class proxy(object):
             if provider in self._supported_providers:
                 self._verify_credentials(provider)
                 self._loaded_providers.append(provider)
-                print('login to {0} succeed'.format(provider))
             else:
                 print('{0} provider not supported'.format(provider))
+        
+        print('login to: {0} succeed'.format(self._loaded_providers))
 
-    
+
     def _verify_credentials(self, provider):
         '''
         check if the provided credentials are valid.
         '''
-        print('verifying {0} credentials'.format(provider))
         if provider == AWS:
             try:
                 # get AWS credentials
@@ -61,23 +60,26 @@ class proxy(object):
             except InvalidConfigError:
                 print(f'{provider},--- invalid config --')
             except Exception as e:
-                raise
+                raise Exception('failed to login to {0}: {1}'.format(provider, e))
 
         if provider == AZURE:
             azu_creds  = self._load_credentials(provider)
             credential = DefaultAzureCredential()
             azu_client = ResourceManagementClient(credential=credential, 
                                                   subscription_id=azu_creds['az_sub_id'])
-            for _ in azu_client.resource_groups.list():
-                pass
-        
+            try:
+                for _ in azu_client.resource_groups.list():
+                    pass
+            except Exception as e:
+                raise Exception('failed to login to {0}: {1}'.format(provider, e))
+
         if provider == JET2:
             jet2_creds  = self._load_credentials(provider)
             jet2_client = openstack.connect(**jet2_creds)
             try:
                 jet2_client.list_flavors()
             except Exception as e:
-                print('failed to login to {0}: {1}'.format(provider, e))
+                raise Exception('failed to login to {0}: {1}'.format(provider, e))
 
         if provider == CHI:
             chi_creds  = self._load_credentials(provider)
@@ -85,8 +87,8 @@ class proxy(object):
             try:
                 chi_client.list_flavors()
             except Exception as e:
-                print('failed to login to {0}: {1}'.format(provider, e))
-            
+                raise Exception('failed to login to {0}: {1}'.format(provider, e))
+
         if provider == GCLOUD:
             raise NotImplementedError
 
@@ -123,23 +125,25 @@ class proxy(object):
 
         if provider == JET2:
             try:
-                jet2_creds = {'auth_url'                     : os.environ['OS_AUTH_URL'],
-                              'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
-                              'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
-                
+                jet2_creds = {'auth_url'                     : os.environ['JET_OS_AUTH_URL'],
+                              'auth_type'                    : os.environ['JET_OS_AUTH_TYPE'],
+                              'compute_api_version': 2,
+                              'identity_interface'           : os.environ['JET_OS_INTERFACE'],
+                              'application_credential_secret': os.environ['JET_OS_APPLICATION_CREDENTIAL_SECRET'],
+                              'application_credential_id'    : os.environ['JET_OS_APPLICATION_CREDENTIAL_ID']}
+
                 return jet2_creds
             except KeyError:
                 raise
-        
+
         if provider == CHI:
             try:
-                chi_creds = {'auth_url'           : os.environ['OS_AUTH_URL'],
-                             'auth_type'          : os.environ['OS_AUTH_TYPE'],
+                chi_creds = {'auth_url'           : os.environ['CHI_OS_AUTH_URL'],
+                             'auth_type'          : os.environ['CHI_OS_AUTH_TYPE'],
                              'compute_api_version': 2,
-                             'region_name'        : os.environ['OS_REGION_NAME'],
-                             'identity_interface' : os.environ['OS_INTERFACE'],
-                             'application_credential_secret': os.environ['OS_APPLICATION_CREDENTIAL_SECRET'],
-                             'application_credential_id'    : os.environ['OS_APPLICATION_CREDENTIAL_ID']}
+                             'identity_interface' : os.environ['CHI_OS_INTERFACE'],
+                             'application_credential_secret': os.environ['CHI_OS_APPLICATION_CREDENTIAL_SECRET'],
+                             'application_credential_id'    : os.environ['CHI_OS_APPLICATION_CREDENTIAL_ID']}
                 return chi_creds
             except KeyError:
                 raise
