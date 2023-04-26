@@ -1,5 +1,7 @@
 import os
 import shlex
+import string
+import random
 import logging
 import subprocess as sp
 
@@ -105,3 +107,21 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     logging.getLogger(__name__).setLevel("TRACE")
 
     return logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------
+#
+def inject_kubeconfig(cmd, kube_config):
+    cmd = cmd.split()
+    cmd.insert(1, '--kubeconfig {0}'.format(kube_config))
+    cmd = ' '.join(cmd)
+
+    return cmd
+
+
+# --------------------------------------------------------------------------
+#
+def generate_eks_id(prefix="eks", length=8):
+    random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+    cluster_id = "{0}-{1}".format(prefix, random_string)
+    return cluster_id
