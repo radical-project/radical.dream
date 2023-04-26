@@ -10,11 +10,10 @@ setup_args['package_data']         = {'': ['*.sh']}
 setup_args['python_requires']      = '>=3.6'
 setup_args['install_requires']     = ['boto3',
                                       'pandas',
-                                      'azure.cli',
+                                      'azure.cli<=2.42.0',
                                       'kubernetes',
-                                      'azure-core',
+                                      'azure-core<=2.42.0',
                                       'python-chi',
-                                      'azure-batch', 
                                       'azure-common',
                                       'azure-identity',
                                       'azure-mgmt-core',
