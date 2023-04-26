@@ -26,7 +26,11 @@ class proxy(object):
     """
 
     def __init__(self, providers: list):
-        self._providers           = providers
+
+        if not isinstance(providers, list):
+            self._providers = [providers]
+
+        self._providers           = [pr.lower() for pr in providers]
         self._loaded_providers    = []
         self._loaded_credentials  = {}
         self._supported_providers = [AWS, AZURE, GCLOUD, JET2, CHI]
