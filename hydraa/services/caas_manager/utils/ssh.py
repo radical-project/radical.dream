@@ -23,8 +23,8 @@ class Remote:
 
         return conn
     
-    def put(self, file):
-        self.conn.put(file)
+    def put(self, local_file, **kwargs):
+        self.conn.put(local_file, **kwargs)
 
 
     # TODO: pass *args and **kwargs to run method
@@ -68,25 +68,25 @@ class Remote:
             return run
 
 
-    def get(self, file, **kwargs):
-        self.conn.get(file, **kwargs)
+    def get(self, remote_file, **kwargs):
+        self.conn.get(remote_file, **kwargs)
 
 
     def check_ssh_connection(self, ip):
         
-        print("waiting for SSH connectivity on".format(ip))
+        self.logger.trace("waiting for SSH connectivity on".format(ip))
         timeout = 60 * 2
         start_time = time.perf_counter()
         # repeatedly try to connect via SSH.
         while True:
             try:
                 with socket.create_connection((ip, 22), timeout=timeout):
-                    print("ssh connection successful to {0}".format(ip))
+                    self.logger.trace("ssh connection successful to {0}".format(ip))
                     break
             except OSError as ex:
                 time.sleep(10)
                 if time.perf_counter() - start_time >= timeout:
-                    print("after {0} seconds, could not connect via SSH".format(timeout))
+                    self.logger.trace("after {0} seconds, could not connect via SSH".format(timeout))
 
     def close(self):
         self.sftp.close()

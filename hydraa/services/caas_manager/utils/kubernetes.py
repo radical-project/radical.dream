@@ -167,94 +167,67 @@ class Cluster:
 
         print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
 
-        def _boottrap(node_conn, node_name):
-
-            if self.vm.Provider == CHI:
-                # a workaround a bug in Chi and cloud-init: truncated hostname.
-                self.logger.trace('setting up node hostname')
-                node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
-
-            # add entries for all node to the hosts file of each node
-            for server in self.vm.Servers:
-                name = server.name
-                network = server.addresses.values()
-                fixed_ip = next(iter(network))[0]['addr']
-                node_conn.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(fixed_ip, name),
-                                                                                   logger=True)
-
-                self.logger.trace("{0} {1} added to /etc/hosts".format(fixed_ip, name))
-
-            loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-
-            boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-            self.logger.trace('upload bootstrap.sh')
-            node_conn.put(boostrapper)
-
-            self.logger.trace('change bootstrap.sh permession')
-            res = node_conn.run("chmod +x bootstrap_kubernetes.sh", warn=True)
-
-            self.logger.trace('invoke bootstrap.sh')
-            # run bootstrapper code to the remote machine
-            # https://github.com/fabric/fabric/issues/2129
-
-            res = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True, warn=True)
-
-            if res.return_code:
-                self.logger.trace('failed to build Kuberentes node: {0}'.format(res.stderr))
-            else:
-                self.logger.trace(res.stdout)
-
-            self.profiler.prof('node_warmup_start', uid=self.id)
-
-            while True:
-                # wait for the microk8s to be ready
-                stream = node_conn.run('sudo microk8s status --wait-ready', in_stream=False)
-
-                # check if the cluster is ready to submit the pod
-                if "microk8s is running" in stream.stdout:
-                    self.logger.trace('booting Kuberentes node successful')
-                    with self.updater_lock:
-                        self.active_nodes +=1
-                    break
-                else:
-                    self.logger.trace('waiting for Kuberentes node to be active')
-                    time.sleep(SLEEP)
-
-            self.profiler.prof('node_warmup_stop', uid=self.id)
-
-        # bootstrap on all nodes
-        for node_name, node_conn in self.remote.items():
-            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn, node_name,),
-                                                           name='Thread-'+ node_name)
-            run_bootstrap.daemon = True
-            run_bootstrap.start()
-
-        self.profiler.prof('bootstrap_start', uid=self.id)
-
-        # wait for all nodes to come up
-        self.logger.trace('waiting for all Kuberentes nodes to be active')
-        while self.active_nodes < len(self.vm.Servers):
-            time.sleep(SLEEP)
-
-
-        # FIXME: find a better way to represent master / worker nodes
-        # master node connection
-        self.worker_nodes = list(self.remote.values())[1:]
         self.remote = list(self.remote.values())[0]
 
-        # only join workers when nodes > 1
-        if len(self.vm.Servers) > 1:
-            if self.worker_nodes:
-                # add worker nodes to master node
-                for worker_node in self.worker_nodes:
-                    self.join_master(worker_node)
-                    self.logger.trace('worker node is active and joined master node')
-            else:
-                print('no active worker nodes found, skipping adding nodes to the master...')
+        nodes_ips = []
+        for server in self.vm.Servers:
+            network = server.addresses.values()
+            fixed_ip = next(iter(network))[0]['addr']
+            nodes_ips.append(fixed_ip)
+        
+        nodes_ips = " ".join(str(x) for x in  tuple(nodes_ips))
+
+        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+
+        boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
+        
+        self.logger.trace('upload bootstrap.sh')
+        
+        self.remote.put(boostrapper)
+
+        # bug in fabric: https://github.com/fabric/fabric/issues/323
+        remote_path = '/home/{0}/.ssh'.format(self.remote.user)
+        for key in self.vm.KeyPair:
+            self.remote.put(key, remote=remote_path, preserve_mode=True)
+
+        self.logger.trace('change bootstrap.sh permession')
+
+        res = self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True)
+
+        self.logger.trace('invoke bootstrap.sh')
+
+        bootstrap_cmd = './bootstrap_kubernetes.sh -k "{0}" -i "{1}" -u "{2}" > /dev/null'.format(nodes_ips,
+                                                                                           self.remote.user,
+                                                              remote_path+'/{0}'.format(self.vm.KeyPair[0]))
+
+        res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
+
+        if res.return_code:
+            raise Exception('failed to build Kuberentes cluster: {0}'.format(res.stderr))
+        else:
+            self.logger.trace(res.stdout)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
+        self.kube_config = self.configure()
+
         print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
+
+
+    # --------------------------------------------------------------------------
+    #
+    def configure(self):
+
+        self.logger.trace('creating .kube folder')
+        config_file = self.sandbox + "/.kube/config"
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
+
+        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+
+        self.remote.get('/etc/kubernetes/admin.conf', local=config_file, preserve_mode=True)
+
+        return config_file
 
 
     # --------------------------------------------------------------------------
