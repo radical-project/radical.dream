@@ -148,7 +148,7 @@ class Jet2Caas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 100
+        max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
@@ -351,15 +351,23 @@ class Jet2Caas():
     #
     def _create_server(self, image, flavor, key_pair, security, min_count, max_count):
 
-        server_name = 'hydraa_Server-{0}'.format(self.run_id)
+        server_name = 'hydraa_server-{0}'.format(self.run_id)
 
         self.logger.trace('creating {0}'.format(server_name))
+
+        user_data = ''
+        # bug: https://github.com/ansible/ansible/issues/51663
+        if 'ubuntu' or 'Ubuntu' in self.image['name']:
+            user_data = '''#!/bin/bash
+            sudo apt remove unattended-upgrades -y
+            '''
         server = self.client.create_server(name=server_name,
                                            image=image.id,
                                            flavor=flavor.id,
                                            key_name=key_pair.name,
                                            min_count=min_count,
-                                           max_count=max_count)
+                                           max_count=max_count,
+                                           userdata=user_data)
         
         # Wait for a server to reach ACTIVE status.
         self.client.wait_for_server(server)

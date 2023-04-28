@@ -74,10 +74,10 @@ class Remote:
 
     def check_ssh_connection(self, ip):
         
-        self.logger.trace("waiting for SSH connectivity on".format(ip))
+        self.logger.trace("waiting for ssh connectivity on {0}".format(ip))
         timeout = 60 * 2
         start_time = time.perf_counter()
-        # repeatedly try to connect via SSH.
+        # repeatedly try to connect via ssh.
         while True:
             try:
                 with socket.create_connection((ip, 22), timeout=timeout):
@@ -86,7 +86,7 @@ class Remote:
             except OSError as ex:
                 time.sleep(10)
                 if time.perf_counter() - start_time >= timeout:
-                    self.logger.trace("after {0} seconds, could not connect via SSH".format(timeout))
+                    self.logger.trace("could not connect via ssh after waiting for {0} seconds, ".format(timeout))
 
     def close(self):
         self.sftp.close()

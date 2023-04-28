@@ -168,6 +168,8 @@ class Cluster:
         print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
 
         self.remote = list(self.remote.values())[0]
+    
+        self.profiler.prof('bootstrap_start', uid=self.id)
 
         nodes_ips = []
         for server in self.vm.Servers:
@@ -180,15 +182,17 @@ class Cluster:
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
 
         boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-        
+
         self.logger.trace('upload bootstrap.sh')
-        
+
         self.remote.put(boostrapper)
 
         # bug in fabric: https://github.com/fabric/fabric/issues/323
-        remote_path = '/home/{0}/.ssh'.format(self.remote.user)
+        remote_ssh_path = '/home/{0}/.ssh'.format(self.remote.user)
+        remote_key_path = remote_ssh_path + '/' + self.vm.KeyPair[0].split('.ssh/')[-1:][0]
+
         for key in self.vm.KeyPair:
-            self.remote.put(key, remote=remote_path, preserve_mode=True)
+            self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
 
         self.logger.trace('change bootstrap.sh permession')
 
@@ -196,9 +200,9 @@ class Cluster:
 
         self.logger.trace('invoke bootstrap.sh')
 
-        bootstrap_cmd = './bootstrap_kubernetes.sh -k "{0}" -i "{1}" -u "{2}" > /dev/null'.format(nodes_ips,
+        bootstrap_cmd = './bootstrap_kubernetes.sh -i "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_ips,
                                                                                            self.remote.user,
-                                                              remote_path+'/{0}'.format(self.vm.KeyPair[0]))
+                                                                                            remote_key_path)
 
         res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
 
@@ -210,6 +214,8 @@ class Cluster:
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
         self.kube_config = self.configure()
+
+        self.setup_ssh_kubectl()
 
         print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
 
@@ -224,10 +230,28 @@ class Cluster:
         open(config_file, 'x')
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-
-        self.remote.get('/etc/kubernetes/admin.conf', local=config_file, preserve_mode=True)
+        self.remote.run('sudo cat /etc/kubernetes/admin.conf >> $HOME/config')
+        self.remote.get('config', local=config_file, preserve_mode=True)
 
         return config_file
+
+
+    # --------------------------------------------------------------------------
+    #
+    def setup_ssh_kubectl(self):
+        #FIXME: what if another cluster has to bind on the same port?
+        # we need to bind the same port to another local ip
+        local_ip = '127.0.0.1'
+        cmd = 'ssh -i {0} -f {1}@{2} -L 6443:{3}:6443 -N'.format(self.vm.KeyPair[0],
+                                                                   self.remote.user,
+                                                                     self.remote.ip,
+                                                                           local_ip)
+        out, err, ret = sh_callout(cmd, shell=True)
+
+        if ret:
+            raise Exception(err)
+        else:
+            self.logger.trace('ssh tunnel is created on {0}'.format(local_ip))
 
 
     # --------------------------------------------------------------------------
@@ -341,31 +365,13 @@ class Cluster:
 
         name = os.path.basename(depolyment_file)
 
-        # remote mode: NSF cluster (we manage it via SSH)
-        # embeded mode: Azure/AWS we manage by merging
-        # the config of the cluster to the local machine
+        # just invoke a shell process
+        cmd = 'kubectl apply -f {0}'.format(depolyment_file)
+        cmd = inject_kubeconfig(cmd, self.kube_config)
+        out, err, ret = sh_callout(cmd, shell=True)
 
-        # check if we are in remote mode or embeded mode
-        if self.remote:
-            # upload the pods file to the remote machine
-            # we redirect the output to /dev/null as it with
-            # pods > 16K it can lead to OSEerror and socket closed
-            self.remote.put(depolyment_file)
-            cmd = 'kubectl apply -f {0} > /dev/null'.format(name)
-            res = self.remote.run(cmd, hide=True, warn=True)
-
-            if res.return_code:
-                raise Exception(res.stderr)
-
-        # we are in the embeded mode
-        else:
-            # just invoke a shell process
-            cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            out, err, ret = sh_callout(cmd, shell=True)
-
-            if ret:
-                raise Exception(err)
+        if ret:
+            raise Exception(err)
 
         print('all pods are submitted')
 
@@ -455,11 +461,9 @@ class Cluster:
 
         cmd = "kubectl get pods -A -o json"
         response = None
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+        cmd = inject_kubeconfig(cmd, self.kube_config)
+        response = sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
         stopped    = []
@@ -537,11 +541,10 @@ class Cluster:
 
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         response = None
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+
+        cmd = inject_kubeconfig(cmd, self.kube_config)
+        response = sh_callout(cmd, shell=True, munch=True)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -567,18 +570,16 @@ class Cluster:
                             self.logger.trace('Pods did not finish yet or failed')
 
             return df
-    
+
 
     # --------------------------------------------------------------------------
     #
     def get_pod_events(self):
         
         cmd = 'kubectl get events -A -o json' 
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+        cmd = inject_kubeconfig(cmd, self.kube_config)
+        response = sh_callout(cmd, shell=True, munch=True)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
