@@ -41,6 +41,9 @@ READY           = 'Ready'
 MAX_PODS        = 250
 SLEEP = 2
 
+KUBECTL = shutil.which('kubectl')
+
+
 # --------------------------------------------------------------------------
 #
 class Cluster:
@@ -175,7 +178,8 @@ class Cluster:
 
         print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
                                                                                    self.vm.Provider))
-        if not shutil.which('kubectl'):
+
+        if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
 
         self.remote = list(self.remote.values())[0]
@@ -762,6 +766,9 @@ class AKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
+        if not KUBECTL:
+            raise Exception('Kubectl is required to manage AKS cluster')
+
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
@@ -951,6 +958,8 @@ class EKS_Cluster(Cluster):
        FIXME: For every run, export $KUBECONFIG
        NOTE : This class will overide any existing kubernetes config
     """
+    EKSCTL = shutil.which('eksctl')
+    IAM_AUTH = shutil.which('aws-iam-authenticator')
 
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
@@ -985,11 +994,8 @@ class EKS_Cluster(Cluster):
         #        zones.
         # https://github.com/weaveworks/eksctl/issues/817
 
-        eksctl_path = shutil.which('eksctl')
-        if not eksctl_path:
-            raise Exception('eksctl is required to manage EKS cluster')
-        
-        self.logger.trace('eksctl found: {0}'.format(eksctl_path))
+        if not self.EKSCTL or not self.IAM_AUTH or not KUBECTL:
+            raise Exception('eksctl/iam-auth/kubectl is required to manage EKS cluster')
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -1001,7 +1007,7 @@ class EKS_Cluster(Cluster):
 
         print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
 
-        cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
+        cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
 
         if self.vm.Zones and len(self.vm.Zones) == 2:
