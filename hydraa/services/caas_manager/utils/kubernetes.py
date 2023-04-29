@@ -5,6 +5,7 @@ import copy
 import json
 import uuid
 import atexit
+import shutil
 import datetime
 
 import pandas        as pd
@@ -21,13 +22,20 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
-FAILED_STATE = ['Error', 'StartError','OOMKilled',
+CFAILED_STATE = ['Error', 'StartError','OOMKilled',
                 'ContainerCannotRun','DeadlineExceeded',
                 'CrashLoopBackOff', 'ImagePullBackOff',
                 'RunContainerError','ImageInspectError']
 
-RUNNING_STATE = ['ContainerCreating', 'Started']
-COMPLETED_STATE = ['Completed', 'completed']
+CRUNNING_STATE = ['ContainerCreating', 'Started']
+CCOMPLETED_STATE = ['Completed', 'completed']
+
+PFAILED_STATE = ['OutOfCPU','OutOfMemory',
+                'Error', 'CrashLoopBackOff',
+                'ImagePullBackOff', 'InvalidImageName',
+                'CreateContainerConfigError','RunContainerError',
+                'OOMKilled','ErrImagePull','Evicted']
+
 BUSY            = 'Busy'
 READY           = 'Ready'
 MAX_PODS        = 250
@@ -167,6 +175,8 @@ class Cluster:
 
         print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
                                                                                    self.vm.Provider))
+        if not shutil.which('kubectl'):
+            raise Exception('Kubectl is required to manage Kuberentes cluster')
 
         self.remote = list(self.remote.values())[0]
     
@@ -348,8 +358,6 @@ class Cluster:
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        name = os.path.basename(depolyment_file)
-
         # just invoke a shell process
         cmd = 'kubectl apply -f {0}'.format(depolyment_file)
         cmd = inject_kubeconfig(cmd, self.kube_config)
@@ -430,6 +438,64 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
+    def wait_to_finish(self, outgoing_q):
+
+        cmd  = 'kubectl '
+        cmd += 'get pod --field-selector=status.phase=Succeeded '
+        cmd += '| grep Completed* | wc -l'
+
+        cmd2  = 'kubectl get pods | grep -E "{0}" | wc -l'.format('|'.join(PFAILED_STATE))
+
+        self.profiler.prof('wait_pods_start', uid=self.id)
+
+        old_done  = 0
+        old_fail  = 0
+
+        while True:
+            done_pods = 0
+            fail_pods = 0
+
+            old_done  = done_pods
+            old_fail  = fail_pods
+
+            cmd  = inject_kubeconfig(cmd, self.kube_config)
+            cmd2 = inject_kubeconfig(cmd2, self.kube_config)
+            out, err, _ = sh_callout(cmd, shell=True)
+            out2, err2, _ = sh_callout(cmd2, shell=True)
+
+            done_pods = int(out.strip())
+            fail_pods = int(out2.strip())
+
+            if done_pods or fail_pods:
+                # logic error
+                if not self.pod_counter:
+                    continue
+
+                if self.pod_counter == int(done_pods):
+                    print('{0} pods finished with status "Completed"'.format(done_pods))
+                    break
+
+                elif self.pod_counter == int(fail_pods):
+                    print('{0} pods failed'.format(fail_pods))
+                    break
+
+                elif int(sum([done_pods, fail_pods])) == self.pod_counter:
+                    break
+                else:
+                    if old_done != done_pods or old_fail != fail_pods:
+                        msg = {'done': done_pods, 'failed': fail_pods}
+                        outgoing_q.put(msg)
+                    time.sleep(60)
+
+        self.status = READY
+
+        self.profiler.prof('wait_pods_stop', uid=self.id)
+
+        return True
+
+
+    # --------------------------------------------------------------------------
+    #
     def _get_task_statuses(self, pod_id=None):
 
         """
@@ -476,27 +542,27 @@ class Cluster:
                                     container_res  = container_attr.get('reason', '')
                                     # case-1 terminated signal
                                     if next(iter(c['state'])) == 'terminated':
-                                        if container_res in COMPLETED_STATE:
+                                        if container_res in CCOMPLETED_STATE:
                                             if list(c['state'].values())[0]['exitCode'] == 0:
                                                 stopped.append(c['name'])
                                             else:
                                                 failed.append(c['name'])
                                                 self.logger.trace(container_msg)
 
-                                        if container_res in FAILED_STATE:
+                                        if container_res in CFAILED_STATE:
                                            failed.append(c['name'])
                                            self.logger.trace(container_msg)
 
                                     # case-2 running signal
                                     if next(iter(c['state'])) == 'running':
-                                            if container_res in RUNNING_STATE:
+                                            if container_res in CRUNNING_STATE:
                                                 running.append(c['name'])
 
                                     # case-3 waiting signal
                                     if next(iter(c['state'])) == 'waiting':
-                                        if container_res in RUNNING_STATE:
+                                        if container_res in CRUNNING_STATE:
                                              running.append(c['name'])
-                                        elif container_res in FAILED_STATE:
+                                        elif container_res in CFAILED_STATE:
                                             failed.append(c['name'])
                                             self.logger.trace(container_msg)
 
@@ -695,6 +761,7 @@ class AKS_Cluster(Cluster):
     def bootstrap(self):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
+
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
@@ -706,7 +773,7 @@ class AKS_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('Building AKS cluster..')
+        print('building AKS cluster..')
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
@@ -918,6 +985,11 @@ class EKS_Cluster(Cluster):
         #        zones.
         # https://github.com/weaveworks/eksctl/issues/817
 
+        eksctl_path = shutil.which('eksctl')
+        if not eksctl_path:
+            raise Exception('eksctl is required to manage EKS cluster')
+        
+        self.logger.trace('eksctl found: {0}'.format(eksctl_path))
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -926,29 +998,19 @@ class EKS_Cluster(Cluster):
 
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID) - 1
-        
-        # check if eksctl is intalled or not
-        out, err, ret = sh_callout('which eksctl', shell=True)
 
-        if ret:
-            print('eksctl is required to build EKS cluster: {0}'.format(err))
+        print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
 
-        eksctl_path = out.strip()
+        cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
+        cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
 
-        if eksctl_path:
-            self.logger.trace('eksctl found: {0}'.format(eksctl_path))
-    
-            print('Building eks cluster..')
-            cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
-            cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+        if self.vm.Zones and len(self.vm.Zones) == 2:
+            cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
+        cmd += '--nodegroup-name {0} '.format(NodeGroupName)
+        cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
+        cmd += '--kubeconfig {0}'.format(self.kube_config)
 
-            if self.vm.Zones and len(self.vm.Zones) == 2:
-                cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
-            cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-            cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
-            cmd += '--kubeconfig {0}'.format(self.kube_config)
-
-            out, err, ret = sh_callout(cmd, shell=True)
+        out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
             print('failed to build EKS cluster: {0}'.format(err))
