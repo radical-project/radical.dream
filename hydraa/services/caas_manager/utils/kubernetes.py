@@ -165,11 +165,12 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
+        print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
+                                                                                   self.vm.Provider))
 
         self.remote = list(self.remote.values())[0]
     
-        self.profiler.prof('bootstrap_start', uid=self.id)
+        self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
         nodes_ips = []
         for server in self.vm.Servers:
@@ -211,13 +212,13 @@ class Cluster:
         else:
             self.logger.trace(res.stdout)
 
-        self.profiler.prof('bootstrap_stop', uid=self.id)
+        self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
         self.kube_config = self.configure()
 
-        self.setup_ssh_kubectl()
+        self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
 
-        print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
+        print('Kubernetes cluster is active')
 
 
     # --------------------------------------------------------------------------
@@ -231,27 +232,11 @@ class Cluster:
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
         self.remote.run('sudo cat /etc/kubernetes/admin.conf >> $HOME/config')
+        
+        # FIXME: delay in here, why?
         self.remote.get('config', local=config_file, preserve_mode=True)
 
         return config_file
-
-
-    # --------------------------------------------------------------------------
-    #
-    def setup_ssh_kubectl(self):
-        #FIXME: what if another cluster has to bind on the same port?
-        # we need to bind the same port to another local ip
-        local_ip = '127.0.0.1'
-        cmd = 'ssh -i {0} -f {1}@{2} -L 6443:{3}:6443 -N'.format(self.vm.KeyPair[0],
-                                                                   self.remote.user,
-                                                                     self.remote.ip,
-                                                                           local_ip)
-        out, err, ret = sh_callout(cmd, shell=True)
-
-        if ret:
-            raise Exception(err)
-        else:
-            self.logger.trace('ssh tunnel is created on {0}'.format(local_ip))
 
 
     # --------------------------------------------------------------------------
@@ -667,35 +652,16 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def add_node(self):
-        """
-        This method should allow
-        x worker nodes to join the
-        master node (different vms or
-        pms) 
-        """
-        ret = self.remote.run('sudo microk8s add-node', logger=True, in_stream=False)
-        token = ret.stdout.split('\n')[7]
-        return token
-
-
-    # --------------------------------------------------------------------------
-    #
-    def join_master(self, worker):
-
-        token = self.add_node()
-        if 'microk8s' in token:
-            worker.run('sudo {0}'.format(token), logger=True, in_stream=False)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def stop(self):
-        self.remote.run('sudo microk8s stop', logger=True)
-
-
-    def delete(self):
         pass
-    
+
+
+    # --------------------------------------------------------------------------
+    #
+    def shutdown(self):
+        self.remote.close()
+        self._tunnel.stop()
+
+
 
 class AKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
