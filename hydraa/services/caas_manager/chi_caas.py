@@ -61,7 +61,7 @@ class ChiCaas:
         self._task_id = 0
     
         self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
+        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
     
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
@@ -402,8 +402,14 @@ class ChiCaas:
     #
     def list_servers(self):
         servers = self.client.list_servers()
-        
-        return servers
+
+        hydraa_servers = []
+        for server in servers:
+            # make sure to get only vms from the current run
+            if self.run_id in server.name:
+                hydraa_servers.append(server)
+
+        return hydraa_servers
 
 
     # --------------------------------------------------------------------------

@@ -54,7 +54,7 @@ class Jet2Caas():
         self._task_id = 0      
 
         self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
+        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
         self._tasks_book  = OrderedDict()
@@ -296,8 +296,14 @@ class Jet2Caas():
     #
     def list_servers(self):
         servers = self.client.list_servers()
-        
-        return servers
+
+        hydraa_servers = []
+        for server in servers:
+            # make sure to get only vms from the current run
+            if self.run_id in server.name:
+                hydraa_servers.append(server)
+
+        return hydraa_servers
 
 
     # --------------------------------------------------------------------------
@@ -351,7 +357,7 @@ class Jet2Caas():
     #
     def _create_server(self, image, flavor, key_pair, security, min_count, max_count):
 
-        server_name = 'hydraa_server-{0}'.format(self.run_id)
+        server_name = 'hydraa-server-{0}'.format(self.run_id)
 
         self.logger.trace('creating {0}'.format(server_name))
 

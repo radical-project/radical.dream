@@ -186,13 +186,16 @@ class Cluster:
     
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
-        nodes_ips = []
+        nodes_map = []
         for server in self.vm.Servers:
             network = server.addresses.values()
             fixed_ip = next(iter(network))[0]['addr']
-            nodes_ips.append(fixed_ip)
+            hostname_ip = server.name + ',' + fixed_ip
+            nodes_map.append(hostname_ip)
         
-        nodes_ips = " ".join(str(x) for x in  tuple(nodes_ips))
+
+        # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
+        nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
 
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
 
@@ -215,7 +218,7 @@ class Cluster:
 
         self.logger.trace('invoke bootstrap.sh')
 
-        bootstrap_cmd = './bootstrap_kubernetes.sh -i "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_ips,
+        bootstrap_cmd = './bootstrap_kubernetes.sh -m "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_map,
                                                                                            self.remote.user,
                                                                                             remote_key_path)
 
@@ -245,10 +248,9 @@ class Cluster:
         open(config_file, 'x')
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-        self.remote.run('sudo cat /etc/kubernetes/admin.conf >> $HOME/config')
-        
+       
         # FIXME: delay in here, why?
-        self.remote.get('config', local=config_file, preserve_mode=True)
+        self.remote.get('.kube/config', local=config_file, preserve_mode=True)
 
         return config_file
 
@@ -747,7 +749,7 @@ class AKS_Cluster(Cluster):
     #
     def __init__(self, run_id, vm, sandbox, log):
         self.id             = run_id
-        self.cluster_name   = 'HydraaAksCluster'
+        self.cluster_name   = 'hydraa-aks-cluster'
         self.resource_group = vm.ResourceGroup
         self.nodes          = vm.MinCount
         self.config         = None
@@ -802,7 +804,7 @@ class AKS_Cluster(Cluster):
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        self.logger.trace('setting AKS KUBECONFIG path to: {0}'.format(config_file))
+        self.logger.trace('setting AKS kubeconfig path to: {0}'.format(config_file))
 
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
@@ -823,7 +825,7 @@ class AKS_Cluster(Cluster):
         """
         add nodes to an existing cluster
         """
-        self.nodes_pool = 'hydraa_aks_nodepool'
+        self.nodes_pool = 'hydraa-aks-nodepool'
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group)
@@ -848,7 +850,7 @@ class AKS_Cluster(Cluster):
 
         range: list of 2 index [min_nodes, max_nodes]
         """
-        self.auto_scaler = 'hydraa_autoscale_aks_nodepool'
+        self.auto_scaler = 'hydraa-autoscale-aks-nodepool'
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group)
@@ -964,7 +966,7 @@ class EKS_Cluster(Cluster):
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id             = run_id
-        self.cluster_name   = generate_eks_id(prefix='Hydraa-eks-cluster')
+        self.cluster_name   = generate_eks_id(prefix='hydraa-eks-cluster')
         self.config         = None
 
         self.iam            = iam
@@ -987,7 +989,7 @@ class EKS_Cluster(Cluster):
 
         # FIXME: let the user specify the kubernetes_v
         kubernetes_v  = '1.22'
-        NodeGroupName = generate_eks_id(prefix='Hydraa-eks-nodegroup')
+        NodeGroupName = generate_eks_id(prefix='hydraa-eks-nodegroup')
 
         # FIXME: Find a way to workaround
         #        the limited avilability
@@ -1054,7 +1056,7 @@ class EKS_Cluster(Cluster):
         range[1] int   maximum nodes in ASG (default 2)
         """
         
-        name = 'Hydraa-Eks-NodeGroup-AutoScaler{0}'.format(str(uuid.uuid4()))
+        name = 'hydraa-eks-nodegroup-autoscaler{0}'.format(str(uuid.uuid4()))
 
         cmd  = 'eksctl create nodegroup --name {0} '.format(name)
         cmd += '--cluster {0} --node-type {1} '.format(self.cluster_name, 

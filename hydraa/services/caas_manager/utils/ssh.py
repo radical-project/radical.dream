@@ -137,4 +137,4 @@ class Remote:
     #
     def close(self):
         self.logger.trace('closing all ssh connections')
-        self.sftp.close()
+        self.conn.close()
