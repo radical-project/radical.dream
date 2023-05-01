@@ -1,3 +1,4 @@
+import os
 import time
 import socket
 import fabric
@@ -26,6 +27,15 @@ class Remote:
         self.check_ssh_connection(self.ip)
 
         return conn
+
+
+    # --------------------------------------------------------------------------
+    #
+    def reconnect(self):
+
+        reconn = self.__connect()
+
+        return reconn
 
 
     # --------------------------------------------------------------------------
@@ -66,9 +76,6 @@ class Remote:
         # otherwise let fabric.run prints
         # the stdout/stderr by default
         elif munch:
-            false = False
-            true  = True
-            null  = None
             run = self.conn.run(cmd, hide=hide, **kwargs)
             val = eval(''.join(run.stdout.split('\n')))
             return val
@@ -114,23 +121,64 @@ class Remote:
 
         ip_port = out.strip().split('server: https://')[1]
         remote_port = 22
-        # the local host is always set to 127.0.0.1.
-        # FIXME: what if another cluster has to bind on the same port?
-        # we need to bind the same port to another local ip, example: 127.0.0.2
-        local_host  = ip_port.split(':')[0]
-        local_port  = int(ip_port.split(':')[1])
+
+        local_host, local_port = ip_port.split(":", 1)
+        open_port = self.find_open_port(local_host)
 
         server = SSHTunnelForwarder((self.ip, remote_port),
             ssh_username=self.user,
             ssh_private_key=self.key,
-            remote_bind_address=(local_host, local_port),
-            local_bind_address=(local_host, local_port),)
+            remote_bind_address=(local_host, int(local_port)),
+            local_bind_address=(local_host, open_port),)
 
         server.start()
 
-        self.logger.trace('ssh tunnel is created for {0} on {1}'.format(self.ip, ip_port))
+        self.logger.trace('ssh tunnel is created for {0} on {1}:{2}'.format(self.ip,
+                                                             local_host, open_port))
 
         return server
+
+
+    # --------------------------------------------------------------------------
+    #
+    def find_open_port(self, host):
+    
+        '''
+        Check for the HYDRAA_USED_PORTS env var exist, which will hold
+        the used port of the tunnelized Kuberentes cluster endpoints.
+        if it exists, we update the varaible with the new accuired port.
+        '''
+        port = 6443 # default port for kubeconfig
+        used_ports = eval(os.environ.get('HYDRAA_USED_PORTS', "[]"))
+        # safe range of ports to check
+        for p in range(49152, 65535):
+            try:
+                sock = socket.socket()
+                # check if the port is open and free
+                sock.bind((host, p))
+                port = sock.getsockname()[1]
+                # sometimes python reports a used port is free
+                # regardless if it is open or not
+                if port not in used_ports:
+                    self.logger.trace("port {0} is open and will be used".format(port))
+                    used_ports.append(port)
+                    os.environ['HYDRAA_USED_PORTS'] = str(used_ports)
+                    break
+                else:
+                    continue
+            except PermissionError as e:
+                # only sudo user can bind to this port
+                continue
+            except OSError as e:
+                # already in use
+                continue
+            except socket.error as e:
+                # connection refused (not open)
+                continue
+            finally:
+                sock.close()
+        
+        return port
 
 
     # --------------------------------------------------------------------------
