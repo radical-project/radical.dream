@@ -697,6 +697,8 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
+        # nothing to shutdown here besides closing
+        # the ssh channels and tunnels
         self.remote.close()
         self._tunnel.stop()
 
@@ -707,9 +709,7 @@ class AKS_Cluster(Cluster):
        This class asssumes that:
 
        1- Your user has the correct permission for AKS and CLI.
-       2- Azure-cli is installed
-
-       NOTE: This class will overide any existing kubernetes
+       2- Kubectl is installed
     """
 
     # --------------------------------------------------------------------------
@@ -919,13 +919,10 @@ class EKS_Cluster(Cluster):
        This class asssumes that you did the one time
        preparational steps:
 
-       1- AWS-> eksctl installed 
-       2- AWS-> aws-iam-authenticator
-       2- In $HOME/.aws/credentials -> aws credentials
-       2- Kuberenetes-> kubectl installed
-
-       FIXME: For every run, export $KUBECONFIG
-       NOTE : This class will overide any existing kubernetes config
+       1- eksctl installed 
+       2- aws-iam-authenticator is installed 
+       3- Kubectl is installed 
+       4- In $HOME/.aws/credentials -> aws credentials
     """
     EKSCTL = shutil.which('eksctl')
     IAM_AUTH = shutil.which('aws-iam-authenticator')
