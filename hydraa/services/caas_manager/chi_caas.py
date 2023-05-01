@@ -651,7 +651,9 @@ class ChiCaas:
                         lease.delete(self.lease['id'])
                     else:
                         pass
-        
+            
+            self.cluster.shutdown()
+
             self.__cleanup()
 
         except Exception as e:

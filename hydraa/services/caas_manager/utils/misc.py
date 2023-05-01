@@ -14,11 +14,12 @@ FALSE=false=False
 
 HOME  = str(Path.home())
 
-def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False):
+def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False, kube=None):
     '''
     call a shell command, return `[stdout, stderr, retval]`.
     '''
-
+    if kube:
+        cmd = inject_kubeconfig(cmd, kube.kube_config, kube._tunnel.local_bind_port)
     # convert string into arg list if needed
     if hasattr(str, cmd) and \
        not shell: cmd    = shlex.split(cmd)

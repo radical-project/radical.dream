@@ -564,6 +564,8 @@ class Jet2Caas():
                 for ip in self.ips:
                     self.logger.trace('deleting allocated ip')
                     self.client.delete_floating_ip(ip)
+        
+        self.cluster.shutdown()
 
         self.__cleanup()
 

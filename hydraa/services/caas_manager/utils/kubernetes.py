@@ -12,7 +12,7 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout, inject_kubeconfig, generate_eks_id
+from .misc          import sh_callout, generate_eks_id
 from hydraa         import CHI, JET2
 from kubernetes     import client
 #from azure.cli.core import get_default_cli
@@ -49,7 +49,7 @@ KUBECTL = shutil.which('kubectl')
 class Cluster:
     """
     This is a multithreaded Kuberentes base class that 
-    is build on the top of microK8s Kuberentes flavor 
+    is build on the top of k8s or microK8s Kuberentes flavor 
     (or any falvor). 
     
     This cluster controlls:
@@ -108,39 +108,14 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def start(self):
-        """
-        The function to start the internal micok8s cluster.
-
-        Returns:
-            bool: True if passed.
-        """
-        self.remote.run('sudo microk8s start')
-        return True
-
-
-    # --------------------------------------------------------------------------
-    #
     def restart(self):
-        """
-        The function to restart a node of microk8s cluster.
-
-        Returns:
-            bool: True if passed.
-        """
-        self.remote.run('sudo snap restart microk8s')
-        return True
+        pass
 
 
     # --------------------------------------------------------------------------
     #
     def recover(self):
-        """
-        The function to recover the internal micok8s cluster if
-        stuck in halt.
-        """
-        self.remote.run('snap remove microk8s')
-        self.remote.run('sudo snap install microk8s')
+        pass
 
 
     # --------------------------------------------------------------------------
@@ -366,8 +341,7 @@ class Cluster:
 
         # just invoke a shell process
         cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
-        out, err, ret = sh_callout(cmd, shell=True)
+        out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
         if ret:
             raise Exception(err)
@@ -449,7 +423,6 @@ class Cluster:
         cmd  = 'kubectl '
         cmd += 'get pod --field-selector=status.phase=Succeeded '
         cmd += '| grep Completed* | wc -l'
-
         cmd2  = 'kubectl get pods | grep -E "{0}" | wc -l'.format('|'.join(PFAILED_STATE))
 
         self.profiler.prof('wait_pods_start', uid=self.id)
@@ -464,10 +437,8 @@ class Cluster:
             old_done  = done_pods
             old_fail  = fail_pods
 
-            cmd  = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
-            cmd2 = inject_kubeconfig(cmd2, self.kube_config, self._tunnel.local_bind_port)
-            out, err, _ = sh_callout(cmd, shell=True)
-            out2, err2, _ = sh_callout(cmd2, shell=True)
+            out, err, _ = sh_callout(cmd, shell=True, kube=self)
+            out2, err2, _ = sh_callout(cmd2, shell=True, kube=self)
 
             done_pods = int(out.strip())
             fail_pods = int(out2.strip())
@@ -519,8 +490,7 @@ class Cluster:
         cmd = "kubectl get pods -A -o json"
         response = None
 
-        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
-        response = sh_callout(cmd, shell=True, munch=True)
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         statuses   = []
         stopped    = []
@@ -599,9 +569,7 @@ class Cluster:
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         response = None
 
-
-        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
-        response = sh_callout(cmd, shell=True, munch=True)
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -635,8 +603,7 @@ class Cluster:
         
         cmd = 'kubectl get events -A -o json' 
 
-        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
-        response = sh_callout(cmd, shell=True, munch=True)
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
