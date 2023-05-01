@@ -212,7 +212,7 @@ class Cluster:
         for key in self.vm.KeyPair:
             self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
 
-        self.logger.trace('change bootstrap.sh permession')
+        self.logger.trace('change bootstrap.sh permission')
 
         res = self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True)
 
@@ -366,7 +366,7 @@ class Cluster:
 
         # just invoke a shell process
         cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-        cmd = inject_kubeconfig(cmd, self.kube_config)
+        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
         out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
@@ -464,8 +464,8 @@ class Cluster:
             old_done  = done_pods
             old_fail  = fail_pods
 
-            cmd  = inject_kubeconfig(cmd, self.kube_config)
-            cmd2 = inject_kubeconfig(cmd2, self.kube_config)
+            cmd  = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
+            cmd2 = inject_kubeconfig(cmd2, self.kube_config, self._tunnel.local_bind_port)
             out, err, _ = sh_callout(cmd, shell=True)
             out2, err2, _ = sh_callout(cmd2, shell=True)
 
@@ -519,7 +519,7 @@ class Cluster:
         cmd = "kubectl get pods -A -o json"
         response = None
 
-        cmd = inject_kubeconfig(cmd, self.kube_config)
+        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
         response = sh_callout(cmd, shell=True, munch=True)
 
         statuses   = []
@@ -600,7 +600,7 @@ class Cluster:
         response = None
 
 
-        cmd = inject_kubeconfig(cmd, self.kube_config)
+        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
         response = sh_callout(cmd, shell=True, munch=True)
 
         if response:
@@ -635,7 +635,7 @@ class Cluster:
         
         cmd = 'kubectl get events -A -o json' 
 
-        cmd = inject_kubeconfig(cmd, self.kube_config)
+        cmd = inject_kubeconfig(cmd, self.kube_config, self._tunnel.local_bind_port)
         response = sh_callout(cmd, shell=True, munch=True)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
@@ -739,7 +739,7 @@ class AKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that:
 
-       1- Your user has the correct permessions for AKS and CLI.
+       1- Your user has the correct permission for AKS and CLI.
        2- Azure-cli is installed
 
        NOTE: This class will overide any existing kubernetes
