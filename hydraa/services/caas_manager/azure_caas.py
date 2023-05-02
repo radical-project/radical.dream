@@ -153,7 +153,7 @@ class AzureCaas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 100
+        max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
@@ -463,9 +463,9 @@ class AzureCaas():
                 failed  = statuses[1]
                 running = statuses[2]
 
-                self.logger.trace('failed tasks " {0}'.format(failed))
-                self.logger.trace('stopped tasks" {0}'.format(stopped))
-                self.logger.trace('running tasks" {0}'.format(running))
+                msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
+                                                                   len(stopped),
+                                                                   len(running))
 
                 for task in self._tasks_book.values():
                     if task.name in stopped:
@@ -473,8 +473,6 @@ class AzureCaas():
                             continue
                         else:
                             task.set_result('Done')
-                            self.logger.trace('sending done {0} to output queue'.format(task.name))
-                            self.outgoing_q.put(task.name)
 
                     # FIXME: better approach?
                     elif task.name in failed:
@@ -488,8 +486,6 @@ class AzureCaas():
                         except:
                             # never marked so mark it.
                             task.set_exception('Failed')
-                            self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                            self.outgoing_q.put(task.name)
 
                     elif task.name in running:
                         if task.running():
@@ -498,7 +494,10 @@ class AzureCaas():
                             task.set_running_or_notify_cancel()
 
                 time.sleep(1)
-            time.sleep(1)
+
+            self.outgoing_q.put(msg)
+
+            time.sleep(5)
 
 
     # --------------------------------------------------------------------------

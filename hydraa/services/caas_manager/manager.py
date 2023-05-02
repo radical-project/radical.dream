@@ -40,24 +40,25 @@ class CaasManager:
     def __init__(self, proxy_mgr, vms, asynchronous):
         
         _id = str(uuid.uuid4())
+        sandbox = misc.create_sandbox(_id)
+
         self._registered_managers = {}
-        prof = ru.Profiler
+        self.prof = ru.Profiler
+        self.log = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
+        self._terminate  = mt.Event()
 
         if proxy:
             self._proxy = proxy_mgr
 
         # TODO: add the created classes based on the loaded
         #       providers instead of only provider name. This
-        #       will help for easier shutdown.
-        sandbox = misc.create_sandbox(_id)
-        log = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
-        self._terminate  = mt.Event()
+        #       will help for less code and easier shutdown.
 
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
                 vmx  = next(v for v in vms if isinstance(v, vm.AzureVM))
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[AZURE] = {'class' : self.AzureCaas,
                                                     'run_id': self.AzureCaas.run_id,
                                                     'in_q'  : self.AzureCaas.incoming_q,
@@ -65,7 +66,7 @@ class CaasManager:
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
                 vmx  = next(v for v in vms if isinstance(v, vm.AwsVM))
-                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[AWS] = {'class' : self.AwsCaas,
                                                   'run_id': self.AwsCaas.run_id,
                                                   'in_q'  : self.AwsCaas.incoming_q,
@@ -75,7 +76,7 @@ class CaasManager:
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
                 vmx  = next(v for v in vms if v.Provider == JET2)
-                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[JET2] = {'class' : self.Jet2Caas,
                                                    'run_id': self.Jet2Caas.run_id,
                                                    'in_q'  : self.Jet2Caas.incoming_q,
@@ -84,7 +85,7 @@ class CaasManager:
             if provider == CHI:
                 cred = self._proxy._load_credentials(CHI)
                 vmx  = next(v for v in vms if v.Provider == CHI)
-                self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, log, prof)
+                self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[CHI] = {'class' : self.ChiCaas,
                                                   'run_id': self.ChiCaas.run_id,
                                                   'in_q'  : self.ChiCaas.incoming_q,
@@ -153,12 +154,14 @@ class CaasManager:
         Done/failed
         """
         manager_queue = manager_attrs['out_q']
+        manager_name  = manager_attrs['class'].vm.Provider
 
         while not self._terminate.is_set():
             try:
-                task = manager_queue.get(block=True, timeout=0.1)
-                if task:
-                    print('{0} is done'.format(task))
+                msg = manager_queue.get(block=True, timeout=0.1)
+                if msg:
+                    self.log.trace('manager {0} reported: {1}'.format(manager_name,
+                                                                              msg))
             except queue.Empty:
                 continue
 
@@ -176,13 +179,17 @@ class CaasManager:
         # based on:
         # 1- user provider preference (if user set the provider of the task)
         # 2- or based on user resousource requirement (orchestrator decision)
+        tasks_counter = 0
         for manager_k, manager_attrs in self._registered_managers.items():
             for task in tasks:
                 if task.provider == manager_k:
                     manager_attrs['in_q'].put(task)
+                    print('submitting tasks: ', tasks_counter, end='\r')
+                    tasks_counter +=1
 
                 if task.provider not in self._registered_managers.keys():
-                    print('no manager ({0}) found for task {0}'.format(task.provider, task))
+                    self.log.trace('no manager ({0}) found for task {0}'.format(task.provider,
+                                                                                        task))
 
 
     # --------------------------------------------------------------------------

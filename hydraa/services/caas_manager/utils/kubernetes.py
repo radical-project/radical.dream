@@ -87,7 +87,7 @@ class Cluster:
             cluster_size (int)      : The number of cores each node has.
             sandbox      (str)      : A path for the folder of hydraa manager.
             log          (logging)  : A logger object.
-        
+
         """
         self.id           = run_id
         self.vm           = vm
@@ -210,7 +210,7 @@ class Cluster:
 
         self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
 
-        print('Kubernetes cluster is active')
+        print('Kubernetes cluster is active on provider: {0}'.format(self.vm.Provider))
 
 
     # --------------------------------------------------------------------------
@@ -275,9 +275,9 @@ class Cluster:
 
                 pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                             resources = resources, command = ctask.cmd, env = envs)
-                
+
                 containers.append(pod_container)
-            
+
             pod_name      = "hydraa-pod-{0}".format(pod_id)
             pod_metadata  = client.V1ObjectMeta(name = pod_name)
 
@@ -339,8 +339,7 @@ class Cluster:
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        # just invoke a shell process
-        cmd = 'kubectl apply -f {0}'.format(depolyment_file)
+        cmd = 'kubectl apply -f {0} --validate=false'.format(depolyment_file)
         out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
         if ret:
@@ -756,6 +755,8 @@ class AKS_Cluster(Cluster):
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
+        print('AKS cluster is active on provider: {0}'.format(self.vm.Provider))
+
 
     # --------------------------------------------------------------------------
     #
@@ -988,11 +989,11 @@ class EKS_Cluster(Cluster):
             print('failed to build EKS cluster: {0}'.format(err))
             self.logger.trace(err)
 
-        print('EKS cluster is ready!')
-
         self.logger.trace(out)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        print('EKS cluster is active on provider: {0}'.format(self.vm.Provider))
 
 
     # --------------------------------------------------------------------------
