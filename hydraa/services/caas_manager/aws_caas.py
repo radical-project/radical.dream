@@ -680,7 +680,6 @@ class AwsCaas():
             ctask.launch_type = self.vm.LaunchType
 
             self._tasks_book[str(ctask.name)] = ctask
-            self.logger.trace('submitting tasks {0}'.format(ctask.id))
             self._task_id +=1
 
         # submit to kubernets cluster
@@ -695,6 +694,8 @@ class AwsCaas():
             self._pods_book[pod_name]['batch_size']    = len(batches[idx])
             self._pods_book[pod_name]['pod_file_path'] = depolyment_file
         '''
+        self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks)))
+
         self.profiler.prof('submit_batch_stop', uid=self.run_id)  
 
 

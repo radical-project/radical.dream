@@ -301,7 +301,7 @@ class Cluster:
 
             self.pod_counter +=1
         
-        self.profiler.prof('create_pod_stop', uid=pod_id)
+            self.profiler.prof('create_pod_stop', uid=pod_id)
 
         with open(depolyment_file, 'w') as f:
             for p in pods:
