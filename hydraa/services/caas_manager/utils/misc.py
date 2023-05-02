@@ -14,11 +14,12 @@ FALSE=false=False
 
 HOME  = str(Path.home())
 
-def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False):
+def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False, kube=None):
     '''
     call a shell command, return `[stdout, stderr, retval]`.
     '''
-
+    if kube:
+        cmd = inject_kubeconfig(cmd, kube.kube_config, kube._tunnel.local_bind_port)
     # convert string into arg list if needed
     if hasattr(str, cmd) and \
        not shell: cmd    = shlex.split(cmd)
@@ -111,9 +112,13 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
 
 # --------------------------------------------------------------------------
 #
-def inject_kubeconfig(cmd, kube_config):
+def inject_kubeconfig(cmd, kube_config, local_bind_port):
     cmd = cmd.split()
-    cmd.insert(1, '--kubeconfig {0}'.format(kube_config))
+    kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
+    kube_skip_tls = '--insecure-skip-tls-verify'
+    cmd.insert(1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
+                                                    kube_endpoint,
+                                                    kube_config))
     cmd = ' '.join(cmd)
 
     return cmd

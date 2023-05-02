@@ -54,7 +54,7 @@ class Jet2Caas():
         self._task_id = 0      
 
         self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
+        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
         # tasks_book is a datastructure that keeps most of the 
         # cloud tasks info during the current run.
         self._tasks_book  = OrderedDict()
@@ -148,7 +148,7 @@ class Jet2Caas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 100
+        max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
@@ -296,8 +296,14 @@ class Jet2Caas():
     #
     def list_servers(self):
         servers = self.client.list_servers()
-        
-        return servers
+
+        hydraa_servers = []
+        for server in servers:
+            # make sure to get only vms from the current run
+            if self.run_id in server.name:
+                hydraa_servers.append(server)
+
+        return hydraa_servers
 
 
     # --------------------------------------------------------------------------
@@ -351,15 +357,23 @@ class Jet2Caas():
     #
     def _create_server(self, image, flavor, key_pair, security, min_count, max_count):
 
-        server_name = 'hydraa_Server-{0}'.format(self.run_id)
+        server_name = 'hydraa-server-{0}'.format(self.run_id)
 
         self.logger.trace('creating {0}'.format(server_name))
+
+        user_data = ''
+        # bug: https://github.com/ansible/ansible/issues/51663
+        if 'ubuntu' or 'Ubuntu' in self.image['name']:
+            user_data = '''#!/bin/bash
+            sudo apt remove unattended-upgrades -y
+            '''
         server = self.client.create_server(name=server_name,
                                            image=image.id,
                                            flavor=flavor.id,
                                            key_name=key_pair.name,
                                            min_count=min_count,
-                                           max_count=max_count)
+                                           max_count=max_count,
+                                           userdata=user_data)
         
         # Wait for a server to reach ACTIVE status.
         self.client.wait_for_server(server)
@@ -401,8 +415,8 @@ class Jet2Caas():
             self._pods_book[pod_name]['task_list']     = batches[idx]
             self._pods_book[pod_name]['batch_size']    = len(batches[idx])
             self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        
-        self.profiler.prof('submit_batch_start', uid=self.run_id)
+
+        self.profiler.prof('submit_batch_stop', uid=self.run_id)
 
 
         #self.profiles()
@@ -422,10 +436,9 @@ class Jet2Caas():
             stopped = statuses[0]
             failed  = statuses[1]
             running = statuses[2]
-
-            self.logger.trace('failed tasks " {0}'.format(failed))
-            self.logger.trace('stopped tasks" {0}'.format(stopped))
-            self.logger.trace('running tasks" {0}'.format(running))
+            msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
+                                                                len(stopped),
+                                                                len(running))
 
             for task in self._tasks_book.values():
                 if task.name in stopped:
@@ -433,8 +446,6 @@ class Jet2Caas():
                         continue
                     else:
                         task.set_result('Done')
-                        self.logger.trace('sending done {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
 
                 # FIXME: better approach?
                 elif task.name in failed:
@@ -448,8 +459,6 @@ class Jet2Caas():
                     except TimeoutError:
                         # never marked so mark it.
                         task.set_exception('Failed')
-                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
 
                 elif task.name in running:
                     if task.running():
@@ -457,6 +466,7 @@ class Jet2Caas():
                     else:
                         task.set_running_or_notify_cancel()
 
+            self.outgoing_q.put(msg)
 
             time.sleep(5)
 
@@ -550,6 +560,8 @@ class Jet2Caas():
                 for ip in self.ips:
                     self.logger.trace('deleting allocated ip')
                     self.client.delete_floating_ip(ip)
+        
+        self.cluster.shutdown()
 
         self.__cleanup()
 

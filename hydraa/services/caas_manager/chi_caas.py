@@ -61,7 +61,7 @@ class ChiCaas:
         self._task_id = 0
     
         self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
+        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
     
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
@@ -169,7 +169,7 @@ class ChiCaas:
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 100
+        max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
@@ -402,8 +402,14 @@ class ChiCaas:
     #
     def list_servers(self):
         servers = self.client.list_servers()
-        
-        return servers
+
+        hydraa_servers = []
+        for server in servers:
+            # make sure to get only vms from the current run
+            if self.run_id in server.name:
+                hydraa_servers.append(server)
+
+        return hydraa_servers
 
 
     # --------------------------------------------------------------------------
@@ -516,10 +522,9 @@ class ChiCaas:
             stopped = statuses[0]
             failed  = statuses[1]
             running = statuses[2]
-
-            self.logger.trace('failed tasks " {0}'.format(failed))
-            self.logger.trace('stopped tasks" {0}'.format(stopped))
-            self.logger.trace('running tasks" {0}'.format(running))
+            msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
+                                                                len(stopped),
+                                                                len(running))
 
             for task in self._tasks_book.values():
                 if task.name in stopped:
@@ -527,8 +532,6 @@ class ChiCaas:
                         continue
                     else:
                         task.set_result('Done')
-                        self.logger.trace('sending done {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
 
                 # FIXME: better approach?
                 elif task.name in failed:
@@ -542,8 +545,6 @@ class ChiCaas:
                     except TimeoutError:
                         # never marked so mark it.
                         task.set_exception('Failed')
-                        self.logger.trace('sending failed {0} to output queue'.format(task.name))
-                        self.outgoing_q.put(task.name)
 
                 elif task.name in running:
                     if task.running():
@@ -551,6 +552,7 @@ class ChiCaas:
                     else:
                         task.set_running_or_notify_cancel()
 
+            self.outgoing_q.put(msg)
 
             time.sleep(5)
 
@@ -645,7 +647,9 @@ class ChiCaas:
                         lease.delete(self.lease['id'])
                     else:
                         pass
-        
+            
+            self.cluster.shutdown()
+
             self.__cleanup()
 
         except Exception as e:

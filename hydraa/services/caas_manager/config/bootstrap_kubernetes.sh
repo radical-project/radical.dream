@@ -1,24 +1,66 @@
 #!/bin/bash
 
-# install microk8s
-sudo snap install microk8s --classic
+git clone --depth=1 https://github.com/kubernetes-sigs/kubespray.git
 
-# add your user to the microk8s group
-sudo usermod -aG microk8s $USER
+KUBESPRAYDIR=$(pwd)/kubespray
+VENVDIR="$KUBESPRAYDIR/.venv"
+ANSIBLE_VERSION=2.12
 
-# create a .kube directory with:
-mkdir ~/.kube
+declare -a PIP=$(which pip3)
+declare -a PYTHON=$(which python3)
 
-# give the new directory the necessary permissions with:
-sudo chown -f -R $USER ~/.kube
+# support both venv and virtualenv
+if virtualenv --python=$PYTHON $VENVDIR; then
+        echo "$VENVDIR is created with virtualenv"
+else
+    echo "failed to create $VENVDIR with virtualenv"
 
-# the default ttl for Microk8s cluster to keep the historical event is 5m we increase it to 24 hours
-sudo sed -i s/--event-ttl=5m/--event-ttl=1440m/ /var/snap/microk8s/current/args/kube-apiserver
+    # try to create venv
+    if $(which python3) -m venv $VENVDIR; then
+       echo "$VENVDIR is created with venv"
+    else
+       echo "failed to create $VENVDIR with venv, exiting"
+       exit 1
+    fi
+fi
 
-# restart to apply the changes
-sudo snap restart microk8s
+source $VENVDIR/bin/activate
+cd $KUBESPRAYDIR
 
-touch $HOME/kubectl
-sudo echo -e "#!/bin/sh \n sudo microk8s kubectl $"@"" >  $HOME/kubectl
-chmod +x $HOME/kubectl
-sudo mv $HOME/kubectl /usr/local/bin
+declare -a PIP=$(which pip3)
+declare -a PYTHON=$(which python3)
+
+# https://stackoverflow.com/q/34819221/5977059
+$PIP install wheel
+$(which python3) setup.py bdist_wheel
+
+$PIP install -U -r requirements-$ANSIBLE_VERSION.txt
+
+# copy the sample inventory definitions from the repo.
+cp -rfp inventory/sample inventory/mycluster
+
+while getopts m:u:k: flag
+do
+      case "${flag}" in
+             m) map=${OPTARG};;
+             u) user=${OPTARG};;
+             k) key=${OPTARG};;
+      esac
+done
+
+# number of control plane nodes
+export KUBE_CONTROL_HOSTS=1
+
+# set the nodes names and ips (from controller to workers)
+declare -a MAP=($map)
+CONFIG_FILE=inventory/mycluster/hosts.yml $PYTHON contrib/inventory_builder/inventory.py ${MAP[@]}
+
+sed -i "s/\boverride_system_hostname: true\b/override_system_hostname: false/g" "roles/bootstrap-os/defaults/main.yml"
+
+# start the ansible playbook
+ansible-playbook -i inventory/mycluster/hosts.yml --private-key=$key -u $user --become cluster.yml  1>> ansible.out 2>> ansible.err
+
+# setup the master node kube config
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config

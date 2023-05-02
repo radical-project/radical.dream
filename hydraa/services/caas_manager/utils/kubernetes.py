@@ -5,13 +5,14 @@ import copy
 import json
 import uuid
 import atexit
+import shutil
 import datetime
 
 import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout, inject_kubeconfig, generate_eks_id
+from .misc          import sh_callout, generate_eks_id
 from hydraa         import CHI, JET2
 from kubernetes     import client
 #from azure.cli.core import get_default_cli
@@ -21,24 +22,34 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
-FAILED_STATE = ['Error', 'StartError','OOMKilled',
+CFAILED_STATE = ['Error', 'StartError','OOMKilled',
                 'ContainerCannotRun','DeadlineExceeded',
                 'CrashLoopBackOff', 'ImagePullBackOff',
                 'RunContainerError','ImageInspectError']
 
-RUNNING_STATE = ['ContainerCreating', 'Started']
-COMPLETED_STATE = ['Completed', 'completed']
+CRUNNING_STATE = ['ContainerCreating', 'Started']
+CCOMPLETED_STATE = ['Completed', 'completed']
+
+PFAILED_STATE = ['OutOfCPU','OutOfMemory',
+                'Error', 'CrashLoopBackOff',
+                'ImagePullBackOff', 'InvalidImageName',
+                'CreateContainerConfigError','RunContainerError',
+                'OOMKilled','ErrImagePull','Evicted']
+
 BUSY            = 'Busy'
 READY           = 'Ready'
 MAX_PODS        = 250
 SLEEP = 2
+
+KUBECTL = shutil.which('kubectl')
+
 
 # --------------------------------------------------------------------------
 #
 class Cluster:
     """
     This is a multithreaded Kuberentes base class that 
-    is build on the top of microK8s Kuberentes flavor 
+    is build on the top of k8s or microK8s Kuberentes flavor 
     (or any falvor). 
     
     This cluster controlls:
@@ -76,7 +87,7 @@ class Cluster:
             cluster_size (int)      : The number of cores each node has.
             sandbox      (str)      : A path for the folder of hydraa manager.
             log          (logging)  : A logger object.
-        
+
         """
         self.id           = run_id
         self.vm           = vm
@@ -97,39 +108,14 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def start(self):
-        """
-        The function to start the internal micok8s cluster.
-
-        Returns:
-            bool: True if passed.
-        """
-        self.remote.run('sudo microk8s start')
-        return True
-
-
-    # --------------------------------------------------------------------------
-    #
     def restart(self):
-        """
-        The function to restart a node of microk8s cluster.
-
-        Returns:
-            bool: True if passed.
-        """
-        self.remote.run('sudo snap restart microk8s')
-        return True
+        pass
 
 
     # --------------------------------------------------------------------------
     #
     def recover(self):
-        """
-        The function to recover the internal micok8s cluster if
-        stuck in halt.
-        """
-        self.remote.run('snap remove microk8s')
-        self.remote.run('sudo snap install microk8s')
+        pass
 
 
     # --------------------------------------------------------------------------
@@ -165,96 +151,83 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building Kubernetes cluster on {0} started....'.format(self.vm.Provider))
+        print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
+                                                                                   self.vm.Provider))
 
-        def _boottrap(node_conn, node_name):
+        if not KUBECTL:
+            raise Exception('Kubectl is required to manage Kuberentes cluster')
 
-            if self.vm.Provider == CHI:
-                # a workaround a bug in Chi and cloud-init: truncated hostname.
-                self.logger.trace('setting up node hostname')
-                node_conn.run('sudo hostnamectl set-hostname {0}'.format(node_name))
-
-            # add entries for all node to the hosts file of each node
-            for server in self.vm.Servers:
-                name = server.name
-                network = server.addresses.values()
-                fixed_ip = next(iter(network))[0]['addr']
-                node_conn.run('echo "{0} {1}" | sudo tee -a /etc/hosts'.format(fixed_ip, name),
-                                                                                   logger=True)
-
-                self.logger.trace("{0} {1} added to /etc/hosts".format(fixed_ip, name))
-
-            loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-
-            boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-            self.logger.trace('upload bootstrap.sh')
-            node_conn.put(boostrapper)
-
-            self.logger.trace('change bootstrap.sh permession')
-            res = node_conn.run("chmod +x bootstrap_kubernetes.sh", warn=True)
-
-            self.logger.trace('invoke bootstrap.sh')
-            # run bootstrapper code to the remote machine
-            # https://github.com/fabric/fabric/issues/2129
-
-            res = node_conn.run("./bootstrap_kubernetes.sh", in_stream=False, hide=True, warn=True)
-
-            if res.return_code:
-                self.logger.trace('failed to build Kuberentes node: {0}'.format(res.stderr))
-            else:
-                self.logger.trace(res.stdout)
-
-            self.profiler.prof('node_warmup_start', uid=self.id)
-
-            while True:
-                # wait for the microk8s to be ready
-                stream = node_conn.run('sudo microk8s status --wait-ready', in_stream=False)
-
-                # check if the cluster is ready to submit the pod
-                if "microk8s is running" in stream.stdout:
-                    self.logger.trace('booting Kuberentes node successful')
-                    with self.updater_lock:
-                        self.active_nodes +=1
-                    break
-                else:
-                    self.logger.trace('waiting for Kuberentes node to be active')
-                    time.sleep(SLEEP)
-
-            self.profiler.prof('node_warmup_stop', uid=self.id)
-
-        # bootstrap on all nodes
-        for node_name, node_conn in self.remote.items():
-            run_bootstrap = mt.Thread(target=_boottrap, args=(node_conn, node_name,),
-                                                           name='Thread-'+ node_name)
-            run_bootstrap.daemon = True
-            run_bootstrap.start()
-
-        self.profiler.prof('bootstrap_start', uid=self.id)
-
-        # wait for all nodes to come up
-        self.logger.trace('waiting for all Kuberentes nodes to be active')
-        while self.active_nodes < len(self.vm.Servers):
-            time.sleep(SLEEP)
-
-
-        # FIXME: find a better way to represent master / worker nodes
-        # master node connection
-        self.worker_nodes = list(self.remote.values())[1:]
         self.remote = list(self.remote.values())[0]
+    
+        self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
-        # only join workers when nodes > 1
-        if len(self.vm.Servers) > 1:
-            if self.worker_nodes:
-                # add worker nodes to master node
-                for worker_node in self.worker_nodes:
-                    self.join_master(worker_node)
-                    self.logger.trace('worker node is active and joined master node')
-            else:
-                print('no active worker nodes found, skipping adding nodes to the master...')
+        nodes_map = []
+        for server in self.vm.Servers:
+            network = server.addresses.values()
+            fixed_ip = next(iter(network))[0]['addr']
+            hostname_ip = server.name + ',' + fixed_ip
+            nodes_map.append(hostname_ip)
+        
 
-        self.profiler.prof('bootstrap_stop', uid=self.id)
+        # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
+        nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
 
-        print('Kubernetes cluster is active with {} nodes.'.format(len(self.vm.Servers)))
+        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+
+        boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
+
+        self.logger.trace('upload bootstrap.sh')
+
+        self.remote.put(boostrapper)
+
+        # bug in fabric: https://github.com/fabric/fabric/issues/323
+        remote_ssh_path = '/home/{0}/.ssh'.format(self.remote.user)
+        remote_key_path = remote_ssh_path + '/' + self.vm.KeyPair[0].split('.ssh/')[-1:][0]
+
+        for key in self.vm.KeyPair:
+            self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
+
+        self.logger.trace('change bootstrap.sh permission')
+
+        res = self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True)
+
+        self.logger.trace('invoke bootstrap.sh')
+
+        bootstrap_cmd = './bootstrap_kubernetes.sh -m "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_map,
+                                                                                           self.remote.user,
+                                                                                            remote_key_path)
+
+        res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
+
+        if res.return_code:
+            raise Exception('failed to build Kuberentes cluster: {0}'.format(res.stderr))
+        else:
+            self.logger.trace(res.stdout)
+
+        self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
+
+        self.kube_config = self.configure()
+
+        self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
+
+        print('Kubernetes cluster is active on provider: {0}'.format(self.vm.Provider))
+
+
+    # --------------------------------------------------------------------------
+    #
+    def configure(self):
+
+        self.logger.trace('creating .kube folder')
+        config_file = self.sandbox + "/.kube/config"
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
+
+        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+       
+        # FIXME: delay in here, why?
+        self.remote.get('.kube/config', local=config_file, preserve_mode=True)
+
+        return config_file
 
 
     # --------------------------------------------------------------------------
@@ -302,9 +275,9 @@ class Cluster:
 
                 pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                             resources = resources, command = ctask.cmd, env = envs)
-                
+
                 containers.append(pod_container)
-            
+
             pod_name      = "hydraa-pod-{0}".format(pod_id)
             pod_metadata  = client.V1ObjectMeta(name = pod_name)
 
@@ -366,33 +339,11 @@ class Cluster:
         depolyment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        name = os.path.basename(depolyment_file)
+        cmd = 'kubectl apply -f {0} --validate=false'.format(depolyment_file)
+        out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-        # remote mode: NSF cluster (we manage it via SSH)
-        # embeded mode: Azure/AWS we manage by merging
-        # the config of the cluster to the local machine
-
-        # check if we are in remote mode or embeded mode
-        if self.remote:
-            # upload the pods file to the remote machine
-            # we redirect the output to /dev/null as it with
-            # pods > 16K it can lead to OSEerror and socket closed
-            self.remote.put(depolyment_file)
-            cmd = 'kubectl apply -f {0} > /dev/null'.format(name)
-            res = self.remote.run(cmd, hide=True, warn=True)
-
-            if res.return_code:
-                raise Exception(res.stderr)
-
-        # we are in the embeded mode
-        else:
-            # just invoke a shell process
-            cmd = 'kubectl apply -f {0}'.format(depolyment_file)
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            out, err, ret = sh_callout(cmd, shell=True)
-
-            if ret:
-                raise Exception(err)
+        if ret:
+            raise Exception(err)
 
         print('all pods are submitted')
 
@@ -466,6 +417,61 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
+    def wait_to_finish(self, outgoing_q):
+
+        cmd  = 'kubectl '
+        cmd += 'get pod --field-selector=status.phase=Succeeded '
+        cmd += '| grep Completed* | wc -l'
+        cmd2  = 'kubectl get pods | grep -E "{0}" | wc -l'.format('|'.join(PFAILED_STATE))
+
+        self.profiler.prof('wait_pods_start', uid=self.id)
+
+        old_done  = 0
+        old_fail  = 0
+
+        while True:
+            done_pods = 0
+            fail_pods = 0
+
+            old_done  = done_pods
+            old_fail  = fail_pods
+
+            out, err, _ = sh_callout(cmd, shell=True, kube=self)
+            out2, err2, _ = sh_callout(cmd2, shell=True, kube=self)
+
+            done_pods = int(out.strip())
+            fail_pods = int(out2.strip())
+
+            if done_pods or fail_pods:
+                # logic error
+                if not self.pod_counter:
+                    continue
+
+                if self.pod_counter == int(done_pods):
+                    print('{0} pods finished with status "Completed"'.format(done_pods))
+                    break
+
+                elif self.pod_counter == int(fail_pods):
+                    print('{0} pods failed'.format(fail_pods))
+                    break
+
+                elif int(sum([done_pods, fail_pods])) == self.pod_counter:
+                    break
+                else:
+                    if old_done != done_pods or old_fail != fail_pods:
+                        msg = {'done': done_pods, 'failed': fail_pods}
+                        outgoing_q.put(msg)
+                    time.sleep(60)
+
+        self.status = READY
+
+        self.profiler.prof('wait_pods_stop', uid=self.id)
+
+        return True
+
+
+    # --------------------------------------------------------------------------
+    #
     def _get_task_statuses(self, pod_id=None):
 
         """
@@ -482,11 +488,8 @@ class Cluster:
 
         cmd = "kubectl get pods -A -o json"
         response = None
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         statuses   = []
         stopped    = []
@@ -514,27 +517,27 @@ class Cluster:
                                     container_res  = container_attr.get('reason', '')
                                     # case-1 terminated signal
                                     if next(iter(c['state'])) == 'terminated':
-                                        if container_res in COMPLETED_STATE:
+                                        if container_res in CCOMPLETED_STATE:
                                             if list(c['state'].values())[0]['exitCode'] == 0:
                                                 stopped.append(c['name'])
                                             else:
                                                 failed.append(c['name'])
                                                 self.logger.trace(container_msg)
 
-                                        if container_res in FAILED_STATE:
+                                        if container_res in CFAILED_STATE:
                                            failed.append(c['name'])
                                            self.logger.trace(container_msg)
 
                                     # case-2 running signal
                                     if next(iter(c['state'])) == 'running':
-                                            if container_res in RUNNING_STATE:
+                                            if container_res in CRUNNING_STATE:
                                                 running.append(c['name'])
 
                                     # case-3 waiting signal
                                     if next(iter(c['state'])) == 'waiting':
-                                        if container_res in RUNNING_STATE:
+                                        if container_res in CRUNNING_STATE:
                                              running.append(c['name'])
-                                        elif container_res in FAILED_STATE:
+                                        elif container_res in CFAILED_STATE:
                                             failed.append(c['name'])
                                             self.logger.trace(container_msg)
 
@@ -564,11 +567,8 @@ class Cluster:
 
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         response = None
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -594,18 +594,15 @@ class Cluster:
                             self.logger.trace('Pods did not finish yet or failed')
 
             return df
-    
+
 
     # --------------------------------------------------------------------------
     #
     def get_pod_events(self):
         
         cmd = 'kubectl get events -A -o json' 
-        if self.remote:
-            response = self.remote.run(cmd, hide=True, munch=True)
-        else:
-            cmd = inject_kubeconfig(cmd, self.kube_config)
-            response = sh_callout(cmd, shell=True, munch=True)
+
+        response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
@@ -693,51 +690,32 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def add_node(self):
-        """
-        This method should allow
-        x worker nodes to join the
-        master node (different vms or
-        pms) 
-        """
-        ret = self.remote.run('sudo microk8s add-node', logger=True, in_stream=False)
-        token = ret.stdout.split('\n')[7]
-        return token
-
-
-    # --------------------------------------------------------------------------
-    #
-    def join_master(self, worker):
-
-        token = self.add_node()
-        if 'microk8s' in token:
-            worker.run('sudo {0}'.format(token), logger=True, in_stream=False)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def stop(self):
-        self.remote.run('sudo microk8s stop', logger=True)
-
-
-    def delete(self):
         pass
-    
+
+
+    # --------------------------------------------------------------------------
+    #
+    def shutdown(self):
+        # nothing to shutdown here besides closing
+        # the ssh channels and tunnels
+        self.remote.close()
+        self._tunnel.stop()
+
+
 
 class AKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that:
 
-       1- Your user has the correct permessions for AKS and CLI.
-       2- Azure-cli is installed
-
-       NOTE: This class will overide any existing kubernetes
+       1- Your user has the correct permission for AKS and CLI.
+       2- Kubectl is installed
     """
 
     # --------------------------------------------------------------------------
     #
     def __init__(self, run_id, vm, sandbox, log):
         self.id             = run_id
-        self.cluster_name   = 'HydraaAksCluster'
+        self.cluster_name   = 'hydraa-aks-cluster'
         self.resource_group = vm.ResourceGroup
         self.nodes          = vm.MinCount
         self.config         = None
@@ -755,6 +733,10 @@ class AKS_Cluster(Cluster):
     def bootstrap(self):
 
         self.profiler.prof('bootstrap_start', uid=self.id)
+
+        if not KUBECTL:
+            raise Exception('Kubectl is required to manage AKS cluster')
+
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
@@ -766,12 +748,14 @@ class AKS_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('Building AKS cluster..')
+        print('building AKS cluster..')
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        print('AKS cluster is active on provider: {0}'.format(self.vm.Provider))
 
 
     # --------------------------------------------------------------------------
@@ -788,7 +772,7 @@ class AKS_Cluster(Cluster):
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        self.logger.trace('setting AKS KUBECONFIG path to: {0}'.format(config_file))
+        self.logger.trace('setting AKS kubeconfig path to: {0}'.format(config_file))
 
         cmd  = 'az aks get-credentials '
         cmd += '--admin --name {0} '.format(self.cluster_name)
@@ -809,7 +793,7 @@ class AKS_Cluster(Cluster):
         """
         add nodes to an existing cluster
         """
-        self.nodes_pool = 'hydraa_aks_nodepool'
+        self.nodes_pool = 'hydraa-aks-nodepool'
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group)
@@ -834,7 +818,7 @@ class AKS_Cluster(Cluster):
 
         range: list of 2 index [min_nodes, max_nodes]
         """
-        self.auto_scaler = 'hydraa_autoscale_aks_nodepool'
+        self.auto_scaler = 'hydraa-autoscale-aks-nodepool'
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group)
@@ -936,19 +920,18 @@ class EKS_Cluster(Cluster):
        This class asssumes that you did the one time
        preparational steps:
 
-       1- AWS-> eksctl installed 
-       2- AWS-> aws-iam-authenticator
-       2- In $HOME/.aws/credentials -> aws credentials
-       2- Kuberenetes-> kubectl installed
-
-       FIXME: For every run, export $KUBECONFIG
-       NOTE : This class will overide any existing kubernetes config
+       1- eksctl installed 
+       2- aws-iam-authenticator is installed 
+       3- Kubectl is installed 
+       4- In $HOME/.aws/credentials -> aws credentials
     """
+    EKSCTL = shutil.which('eksctl')
+    IAM_AUTH = shutil.which('aws-iam-authenticator')
 
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id             = run_id
-        self.cluster_name   = generate_eks_id(prefix='Hydraa-eks-cluster')
+        self.cluster_name   = generate_eks_id(prefix='hydraa-eks-cluster')
         self.config         = None
 
         self.iam            = iam
@@ -971,13 +954,15 @@ class EKS_Cluster(Cluster):
 
         # FIXME: let the user specify the kubernetes_v
         kubernetes_v  = '1.22'
-        NodeGroupName = generate_eks_id(prefix='Hydraa-eks-nodegroup')
+        NodeGroupName = generate_eks_id(prefix='hydraa-eks-nodegroup')
 
         # FIXME: Find a way to workaround
         #        the limited avilability
         #        zones.
         # https://github.com/weaveworks/eksctl/issues/817
 
+        if not self.EKSCTL or not self.IAM_AUTH or not KUBECTL:
+            raise Exception('eksctl/iam-auth/kubectl is required to manage EKS cluster')
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -986,39 +971,29 @@ class EKS_Cluster(Cluster):
 
         if not self.size:
             self.size = self.get_vm_size(self.vm.InstanceID) - 1
-        
-        # check if eksctl is intalled or not
-        out, err, ret = sh_callout('which eksctl', shell=True)
 
-        if ret:
-            print('eksctl is required to build EKS cluster: {0}'.format(err))
+        print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
 
-        eksctl_path = out.strip()
+        cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
+        cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
 
-        if eksctl_path:
-            self.logger.trace('eksctl found: {0}'.format(eksctl_path))
-    
-            print('Building eks cluster..')
-            cmd  = '{0} create cluster --name {1} '.format(eksctl_path, self.cluster_name)
-            cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+        if self.vm.Zones and len(self.vm.Zones) == 2:
+            cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
+        cmd += '--nodegroup-name {0} '.format(NodeGroupName)
+        cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
+        cmd += '--kubeconfig {0}'.format(self.kube_config)
 
-            if self.vm.Zones and len(self.vm.Zones) == 2:
-                cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
-            cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-            cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
-            cmd += '--kubeconfig {0}'.format(self.kube_config)
-
-            out, err, ret = sh_callout(cmd, shell=True)
+        out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
             print('failed to build EKS cluster: {0}'.format(err))
             self.logger.trace(err)
 
-        print('EKS cluster is ready!')
-
         self.logger.trace(out)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        print('EKS cluster is active on provider: {0}'.format(self.vm.Provider))
 
 
     # --------------------------------------------------------------------------
@@ -1046,7 +1021,7 @@ class EKS_Cluster(Cluster):
         range[1] int   maximum nodes in ASG (default 2)
         """
         
-        name = 'Hydraa-Eks-NodeGroup-AutoScaler{0}'.format(str(uuid.uuid4()))
+        name = 'hydraa-eks-nodegroup-autoscaler{0}'.format(str(uuid.uuid4()))
 
         cmd  = 'eksctl create nodegroup --name {0} '.format(name)
         cmd += '--cluster {0} --node-type {1} '.format(self.cluster_name, 
