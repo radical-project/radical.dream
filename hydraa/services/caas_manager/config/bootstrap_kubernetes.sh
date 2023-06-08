@@ -4,7 +4,6 @@ git clone --depth=1 https://github.com/kubernetes-sigs/kubespray.git
 
 KUBESPRAYDIR=$(pwd)/kubespray
 VENVDIR="$KUBESPRAYDIR/.venv"
-ANSIBLE_VERSION=2.12
 
 declare -a PIP=$(which pip3)
 declare -a PYTHON=$(which python3)
@@ -34,7 +33,7 @@ declare -a PYTHON=$(which python3)
 $PIP install wheel
 $(which python3) setup.py bdist_wheel
 
-$PIP install -U -r requirements-$ANSIBLE_VERSION.txt
+$PIP install -U -r requirements.txt
 
 # copy the sample inventory definitions from the repo.
 cp -rfp inventory/sample inventory/mycluster
