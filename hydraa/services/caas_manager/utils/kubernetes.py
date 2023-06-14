@@ -223,8 +223,7 @@ class Cluster:
         open(config_file, 'x')
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-       
-        # FIXME: delay in here, why?
+
         self.remote.get('.kube/config', local=config_file, preserve_mode=True)
 
         return config_file
@@ -245,20 +244,18 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
-
-        pods            = []
-        pods_names      = []
-
-        self.profiler.prof('schedule_pods_start', uid=self.id)
-        batches         = self.schedule(ctasks)
-        self.profiler.prof('schedule_pods_stop', uid=self.id)
-
+        kube_pods = []
+        kube_containers = []
         depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
-        for batch in batches:
-            pod_id     = str(self.pod_counter).zfill(6)
-            containers = []
+        def _build_pod(batch: list):
 
+            pod_id = str(self.pod_counter).zfill(6)
+            pod_name = "hydraa-pod-{0}".format(pod_id)
+            pod_metadata = client.V1ObjectMeta(name = pod_name)
+
+            # build n container(s)
+            containers = []
             self.profiler.prof('create_pod_start', uid=pod_id)
             for ctask in batch:
                 envs = []
@@ -278,10 +275,7 @@ class Cluster:
 
                 containers.append(pod_container)
 
-            pod_name      = "hydraa-pod-{0}".format(pod_id)
-            pod_metadata  = client.V1ObjectMeta(name = pod_name)
-
-            # check if we need to restart the task
+            # feed the containers to the pod object
             if ctask.restart:
                 restart_policy = ctask.restart
             else:
@@ -296,26 +290,64 @@ class Cluster:
             # santize the json object
             sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
 
-            pods.append(sn_pod)
-            pods_names.append(pod_name)
-
-            self.pod_counter +=1
-        
             self.profiler.prof('create_pod_stop', uid=pod_id)
 
+            self.pod_counter +=1
+
+            return sn_pod
+
+        def _build_mpi_deployment(mpi_task):
+            import yaml
+            with open("cylon_mpi_concat.yaml", "r") as file:
+                deployment_data = yaml.safe_load(file)
+                # Update the desired values
+                deployment_data["metadata"]["name"] = mpi_task.name
+                launcher = deployment_data['spec']['mpiReplicaSpecs']['Launcher']
+                worker = deployment_data['spec']['mpiReplicaSpecs']['Worker']
+                worker['replicas'] = 2
+                launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+                worker['template']['spec']['containers'][0]['image'] = mpi_task.image
+                launcher['template']['spec']['containers'][0]['args'] = mpi_task.cmd
+
+            # Write the updated content back to the file
+            with open(depolyment_file, "w") as file:
+                json.dump(deployment_data, file)
+
+            return depolyment_file, [], []
+
+        for ctask in ctasks:
+            if not ctask.type or ctask.type == 'pod' :
+                pod = _build_pod(batch=[ctask])
+                kube_pods.append(pod)
+
+            elif ctask.type == 'container':
+                kube_containers.append(ctask)
+
+            elif ctask.type == 'container.mpi':
+                _build_mpi_deployment(batch=[ctask])
+
+        if kube_containers:
+            self.profiler.prof('schedule_pods_start', uid=self.id)
+            batches = self.schedule(kube_containers)
+            self.profiler.prof('schedule_pods_stop', uid=self.id)
+
+            for batch in batches:
+                pod = _build_pod(batch)
+                kube_pods.append(pod)
+
         with open(depolyment_file, 'w') as f:
-            for p in pods:
+            for p in kube_pods:
                 print(p, file=f)
 
         # we are faking a json file here
         with open(depolyment_file, "r") as f:
             text = f.read()
             text = text.replace("'", '"')
-        
+
         with open(depolyment_file, "w") as f:
             text = f.write(text)
 
-        return depolyment_file, pods_names, batches
+        return depolyment_file, [], []
 
 
     # --------------------------------------------------------------------------
@@ -350,7 +382,7 @@ class Cluster:
         self.status = BUSY
 
         return depolyment_file, pods_names, batches
-
+    
 
     # --------------------------------------------------------------------------
     #

@@ -19,12 +19,10 @@ class Task(Future):
         self.ip       = None
         self.port     = None
         self.arn      = None
-
+        self.type     = None
         self.cmd      = None
         self.image    = None
-
         self.state    = None
-
         self.restart  = None
 
 
@@ -176,3 +174,17 @@ class Task(Future):
         """
         pass
 
+class Pod:
+    global containers
+    containers = []
+    
+    def add_containers(tasks: list):
+        for t in tasks:
+            containers.append(t)
+
+    def get_containers():
+        return containers
+
+
+class MPI_Pod(Pod):
+    pass
