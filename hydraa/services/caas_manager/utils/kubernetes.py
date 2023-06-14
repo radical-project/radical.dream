@@ -298,18 +298,22 @@ class Cluster:
 
         def _build_mpi_deployment(mpi_task):
             import yaml
-            with open("cylon_mpi_concat.yaml", "r") as file:
-                deployment_data = yaml.safe_load(file)
-                # Update the desired values
-                deployment_data["metadata"]["name"] = mpi_task.name
-                launcher = deployment_data['spec']['mpiReplicaSpecs']['Launcher']
-                worker = deployment_data['spec']['mpiReplicaSpecs']['Worker']
-                worker['replicas'] = 2
-                launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
-                worker['template']['spec']['containers'][0]['image'] = mpi_task.image
-                launcher['template']['spec']['containers'][0]['args'] = mpi_task.cmd
+            loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+            mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
 
-            # Write the updated content back to the file
+            with open(mpi_kubeflow_template, "r") as file:
+                deployment_data = yaml.safe_load(file)
+    
+            # Update the desired values
+            deployment_data["metadata"]["name"] = mpi_task.name
+            launcher = deployment_data['spec']['mpiReplicaSpecs']['Launcher']
+            worker = deployment_data['spec']['mpiReplicaSpecs']['Worker']
+            worker['replicas'] = 2
+            launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+            worker['template']['spec']['containers'][0]['image']   = mpi_task.image
+            launcher['template']['spec']['containers'][0]['args']  = mpi_task.cmd
+
+            # Write the updated content back to another file
             with open(depolyment_file, "w") as file:
                 json.dump(deployment_data, file)
 

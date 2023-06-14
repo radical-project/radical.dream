@@ -4,7 +4,8 @@ setup_args = {}
 
 setup_args['name']                 = "hydraa"
 setup_args['version']              = "1.0.0"
-setup_args['scripts']              = ['hydraa/services/caas_manager/config/bootstrap_kubernetes.sh']
+setup_args['scripts']              = ['hydraa/services/caas_manager/config/bootstrap_kubernetes.sh',
+                                      'hydraa/services/caas_manager/config/kubeflow_kubernetes.yaml']
 setup_args['packages']             = find_packages()
 setup_args['package_data']         = {'': ['*.sh']}
 setup_args['python_requires']      = '>=3.6'
