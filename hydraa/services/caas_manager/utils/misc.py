@@ -6,6 +6,7 @@ import logging
 import subprocess as sp
 
 from pathlib import Path
+from kubernetes import client
 
 
 TRUE=true=True
@@ -130,3 +131,92 @@ def generate_eks_id(prefix="eks", length=8):
     random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
     cluster_id = "{0}-{1}".format(prefix, random_string)
     return cluster_id
+
+
+# --------------------------------------------------------------------------
+#
+def build_pod(batch: list, pod_id):
+
+    pod_name = "hydraa-pod-{0}".format(pod_id)
+    pod_metadata = client.V1ObjectMeta(name = pod_name)
+
+    # build n container(s)
+    containers = []
+    
+    for ctask in batch:
+        envs = []
+        if ctask.env_var:
+            for env in ctask.env_vars:
+                pod_env  = client.V1EnvVar(name = env[0], value = env[1])
+                envs.append(pod_env)
+
+        pod_cpu = "{0}m".format(ctask.vcpus * 1000)
+        pod_mem = "{0}Mi".format(ctask.memory)
+
+        resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
+                                                    limits={"cpu": pod_cpu, "memory": pod_mem})
+
+        pod_container = client.V1Container(name = ctask.name, image = ctask.image,
+                    resources = resources, command = ctask.cmd, env = envs)
+
+        containers.append(pod_container)
+
+    # feed the containers to the pod object
+    if ctask.restart:
+        restart_policy = ctask.restart
+    else:
+        restart_policy = 'Never'
+
+    pod_spec  = client.V1PodSpec(containers=containers,
+                        restart_policy=restart_policy)
+
+    pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
+                    metadata=pod_metadata, spec=pod_spec)
+
+    # santize the json object
+    sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
+
+    return sn_pod
+
+
+# --------------------------------------------------------------------------
+#
+def build_mpi_deployment(mpi_task, fp, slots, launchers, workers):
+    import yaml
+    loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+    mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
+
+    with open(mpi_kubeflow_template, "r") as file:
+        kubeflow_temp = yaml.safe_load(file)
+
+    kubeflow_temp['spec']['slotsPerWorker'] = slots
+    kubeflow_temp["metadata"]["name"] = mpi_task.name
+
+    worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
+    launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
+
+    worker['replicas'] = workers
+    launcher['replicas'] = launchers
+    launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+    worker['template']['spec']['containers'][0]['image']   = mpi_task.image
+    launcher['template']['spec']['containers'][0]['args']  = mpi_task.cmd
+
+    with open(fp, "w") as file:
+        kubeflow_temp = yaml.dump(file)
+
+
+# --------------------------------------------------------------------------
+#
+def dump_deployemnt(kube_pods, fp):
+    with open(fp, 'w') as f:
+        for p in kube_pods:
+            print(p, file=f)
+
+    # we are faking a json file here
+    with open(fp, "r") as f:
+        text = f.read()
+        text = text.replace("'", '"')
+
+    with open(fp, "w") as f:
+        text = f.write(text)
+
