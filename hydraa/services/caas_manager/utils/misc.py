@@ -181,6 +181,27 @@ def build_pod(batch: list, pod_id):
 
 # --------------------------------------------------------------------------
 #
+def calculate_kubeflow_workers(nodes, cpn, task):
+    # FIXME: The work down need to be part of a
+    # ``SCHEDULER``.
+    num_workers = 0
+    total_cpus = nodes * cpn
+    
+    if task.cpus > total_cpus:
+        print('Insufficient cpus to run container of size {0}'.format(task.cpus))
+        return num_workers
+
+    if cpn < task.cpus:
+        import math
+        num_workers = math.ceil(task.cpus / cpn)
+        return num_workers
+
+    elif cpn >= task.cpus:
+        num_workers = 1
+
+
+# --------------------------------------------------------------------------
+#
 def build_mpi_deployment(mpi_task, fp, slots, launchers, workers):
     import yaml
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
@@ -219,4 +240,5 @@ def dump_deployemnt(kube_pods, fp):
 
     with open(fp, "w") as f:
         text = f.write(text)
+
 

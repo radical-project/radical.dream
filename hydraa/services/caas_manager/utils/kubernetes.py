@@ -20,6 +20,7 @@ from .misc import sh_callout
 from .misc import generate_eks_id
 from .misc import dump_deployemnt
 from .misc import build_mpi_deployment
+from .misc import calculate_kubeflow_workers
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -250,6 +251,7 @@ class Cluster:
         """
         kube_pods = []
         kube_containers = []
+        kube_mpi_containers = []
         depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
         pod_id = str(self.pod_counter).zfill(6)
@@ -257,21 +259,24 @@ class Cluster:
 
         #self.profiler.prof('create_pod_stop', uid=pod_id)
 
+        # FIXME: The work down need to be part of a
+        # ``SCHEDULER`` not pod generator.
         for ctask in ctasks:
-            # Single Container Per Pod
+            # Single Container Per Pod.
+            # We depend on the kubernetes scheduler here.
             if ctask.type == 'pod' or not ctask.type:
-                pod = build_pod(batch=[ctask])
+                pod = build_pod([ctask], pod_id)
                 kube_pods.append(pod)
                 self.pod_counter +=1
-            
+
             # Multiple Containers Per Pod
+            # TODO: use orhestrator.scheduler
             elif ctask.type == 'container':
                 kube_containers.append(ctask)
 
             # Kubeflow based MPI-Pods
             elif ctask.type == 'container.mpi':
-                build_mpi_deployment(depolyment_file, batch=[ctask])
-                #FIXME: how do we increase the pod_id with MPI pods?
+                kube_mpi_containers.append(ctask)
 
         if kube_containers:
             # FIXME: use orhestrator.scheduler
@@ -280,11 +285,18 @@ class Cluster:
             self.profiler.prof('schedule_pods_stop', uid=self.id)
 
             for batch in batches:
-                pod = build_pod(batch)
+                pod = build_pod(batch, pod_id)
                 kube_pods.append(pod)
                 self.pod_counter +=1
+
+            dump_deployemnt(kube_pods, depolyment_file)
         
-        dump_deployemnt(kube_pods, depolyment_file)
+        if kube_mpi_containers:
+            # FIXME: support heterogenuous tasks
+            workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
+            build_mpi_deployment(kube_mpi_containers[0], dump_deployemnt, self.size,
+                                len(kube_mpi_containers), workers)
+            self.pod_counter +=1
 
         return depolyment_file, [], []
 
