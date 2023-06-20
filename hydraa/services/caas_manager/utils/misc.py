@@ -228,7 +228,7 @@ def build_mpi_deployment(mpi_task, fp, slots, launchers, workers):
 
 # --------------------------------------------------------------------------
 #
-def dump_deployemnt(kube_pods, fp):
+def dump_deployment(kube_pods, fp):
     with open(fp, 'w') as f:
         for p in kube_pods:
             print(p, file=f)

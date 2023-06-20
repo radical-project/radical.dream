@@ -59,6 +59,9 @@ sed -i "s/\boverride_system_hostname: true\b/override_system_hostname: false/g" 
 # start the ansible playbook
 ansible-playbook -i inventory/mycluster/hosts.yml --private-key=$key -u $user --become cluster.yml  1>> ansible.out 2>> ansible.err
 
+# install Kubeflow MPI-Operator
+kubectl create -f https://raw.githubusercontent.com/kubeflow/mpi-operator/master/deploy/v2beta1/mpi-operator.yaml
+
 # setup the master node kube config
 mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config

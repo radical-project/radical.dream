@@ -18,7 +18,7 @@ from hydraa import CHI, JET2
 from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
-from .misc import dump_deployemnt
+from .misc import dump_deployment
 from .misc import build_mpi_deployment
 from .misc import calculate_kubeflow_workers
 
@@ -252,7 +252,7 @@ class Cluster:
         kube_pods = []
         kube_containers = []
         kube_mpi_containers = []
-        depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
+        deployment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
         pod_id = str(self.pod_counter).zfill(6)
         #self.profiler.prof('create_pod_start', uid=pod_id)
@@ -289,16 +289,18 @@ class Cluster:
                 kube_pods.append(pod)
                 self.pod_counter +=1
 
-            dump_deployemnt(kube_pods, depolyment_file)
-        
+        if kube_pods:
+            dump_deployment(kube_pods, deployment_file)
+
         if kube_mpi_containers:
             # FIXME: support heterogenuous tasks
             workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
-            build_mpi_deployment(kube_mpi_containers[0], dump_deployemnt, self.size,
-                                len(kube_mpi_containers), workers)
+            build_mpi_deployment(mpi_task=kube_mpi_containers[0], fp=deployment_file,
+                                 slots=self.size, launchers=len(kube_mpi_containers),
+                                 workers=workers)
             self.pod_counter +=1
 
-        return depolyment_file, [], []
+        return deployment_file, [], []
 
 
     # --------------------------------------------------------------------------
@@ -319,10 +321,10 @@ class Cluster:
         """
 
         self.profiler.prof('generate_pods_start', uid=self.id)
-        depolyment_file, pods_names, batches = self.generate_pods(ctasks)
+        deployment_file, pods_names, batches = self.generate_pods(ctasks)
         self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        cmd = 'kubectl apply -f {0} --validate=false'.format(depolyment_file)
+        cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
         out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
         if ret:
@@ -332,7 +334,7 @@ class Cluster:
 
         self.status = BUSY
 
-        return depolyment_file, pods_names, batches
+        return deployment_file, pods_names, batches
     
 
     # --------------------------------------------------------------------------
@@ -869,12 +871,12 @@ class AKS_Cluster(Cluster):
     #
     def submit(self, ctasks):
 
-        depolyment_file, pods_names, batches = super().submit(ctasks)
+        deployment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
         super().collect_profiles()
 
-        return depolyment_file, pods_names, batches
+        return deployment_file, pods_names, batches
     
 
     # --------------------------------------------------------------------------
@@ -1087,12 +1089,12 @@ class EKS_Cluster(Cluster):
     #
     def submit(self, ctasks):
 
-        depolyment_file, pods_names, batches = super().submit(ctasks)
+        deployment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
         super().collect_profiles()
 
-        return depolyment_file, pods_names, batches
+        return deployment_file, pods_names, batches
 
 
     # --------------------------------------------------------------------------
