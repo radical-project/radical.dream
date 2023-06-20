@@ -165,7 +165,7 @@ class Jet2Caas():
                     task = self.incoming_q.get(block=True, timeout=min_bulk_time)
                 except queue.Empty:
                         task = None
-                
+
                 if task:
                         bulk.append(task)
                 

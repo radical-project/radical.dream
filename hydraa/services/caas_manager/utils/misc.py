@@ -222,7 +222,8 @@ def build_mpi_deployment(mpi_task, fp, slots, workers):
     worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
     worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
 
-    cmd_list = mpi_task.cmd.split(" ").insert(0, mpi_task.vcpus)
+    cmd_list = mpi_task.cmd.split(" ")
+    cmd_list.insert(0, str(mpi_task.vcpus))
     for c in cmd_list:
         launcher['template']['spec']['containers'][0]['args'].append(c)
 

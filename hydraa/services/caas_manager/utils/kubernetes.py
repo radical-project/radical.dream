@@ -830,7 +830,7 @@ class AKS_Cluster(Cluster):
         """
 
         if not self.auto_scaler:
-            raise Exception('No autoscaler in this cluster, you need to create one')
+            self.logger.error('No autoscaler in this cluster, you need to create one')
         
         cmd = 'az aks nodepool update '
         cmd += '--update-cluster-autoscaler '

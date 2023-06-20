@@ -160,8 +160,7 @@ class CaasManager:
             try:
                 msg = manager_queue.get(block=True, timeout=0.1)
                 if msg:
-                    self.log.trace('manager {0} reported: {1}'.format(manager_name,
-                                                                              msg))
+                    self.log.trace('{0} reported: {1}'.format(manager_name, msg))
             except queue.Empty:
                 continue
 
