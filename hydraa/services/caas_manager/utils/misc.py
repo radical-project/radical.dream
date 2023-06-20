@@ -1,4 +1,6 @@
 import os
+import yaml
+import json
 import shlex
 import string
 import random
@@ -105,7 +107,7 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     setattr(logging, levelName, levelNum)
     setattr(logging.getLoggerClass(), methodName, logForLevel)
     setattr(logging, methodName, logToRoot)
-    logging.basicConfig(filename=path , format='%(asctime)s | %(module)s: %(message)s')
+    logging.basicConfig(filename=path , format='%(asctime)s | %(levelname)s: %(module)s: %(message)s')
     logging.getLogger(__name__).setLevel("TRACE")
 
     return logging.getLogger(__name__)
@@ -187,23 +189,23 @@ def calculate_kubeflow_workers(nodes, cpn, task):
     num_workers = 0
     total_cpus = nodes * cpn
     
-    if task.cpus > total_cpus:
-        print('Insufficient cpus to run container of size {0}'.format(task.cpus))
+    if task.vcpus > total_cpus:
+        print('Insufficient cpus to run container of size {0}'.format(task.vcpus))
         return num_workers
 
-    if cpn < task.cpus:
+    if cpn < task.vcpus:
         import math
-        num_workers = math.ceil(task.cpus / cpn)
+        num_workers = math.ceil(task.vcpus / cpn)
         return num_workers
 
-    elif cpn >= task.cpus:
+    elif cpn >= task.vcpus:
         num_workers = 1
 
 
 # --------------------------------------------------------------------------
 #
-def build_mpi_deployment(mpi_task, fp, slots, launchers, workers):
-    import yaml
+def build_mpi_deployment(mpi_task, fp, slots, workers):
+    
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
     mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
 
@@ -217,13 +219,18 @@ def build_mpi_deployment(mpi_task, fp, slots, launchers, workers):
     launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
 
     worker['replicas'] = workers
-    launcher['replicas'] = launchers
+    worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+    worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
+
+    cmd_list = mpi_task.cmd.split(" ").insert(0, mpi_task.vcpus)
+    for c in cmd_list:
+        launcher['template']['spec']['containers'][0]['args'].append(c)
+
     launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
     worker['template']['spec']['containers'][0]['image']   = mpi_task.image
-    launcher['template']['spec']['containers'][0]['args']  = mpi_task.cmd
 
     with open(fp, "w") as file:
-        kubeflow_temp = yaml.dump(file)
+        kubeflow_temp = json.dump(kubeflow_temp, file)
 
 
 # --------------------------------------------------------------------------

@@ -293,11 +293,10 @@ class Cluster:
             dump_deployment(kube_pods, deployment_file)
 
         if kube_mpi_containers:
-            # FIXME: support heterogenuous tasks
+            # FIXME: support heterogenuous tasks and fit them within the MPI world size
             workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
             build_mpi_deployment(mpi_task=kube_mpi_containers[0], fp=deployment_file,
-                                 slots=self.size, launchers=len(kube_mpi_containers),
-                                 workers=workers)
+                                 slots=self.size, workers=workers)
             self.pod_counter +=1
 
         return deployment_file, [], []
@@ -328,7 +327,7 @@ class Cluster:
         out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
         if ret:
-            raise Exception(err)
+            self.logger.error(err)
 
         print('all pods are submitted')
 

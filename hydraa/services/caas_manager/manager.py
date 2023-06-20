@@ -187,9 +187,9 @@ class CaasManager:
                     print('submitting tasks: ', tasks_counter, end='\r')
                     tasks_counter +=1
 
-                if task.provider not in self._registered_managers.keys():
-                    self.log.trace('no manager ({0}) found for task {0}'.format(task.provider,
-                                                                                        task))
+                if not task.provider or task.provider not in self._registered_managers.keys():
+                    self.log.warning('no manager found for this task, submitting to a any manager')
+                    list(self._registered_managers.values())[0]['in_q'].put(task)
 
 
     # --------------------------------------------------------------------------
