@@ -12,31 +12,28 @@ class KubeflowMPILauncher:
 
     # --------------------------------------------------------------------------
     #
-    def launch_mpi_container(self, task):
+    def launch_mpi_container(self, tasks):
 
-        deployment_path = '{0}/kubeflow_pods.json'.format(self.cluster.sandbox,
-                                                          self.cluster.id)
-        build_mpi_deployment(mpi_task=task, fp=deployment_path,
-                            slots=self.slots_per_worker, workers=self.num_workers)
-        
-        self.cluster.pod_counter += 1
-        self.cluster.submit(deployment_file=deployment_path)
-    
+        for task in tasks:
+            task.type = 'container.mpi'
+            task.mpi_setup = [self.num_workers, self.slots_per_worker]
+            self.manager.incoming_q.put(task)
 
     # --------------------------------------------------------------------------
     #
     def kill(self):
         cmd = "kubectl delete MPIJob"
-        res = self.cluster.remote.run(cmd)
+        res = self.manager.cluster.remote.run(cmd)
 
 
 # --------------------------------------------------------------------------
 #
 class Kubeflow():
 
-    def __init__(self, cluster, launcher):
-        self.cluster = cluster
-        self.launcher = launcher
+    def __init__(self, manager):
+        self.manager = manager
+        self.launcher = None
+        self.cluster = self.manager.cluster
 
 
     # --------------------------------------------------------------------------
@@ -61,7 +58,7 @@ class Kubeflow():
 
     # --------------------------------------------------------------------------
     #
-    def __enter__(self):
+    def start(self, launcher):
 
         while True:
             if self.cluster and self.cluster.status =='Ready':
@@ -72,16 +69,11 @@ class Kubeflow():
                 kf_cmd = "kubectl create -f "
                 kf_cmd += "https://raw.githubusercontent.com/kubeflow/mpi-operator/master/deploy/v2beta1/mpi-operator.yaml"
 
-                self.launcher.cluster = self.cluster
+                self.launcher = launcher
+                self.launcher.manager = self.manager
                 res = self.cluster.remote.run(kf_cmd)
                 break
             else:
                 time.sleep(5)
 
         return self
-
-
-    # --------------------------------------------------------------------------
-    #
-    def __exit__(self, type, value, traceback):
-        pass

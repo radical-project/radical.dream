@@ -204,17 +204,17 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 
 # --------------------------------------------------------------------------
 #
-def build_mpi_deployment(mpi_task, fp, slots, workers):
-    
+def build_mpi_deployment(mpi_tasks, fp, slots, workers):
+
+    mpi_task = mpi_tasks[0]
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
     mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
 
     with open(mpi_kubeflow_template, "r") as file:
         kubeflow_temp = yaml.safe_load(file)
 
+    kubeflow_temp["metadata"]["name"] += "-" + mpi_task.name
     kubeflow_temp['spec']['slotsPerWorker'] = slots
-    # kubeflow_temp["metadata"]["name"] = mpi_task.name
-
     worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
     launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
 
@@ -227,6 +227,7 @@ def build_mpi_deployment(mpi_task, fp, slots, workers):
     for c in cmd_list:
         launcher['template']['spec']['containers'][0]['args'].append(c)
 
+    launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
     launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
     worker['template']['spec']['containers'][0]['image']   = mpi_task.image
 

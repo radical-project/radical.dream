@@ -306,11 +306,19 @@ class Cluster:
         if kube_pods:
             dump_deployment(kube_pods, deployment_file)
 
+        # FIXME: use orhestrator.mpi_scheduler
+        # FIXME: support heterogenuous tasks and fit them within the MPI world size
         if kube_mpi_containers:
-            # FIXME: support heterogenuous tasks and fit them within the MPI world size
-            workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
-            build_mpi_deployment(mpi_task=kube_mpi_containers[0], fp=deployment_file,
-                                 slots=self.size, workers=workers)
+            workers = 1
+            slots_per_worker = self.size
+            if kube_mpi_containers[0].mpi_setup:
+                workers = kube_mpi_containers[0].mpi_setup[0]
+                slots_per_worker = kube_mpi_containers[0].mpi_setup[1]
+            else:
+                workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
+
+            build_mpi_deployment(mpi_tasks=kube_mpi_containers, fp=deployment_file,
+                                 slots=slots_per_worker, workers=workers)
             self.pod_counter +=1
 
         return deployment_file, [], []
@@ -498,18 +506,19 @@ class Cluster:
 
         response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
-        statuses   = []
+        statuses   = {}
         stopped    = []
-        failed     = [] 
+        failed     = []
         running    = []
 
         if response:
-            items = response['items']
+            items = response.get('items', [])
             for item in items:
                 if item['kind'] == 'Pod':
+                    pod_name = item['metadata'].get('name', '')
                     # this is a hydraa pod
-                    if item['metadata']['name'].startswith('hydraa-pod-') or \
-                        item['metadata']['name'].startswith('hydraa-mpi-launcher'):
+                    if pod_name.startswith('hydraa-pod-') or \
+                        pod_name.startswith('hydraa-mpi-ctask') and 'launcher' in pod_name:
                         already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):
@@ -551,10 +560,7 @@ class Cluster:
 
                                     already_checked.append(c['name'])
 
-            statuses.append(stopped)
-            statuses.append(failed)
-            statuses.append(running)
-
+            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
             return statuses
 
 

@@ -514,43 +514,30 @@ class ChiCaas:
 
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
-
+        
+        marked_tasks = []
+        
         while not self._terminate.is_set():
 
             statuses = self.cluster._get_task_statuses()
 
-            stopped = statuses[0]
-            failed  = statuses[1]
-            running = statuses[2]
-            msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
-                                                                len(stopped),
-                                                                len(running))
+            msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
+                                                                len(statuses['stopped']),
+                                                                len(statuses['running']))
 
             for task in self._tasks_book.values():
-                if task.name in stopped:
-                    if task.done():
-                        continue
-                    else:
-                        task.set_result('Done')
+                if task in marked_tasks:
+                    continue
+                if task.name in statuses['stopped']:
+                    task.set_result('Done')
 
-                # FIXME: better approach?
-                elif task.name in failed:
-                    try:
-                        # check if the task marked failed
-                        # or not and wait for 0.1s to return
-                        exc = task.exception(0.1)
-                        if exc:
-                            # we already marked it
-                            continue
-                    except TimeoutError:
-                        # never marked so mark it.
-                        task.set_exception('Failed')
+                elif task.name in statuses['failed']:
+                    task.set_exception(Exception('Failed'))
 
-                elif task.name in running:
-                    if task.running():
-                        continue
-                    else:
-                        task.set_running_or_notify_cancel()
+                elif task.name in statuses['running']:
+                    task.set_running_or_notify_cancel()
+                
+                marked_tasks.append(task)
 
             self.outgoing_q.put(msg)
 
