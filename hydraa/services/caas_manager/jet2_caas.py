@@ -359,7 +359,7 @@ class Jet2Caas():
 
         server_name = 'hydraa-server-{0}'.format(self.run_id)
 
-        self.logger.trace('creating {0}'.format(server_name))
+        self.logger.trace('creating {0} x [{1}]'.format(server_name, min_count))
 
         user_data = ''
         # bug: https://github.com/ansible/ansible/issues/51663

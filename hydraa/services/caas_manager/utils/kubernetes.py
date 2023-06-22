@@ -194,38 +194,32 @@ class Cluster:
             self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
 
         self.logger.trace('change bootstrap.sh permission')
-
         self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True, hide=True)
-
         self.logger.trace('invoke bootstrap.sh')
 
-        bootstrap_cmd = './bootstrap_kubernetes.sh -m "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_map,
-                                                                                                  self.remote.user,
-                                                                                                  remote_key_path)
+        # start the bootstraping as a background process.
+        bootstrap_cmd = 'nohup ./bootstrap_kubernetes.sh '
+        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
+                                                                 self.remote.user,
+                                                                 remote_key_path)
+        bootstrap_cmd += '/dev/null < /dev/null &'
+        bootstrap_res = self.remote.run(bootstrap_cmd, hide=True, warn=True)
 
-        bootstrap_res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
+        timeout_minutes = 20
+        start_time = time.time()
 
-        """
         while True:
             check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
             if not check_cluster.return_code:
+                self.logger.trace('installation succeeded, logs are under $HOME/kubespray/ansible.*')
                 break
             else:
-                time.sleep(10)
-        """
-
-        # sometimes fabric triggers a return code on warning
-        if bootstrap_res.return_code:
-            # so check if kubectl is installed or not
-            check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
-            # we failed for sure
-            if check_cluster.return_code:
-                raise Exception('failed to build Kuberentes cluster: {0}'.format(bootstrap_res.stderr))
-            else:
-                self.logger.warning('Kubernetes is installed succefully.')
-        else:
-            self.logger.trace('Kubernetes is installed succefully, logs are under $HOME/kubespray/ansible.*')
-
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= timeout_minutes * 60:
+                    raise Exception('timeout: failed to install Kubernetes within the specified time.')
+                else:
+                    self.logger.warning('installation is still in progress. Retrying in 1 minute.')
+                    time.sleep(60)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
@@ -712,9 +706,10 @@ class Cluster:
     def shutdown(self):
         # nothing to shutdown here besides closing
         # the ssh channels and tunnels
-        self.remote.close()
-        self._tunnel.stop()
-
+        if self.remote:
+            self.remote.close()
+            if self._tunnel:
+                self._tunnel.stop()
 
 
 class AKS_Cluster(Cluster):

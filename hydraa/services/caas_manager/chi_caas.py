@@ -308,7 +308,7 @@ class ChiCaas:
 
         server_name = 'hydraa-chi-{0}'.format(self.run_id)
         instance    = None
-        self.logger.trace('creating {0}'.format(server_name))
+        self.logger.trace('creating {0} x [{1}]'.format(server_name, min_count))
         if self.vm.LaunchType == 'KVM':
             instance = self.client.create_server(name=server_name, 
                                                  image=image, 
