@@ -159,6 +159,8 @@ class Cluster:
         print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
                                                                                    self.vm.Provider))
 
+        self.status = BUSY
+
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
 
@@ -172,7 +174,6 @@ class Cluster:
             fixed_ip = next(iter(network))[0]['addr']
             hostname_ip = server.name + ',' + fixed_ip
             nodes_map.append(hostname_ip)
-        
 
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
@@ -194,26 +195,45 @@ class Cluster:
 
         self.logger.trace('change bootstrap.sh permission')
 
-        res = self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True)
+        self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True, hide=True)
 
         self.logger.trace('invoke bootstrap.sh')
 
         bootstrap_cmd = './bootstrap_kubernetes.sh -m "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_map,
-                                                                                           self.remote.user,
-                                                                                            remote_key_path)
+                                                                                                  self.remote.user,
+                                                                                                  remote_key_path)
 
-        res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
+        bootstrap_res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
 
-        if res.return_code:
-            raise Exception('failed to build Kuberentes cluster: {0}'.format(res.stderr))
+        """
+        while True:
+            check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
+            if not check_cluster.return_code:
+                break
+            else:
+                time.sleep(10)
+        """
+
+        # sometimes fabric triggers a return code on warning
+        if bootstrap_res.return_code:
+            # so check if kubectl is installed or not
+            check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
+            # we failed for sure
+            if check_cluster.return_code:
+                raise Exception('failed to build Kuberentes cluster: {0}'.format(bootstrap_res.stderr))
+            else:
+                self.logger.warning('Kubernetes is installed succefully.')
         else:
-            self.logger.trace(res.stdout)
+            self.logger.trace('Kubernetes is installed succefully, logs are under $HOME/kubespray/ansible.*')
+
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
         self.kube_config = self.configure()
 
         self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
+
+        self.status = READY
 
         print('Kubernetes cluster is active on provider: {0}'.format(self.vm.Provider))
 
@@ -304,7 +324,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks):
+    def submit(self, ctasks=[], deployment_file=None):
         
         """
         This function to coordiante the submission of list of tasks.
@@ -318,20 +338,29 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
+        batches = []
+        pods_names = []
+        if not ctasks and not deployment_file:
+            self.logger.error('at least deployment or tasks must be specified')
+            return None, [], []
 
-        self.profiler.prof('generate_pods_start', uid=self.id)
-        deployment_file, pods_names, batches = self.generate_pods(ctasks)
-        self.profiler.prof('generate_pods_stop', uid=self.id)
+        if deployment_file and ctasks:
+            self.logger.error('can not submit both deployment and tasks')
+            return None, [], []
 
-        cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
-        out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        if ctasks:
+            self.profiler.prof('generate_pods_start', uid=self.id)
+            deployment_file, pods_names, batches = self.generate_pods(ctasks)
+            self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if ret:
-            self.logger.error(err)
+        if ctasks or deployment_file:
+            cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
+            out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-        print('all pods are submitted')
+            if ret:
+                self.logger.error(err)
 
-        self.status = BUSY
+            print('all pods are submitted')
 
         return deployment_file, pods_names, batches
     
@@ -485,7 +514,8 @@ class Cluster:
             for item in items:
                 if item['kind'] == 'Pod':
                     # this is a hydraa pod
-                    if item['metadata']['name'].startswith('hydraa-pod-'):
+                    if item['metadata']['name'].startswith('hydraa-pod-') or \
+                        item['metadata']['name'].startswith('hydraa-mpi-launcher'):
                         already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):

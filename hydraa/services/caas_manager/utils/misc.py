@@ -213,7 +213,7 @@ def build_mpi_deployment(mpi_task, fp, slots, workers):
         kubeflow_temp = yaml.safe_load(file)
 
     kubeflow_temp['spec']['slotsPerWorker'] = slots
-    kubeflow_temp["metadata"]["name"] = mpi_task.name
+    # kubeflow_temp["metadata"]["name"] = mpi_task.name
 
     worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
     launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
