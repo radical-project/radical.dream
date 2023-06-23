@@ -65,7 +65,7 @@ def do_something():
 ```python
 from hydraa.services.caas_manager.utils import Kubeflow, KubeflowMPILauncher
 mpi_tasks = []
-for i in range(1):
+for i in range(5):
     task = Task()
     task.vcpus = 15
     task.memory = 1000
@@ -84,7 +84,7 @@ kf.launcher.launch_mpi_container(mpi_tasks)
 #### 2- Or by letting Hydraa setup the MPI workers and Masters automatically:
 ```python
 mpi_tasks = []
-for i in range(1):
+for i in range(5):
     task = Task()
     task.vcpus = 15
     task.memory = 1000
