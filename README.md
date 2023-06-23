@@ -64,7 +64,7 @@ def do_something():
 #### 1- By specifying the setup of the MPI workers and Masters (Launchers): 
 ```python
 from hydraa.services.caas_manager.utils import Kubeflow, KubeflowMPILauncher
-tasks = []
+mpi_tasks = []
 for i in range(1):
     task = Task()
     task.vcpus = 15
@@ -72,18 +72,18 @@ for i in range(1):
     task.image = 'cylon/cylon-mpi'
     task.cmd = 'python3 mpi_example.py'
     task.provider = JET2
-    tasks.append(task)
+    mpi_tasks.append(task)
 
 # create a kubeflow MPI-launcher
 MPIlauncher = KubeflowMPILauncher(num_workers=3, slots_per_worker=7)
 kf = Kubeflow(manager=caas_mgr.Jet2Caas).start(launcher=MPIlauncher)
 
 # luanch the containers
-kf.launcher.launch_mpi_container(tasks)
+kf.launcher.launch_mpi_container(mpi_tasks)
 ```
 #### 2- Or by letting Hydraa setup the MPI workers and Masters automatically:
 ```python
-tasks = []
+mpi_tasks = []
 for i in range(1):
     task = Task()
     task.vcpus = 15
@@ -92,8 +92,7 @@ for i in range(1):
     task.cmd = 'python3 mpi_example.py'
     task.provider = JET2
     task.type = 'container.mpi'
-    tasks.append(task)
+    mpi_tasks.append(task)
+caas_mgr.submit(mpi_tasks)
 ```
-
-
 
