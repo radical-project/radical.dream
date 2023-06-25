@@ -266,6 +266,8 @@ class Cluster:
         kube_pods = []
         kube_containers = []
         kube_mpi_containers = []
+        
+        # FIXME: check misc/build_mpi_deployment
         deployment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
 
         pod_id = str(self.pod_counter).zfill(6)
@@ -317,8 +319,8 @@ class Cluster:
             else:
                 workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
 
-            build_mpi_deployment(mpi_tasks=kube_mpi_containers, fp=deployment_file,
-                                 slots=slots_per_worker, workers=workers)
+            deployment_file = build_mpi_deployment(mpi_tasks=kube_mpi_containers, fp=deployment_file,
+                                                   slots=slots_per_worker, workers=workers)
             self.pod_counter +=1
 
         return deployment_file, [], []

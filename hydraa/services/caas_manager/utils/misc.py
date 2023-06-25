@@ -206,33 +206,43 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 #
 def build_mpi_deployment(mpi_tasks, fp, slots, workers):
 
-    mpi_task = mpi_tasks[0]
+    combined_content = ""
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
     mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
 
     with open(mpi_kubeflow_template, "r") as file:
         kubeflow_temp = yaml.safe_load(file)
 
-    kubeflow_temp["metadata"]["name"] += "-" + mpi_task.name
-    kubeflow_temp['spec']['slotsPerWorker'] = slots
-    worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
-    launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
+    for mpi_task in mpi_tasks:
+        kubeflow_temp["metadata"]["name"] += "-" + mpi_task.name
+        kubeflow_temp['spec']['slotsPerWorker'] = slots
+        worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
+        launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
 
-    worker['replicas'] = workers
-    worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
-    worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
+        worker['replicas'] = workers
+        worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+        worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
 
-    cmd_list = mpi_task.cmd.split(" ")
-    cmd_list.insert(0, str(mpi_task.vcpus))
-    for c in cmd_list:
-        launcher['template']['spec']['containers'][0]['args'].append(c)
+        cmd_list = mpi_task.cmd.split(" ")
+        cmd_list.insert(0, str(mpi_task.vcpus))
+        for c in cmd_list:
+            launcher['template']['spec']['containers'][0]['args'].append(c)
 
-    launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
-    launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
-    worker['template']['spec']['containers'][0]['image']   = mpi_task.image
+        launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
+        launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+        worker['template']['spec']['containers'][0]['image']   = mpi_task.image
 
+        combined_content += kubeflow_temp + "\n---\n"
+
+    # FIXME: we use .json in kubernetes.py we we dump a regular
+    # deployment. Instead we need to be consistent
+    fp = fp.replace('.json', '.yaml')
+
+    # dump all yaml data into a signle deployment
     with open(fp, "w") as file:
-        kubeflow_temp = json.dump(kubeflow_temp, file)
+        kubeflow_temp = file.write(combined_content)
+
+    return fp
 
 
 # --------------------------------------------------------------------------
