@@ -271,65 +271,53 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
-        kube_pods = []
-        kube_containers = []
-        kube_mpi_containers = []
+        scpp = [] # single container per pod
+        mcpp = [] # multiple containers per pod
+        mpip = [] # mpi pods
         
         # FIXME: check misc/build_mpi_deployment
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
         pod_id = str(self.pod_counter).zfill(6)
         #self.profiler.prof('create_pod_start', uid=pod_id)
-
         #self.profiler.prof('create_pod_stop', uid=pod_id)
 
         # FIXME: The work down need to be part of a
         # ``SCHEDULER`` not pod generator.
+        # filter the tasks based on their types
         for ctask in ctasks:
-            # Single Container Per Pod.
-            # We depend on the kubernetes scheduler here.
+            # Single Container Per Pod (use kubernetes default scheduler here)
             if ctask.type in POD or not ctask.type:
                 pod = build_pod([ctask], pod_id)
-                kube_pods.append(pod)
+                scpp.append(pod)
                 self.pod_counter +=1
 
-            # Multiple Containers Per Pod
-            # TODO: use orhestrator.scheduler
+            # Multiple Containers Per Pod. TODO: use orhestrator.scheduler
             elif ctask.type in CONTAINER:
-                kube_containers.append(ctask)
+                mcpp.append(ctask)
 
-            # Kubeflow based MPI-Pods
+            # Kubeflow based MPI-Pods (use Kueue job controller or user scheduler here)
             elif ctask.type in MPI_CONTAINER:
-                kube_mpi_containers.append(ctask)
+                mpip.append(ctask)
 
-        if kube_containers:
+        if mcpp:
             # FIXME: use orhestrator.scheduler
             self.profiler.prof('schedule_pods_start', uid=self.id)
-            batches = self.schedule(kube_containers)
+            batches = self.schedule(mcpp)
             self.profiler.prof('schedule_pods_stop', uid=self.id)
 
             for batch in batches:
                 pod = build_pod(batch, pod_id)
-                kube_pods.append(pod)
+                scpp.append(pod)
                 self.pod_counter +=1
 
-        if kube_pods:
-            dump_multiple_yamls(kube_pods, deployment_file)
+        if scpp:
+            dump_multiple_yamls(scpp, deployment_file)
 
         # FIXME: use orhestrator.mpi_scheduler
         # FIXME: support heterogenuous tasks and fit them within the MPI world size
-        if kube_mpi_containers:
-            workers = 1
-            slots_per_worker = math.ceil(self.size['vcpus'] / self.vm.MinCount)
-
-            if kube_mpi_containers[0].mpi_setup:
-                workers = kube_mpi_containers[0].mpi_setup['workers']
-                slots_per_worker = kube_mpi_containers[0].mpi_setup['slots']
-            else:
-                workers = calculate_kubeflow_workers(self.vm.MinCount, slots_per_worker, ctask)
-
-            deployment_file = build_mpi_deployment(mpi_tasks=kube_mpi_containers, fp=deployment_file,
-                                                   slots=slots_per_worker, workers=workers)
+        if mpip:
+            deployment_file = build_mpi_deployment(mpi_tasks=mpip, fp=deployment_file)
             self.pod_counter +=1
 
         return deployment_file, [], []

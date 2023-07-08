@@ -205,7 +205,7 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 
 # --------------------------------------------------------------------------
 #
-def build_mpi_deployment(mpi_tasks, fp, slots, workers):
+def build_mpi_deployment(mpi_tasks, fp):
 
     combined_deployments = []
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
@@ -216,8 +216,10 @@ def build_mpi_deployment(mpi_tasks, fp, slots, workers):
     for mpi_task in mpi_tasks:
         kubeflow_temp["metadata"]["name"] += "-" + mpi_task.name
 
-        # FIXME: this function should be a general purpose utility
-        # i.e. it should not do scheduler check
+        slots = mpi_task.mpi_setup['slots']
+        workers = mpi_task.mpi_setup['workers']
+       
+        # FIXME: this function should be part of class: Kubeflow
         if not mpi_task.mpi_setup["scheduler"]:
             kubeflow_temp["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
         else:
