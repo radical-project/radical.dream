@@ -18,7 +18,7 @@ from hydraa import CHI, JET2
 from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
-from .misc import dump_deployment
+from .misc import dump_multiple_yamls
 from .misc import build_mpi_deployment
 from .misc import calculate_kubeflow_workers
 
@@ -48,6 +48,9 @@ SLEEP = 2
 
 KUBECTL = shutil.which('kubectl')
 
+POD = ['pod', 'Pod']
+CONTAINER = ['container', 'Container']
+MPI_CONTAINER = ['mpi.container']
 
 # --------------------------------------------------------------------------
 #
@@ -82,14 +85,13 @@ class Cluster:
        performance metrics.
     """
 
-    def __init__(self, run_id, vm, cluster_size, sandbox, log):
+    def __init__(self, run_id, vm, sandbox, log):
         """
         The constructor for Cluster class.
 
         Parameters:
             run_id       (str)      : Unique id deliverd by the controller manager.
             vm           (hydraa.vm): A AWS/Azure/OpenStack Hydraa VM.
-            cluster_size (int)      : The number of cores each node has.
             sandbox      (str)      : A path for the folder of hydraa manager.
             log          (logging)  : A logger object.
 
@@ -101,8 +103,8 @@ class Cluster:
         self.sandbox      = sandbox
         self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = cluster_size     
-        self.active_nodes = 0
+        self.size         = {'vcpus': -1, 'memory': 0, 'storage': 0}
+ 
         self.kube_config  = None
         self.status       = None
 
@@ -170,10 +172,16 @@ class Cluster:
 
         nodes_map = []
         for server in self.vm.Servers:
+            # build then nodes map
             network = server.addresses.values()
             fixed_ip = next(iter(network))[0]['addr']
             hostname_ip = server.name + ',' + fixed_ip
             nodes_map.append(hostname_ip)
+
+            # update the cluster size based on each node
+            self.size['vcpus'] += server.flavor.vcpus
+            self.size['memory'] += server.flavor.ram
+            self.size['storage'] += server.flavor.disk
 
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
@@ -205,7 +213,7 @@ class Cluster:
         bootstrap_cmd += '/dev/null < /dev/null &'
         bootstrap_res = self.remote.run(bootstrap_cmd, hide=True, warn=True)
 
-        timeout_minutes = 20
+        timeout_minutes = 30
         start_time = time.time()
 
         while True:
@@ -268,7 +276,7 @@ class Cluster:
         kube_mpi_containers = []
         
         # FIXME: check misc/build_mpi_deployment
-        deployment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
+        deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
         pod_id = str(self.pod_counter).zfill(6)
         #self.profiler.prof('create_pod_start', uid=pod_id)
@@ -280,18 +288,18 @@ class Cluster:
         for ctask in ctasks:
             # Single Container Per Pod.
             # We depend on the kubernetes scheduler here.
-            if ctask.type == 'pod' or not ctask.type:
+            if ctask.type in POD or not ctask.type:
                 pod = build_pod([ctask], pod_id)
                 kube_pods.append(pod)
                 self.pod_counter +=1
 
             # Multiple Containers Per Pod
             # TODO: use orhestrator.scheduler
-            elif ctask.type == 'container':
+            elif ctask.type in CONTAINER:
                 kube_containers.append(ctask)
 
             # Kubeflow based MPI-Pods
-            elif ctask.type == 'container.mpi':
+            elif ctask.type in MPI_CONTAINER:
                 kube_mpi_containers.append(ctask)
 
         if kube_containers:
@@ -306,18 +314,19 @@ class Cluster:
                 self.pod_counter +=1
 
         if kube_pods:
-            dump_deployment(kube_pods, deployment_file)
+            dump_multiple_yamls(kube_pods, deployment_file)
 
         # FIXME: use orhestrator.mpi_scheduler
         # FIXME: support heterogenuous tasks and fit them within the MPI world size
         if kube_mpi_containers:
             workers = 1
-            slots_per_worker = self.size
+            slots_per_worker = math.ceil(self.size['vcpus'] / self.vm.MinCount)
+
             if kube_mpi_containers[0].mpi_setup:
-                workers = kube_mpi_containers[0].mpi_setup[0]
-                slots_per_worker = kube_mpi_containers[0].mpi_setup[1]
+                workers = kube_mpi_containers[0].mpi_setup['workers']
+                slots_per_worker = kube_mpi_containers[0].mpi_setup['slots']
             else:
-                workers = calculate_kubeflow_workers(self.vm.MinCount, self.size, ctask)
+                workers = calculate_kubeflow_workers(self.vm.MinCount, slots_per_worker, ctask)
 
             deployment_file = build_mpi_deployment(mpi_tasks=kube_mpi_containers, fp=deployment_file,
                                                    slots=slots_per_worker, workers=workers)
@@ -391,7 +400,7 @@ class Cluster:
             raise Exception('Batch size can not be 0')
 
         # containers per pod
-        CPP = self.size
+        CPP = math.ceil(self.size['vcpus'] / self.vm.MinCount)
 
         tasks_per_pod = []
 
@@ -659,7 +668,7 @@ class Cluster:
 
         def collect(ids):
             self.logger.trace('collecting a profiles checkpoint')
-            fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            fname = self.sandbox + '/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
@@ -754,8 +763,7 @@ class AKS_Cluster(Cluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
-        if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
+        self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
@@ -986,8 +994,7 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('cofigure_start', uid=self.id)
         self.kube_config = self.configure()
 
-        if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID) - 1
+        self.size = self.get_vm_size(self.vm.InstanceID) - 1
 
         print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
 

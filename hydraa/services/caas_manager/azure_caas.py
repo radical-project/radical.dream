@@ -454,7 +454,7 @@ class AzureCaas():
 
         while not self._terminate.is_set():
 
-            if self.vm.LaunchType  in AKS:
+            if self.vm.LaunchType in AKS:
                 statuses = self.AKS_Cluster._get_task_statuses()
             else:
                 statuses = self._get_task_statuses(self._container_group_names)

@@ -84,7 +84,7 @@ class Jet2Caas():
             self.start_thread.start()
 
         atexit.register(self._shutdown)
-    
+
 
     def start(self):
 
@@ -125,13 +125,10 @@ class Jet2Caas():
 
             #FIXME: VM should have a username instead of hard coded ubuntu
             self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
-                                                                               self.logger)
+                                                      self.logger)
 
-        # containers per pod
-        cluster_size = self.server.flavor.vcpus - 1
-
-        self.cluster = kubernetes.Cluster(self.run_id, self.vm, cluster_size,
-                                                   self.sandbox, self.logger)
+        self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
+                                          self.logger)
 
         self.cluster.bootstrap()
 
@@ -381,7 +378,7 @@ class Jet2Caas():
         if not security.name == 'default':
             self.client.add_server_security_groups(server, [security.name])
         
-        self.logger.trace('server is active')
+        self.logger.trace('all servers(s) are active x [{0}]'.format(min_count))
         
         return server
 

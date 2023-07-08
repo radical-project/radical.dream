@@ -146,13 +146,10 @@ class ChiCaas:
         for server in self.vm.Servers:
             public_ip = server.access_ipv4
             self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'cc', public_ip,
-                                                                           self.logger)
+                                                      self.logger)
 
-        # containers per pod
-        cluster_size = self.server.flavor.vcpus - 1
-
-        self.cluster = kubernetes.Cluster(self.run_id, self.vm, cluster_size,
-                                                   self.sandbox, self.logger)
+        self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
+                                          self.logger)
 
         self.cluster.bootstrap()
 
@@ -342,7 +339,7 @@ class ChiCaas:
         if not security == 'default':
             self.client.add_server_security_groups(instance, [security.name])
 
-        self.logger.trace('instance is ACTIVE')
+        self.logger.trace('all servers(s) are active x [{0}]'.format(min_count))
         return instance
 
 

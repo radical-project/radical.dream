@@ -1,6 +1,21 @@
 #!/bin/bash
 
-git clone --depth=1 https://github.com/kubernetes-sigs/kubespray.git
+# set kubespray repo var
+KUBE_REPO=https://github.com/kubernetes-sigs/kubespray.git
+
+# get the python version
+PYTHON_VERSION=$(python3 -c "import sys; print('.'.join(map(str, sys.version_info[:2])))")
+
+# https://github.com/kubernetes-sigs/kubespray/issues/10255
+if [ "$PYTHON_VERSION" == "3.8" ]; then
+    git clone --depth=1 -b "release-2.22" $KUBE_REPO
+
+elif [[ "$PYTHON_VERSION" == "3.9" || "$python_version" > "3.9" ]]; then
+    git clone --depth=1 $KUBE_REPO
+
+else
+    echo "Not supported Python version: $PYTHON_VERSION"
+fi
 
 KUBESPRAYDIR=$(pwd)/kubespray
 VENVDIR="$KUBESPRAYDIR/.venv"

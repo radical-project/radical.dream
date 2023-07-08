@@ -1,5 +1,6 @@
 import os
 import yaml
+import math
 import json
 import shlex
 import string
@@ -8,6 +9,7 @@ import logging
 import subprocess as sp
 
 from pathlib import Path
+from urllib import request
 from kubernetes import client
 
 
@@ -194,7 +196,6 @@ def calculate_kubeflow_workers(nodes, cpn, task):
         return num_workers
 
     if cpn < task.vcpus:
-        import math
         num_workers = math.ceil(task.vcpus / cpn)
         return num_workers
 
@@ -206,15 +207,22 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 #
 def build_mpi_deployment(mpi_tasks, fp, slots, workers):
 
-    combined_content = ""
+    combined_deployments = []
     loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
     mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
 
-    with open(mpi_kubeflow_template, "r") as file:
-        kubeflow_temp = yaml.safe_load(file)
+    kubeflow_temp = load_yaml(mpi_kubeflow_template)
 
     for mpi_task in mpi_tasks:
         kubeflow_temp["metadata"]["name"] += "-" + mpi_task.name
+
+        # FIXME: this function should be a general purpose utility
+        # i.e. it should not do scheduler check
+        if not mpi_task.mpi_setup["scheduler"]:
+            kubeflow_temp["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
+        else:
+            raise("scheduler specfication not implmented yet")
+
         kubeflow_temp['spec']['slotsPerWorker'] = slots
         worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
         launcher = kubeflow_temp['spec']['mpiReplicaSpecs']['Launcher']
@@ -232,32 +240,54 @@ def build_mpi_deployment(mpi_tasks, fp, slots, workers):
         launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
         worker['template']['spec']['containers'][0]['image']   = mpi_task.image
 
-        combined_content += kubeflow_temp + "\n---\n"
-
-    # FIXME: we use .json in kubernetes.py we we dump a regular
-    # deployment. Instead we need to be consistent
-    fp = fp.replace('.json', '.yaml')
+        combined_deployments.append(kubeflow_temp)
 
     # dump all yaml data into a signle deployment
-    with open(fp, "w") as file:
-        kubeflow_temp = file.write(combined_content)
+    dump_multiple_yamls(combined_deployments, fp)
 
     return fp
 
 
 # --------------------------------------------------------------------------
 #
-def dump_deployment(kube_pods, fp):
-    with open(fp, 'w') as f:
-        for p in kube_pods:
-            print(p, file=f)
+def load_yaml(fp):
+    with open(fp, "r") as file:
+        yaml_obj = yaml.safe_load(file)
+    return yaml_obj
 
-    # we are faking a json file here
-    with open(fp, "r") as f:
-        text = f.read()
-        text = text.replace("'", '"')
-
-    with open(fp, "w") as f:
-        text = f.write(text)
+# --------------------------------------------------------------------------
+#
+def dump_yaml(obj, fp):
+    with open(fp, "w") as file:
+        yaml.safe_dump(file, obj)
 
 
+# --------------------------------------------------------------------------
+#
+def load_multiple_yamls(fp):
+    with open(fp, "r") as file:
+        yaml_objs = list(yaml.safe_load_all(file))
+    return yaml_objs
+
+
+# --------------------------------------------------------------------------
+#
+def dump_multiple_yamls(yaml_objects: list, fp):
+    # Dump the YAML objects into a single file
+    with open(fp, 'w') as file:
+        yaml.dump_all(yaml_objects, file)
+
+
+# --------------------------------------------------------------------------
+#
+def download_files(urls, destination):    
+    destinations = []
+    for url in urls:
+        try:
+            dest = destination + "/" + url.split("/")[-1]
+            request.urlretrieve(url, dest)
+            destinations.append(dest)
+        except Exception as e:
+            raise(e)
+
+    return destinations
