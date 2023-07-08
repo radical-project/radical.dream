@@ -221,7 +221,7 @@ def build_mpi_deployment(mpi_tasks, fp, slots, workers):
         if not mpi_task.mpi_setup["scheduler"]:
             kubeflow_temp["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
         else:
-            raise("scheduler specfication not implmented yet")
+            raise NotImplementedError("scheduler specfication not implmented yet")
 
         kubeflow_temp['spec']['slotsPerWorker'] = slots
         worker = kubeflow_temp['spec']['mpiReplicaSpecs']['Worker']
