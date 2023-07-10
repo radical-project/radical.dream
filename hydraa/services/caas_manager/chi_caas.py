@@ -376,7 +376,7 @@ class ChiCaas:
             os.chmod(keypair_pri, 0o600)
             os.chmod(keypair_pub, 0o644)
 
-            self.logger.trace("Keypair is created for all servers: [{0}]".format(key_name))
+            self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
 
         if not keypair:
             raise Exception('keypair creation failed')

@@ -124,14 +124,22 @@ class Kubeflow():
 
         dump_multiple_yamls(kueue_ki, files[1])
 
-        # install the Kueue, sleep for 5 and create the Kueue instance
-        kueue_cmd = "kubectl apply -f {0} ".format(files[0])
-        kueue_cmd += "&& sleep 5 && kubectl apply -f {0} & wait".format(files[1])
+        # FIXME (logic issue): we can not invoke 2 Kubectl commands conccurently as our
+        # "inject_kube_config" (invoked by sh_callout) can apply the cluster
+        # config to one cmd at a time
+        ret = None
+        for idx, f in enumerate(files):
+            out, err, ret = sh_callout("kubectl apply -f {0}".format(f),
+                                        shell=True, kube=self.cluster)
+            # reprot the error for any command
+            if ret:
+                self.cluster.logger.error(err)
 
-        out, err, ret = sh_callout(kueue_cmd, shell=True, kube=self.cluster)
-        if ret:
-            self.cluster.logger.error("failed to install Kueue: {0}".format(err))
-        else:
+            # wait for the first command to apply the changes
+            if idx == 0:
+                time.sleep(10)
+
+        if not ret:
             self.cluster.logger.trace("Kueue is installed on the target cluster")
 
 
