@@ -352,7 +352,6 @@ class ChiCaas:
             keypair = self.client.compute.find_keypair(self.vm.KeyPair)
         
         if not keypair: 
-            self.logger.trace("creating ssh key Pair")
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
@@ -376,6 +375,8 @@ class ChiCaas:
             # modify the permission
             os.chmod(keypair_pri, 0o600)
             os.chmod(keypair_pub, 0o644)
+
+            self.logger.trace("Keypair is created for all servers: [{0}]".format(key_name))
 
         if not keypair:
             raise Exception('keypair creation failed')

@@ -20,7 +20,6 @@ from .misc import sh_callout
 from .misc import generate_eks_id
 from .misc import dump_multiple_yamls
 from .misc import build_mpi_deployment
-from .misc import calculate_kubeflow_workers
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -50,7 +49,7 @@ KUBECTL = shutil.which('kubectl')
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-MPI_CONTAINER = ['mpi.container']
+MPI_CONTAINER = ['container.mpi']
 
 # --------------------------------------------------------------------------
 #
@@ -311,14 +310,17 @@ class Cluster:
                 scpp.append(pod)
                 self.pod_counter +=1
 
+            dump_multiple_yamls(mcpp, deployment_file)
+
         if scpp:
             dump_multiple_yamls(scpp, deployment_file)
 
         # FIXME: use orhestrator.mpi_scheduler
         # FIXME: support heterogenuous tasks and fit them within the MPI world size
         if mpip:
-            deployment_file = build_mpi_deployment(mpi_tasks=mpip, fp=deployment_file)
-            self.pod_counter +=1
+            mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
+            dump_multiple_yamls(mpi_objs, deployment_file)
+            self.pod_counter += len(mpip)
 
         return deployment_file, [], []
 
@@ -354,17 +356,17 @@ class Cluster:
             deployment_file, pods_names, batches = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if ctasks or deployment_file:
+        if deployment_file:
             cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-            if ret:
+            if not ret:
+                print('all pods are submitted')
+                return deployment_file, pods_names, batches
+            else:
                 self.logger.error(err)
-
-            print('all pods are submitted')
-
-        return deployment_file, pods_names, batches
-    
+                print('failed to submit pods, please check the logs for more info.')
+  
 
     # --------------------------------------------------------------------------
     #

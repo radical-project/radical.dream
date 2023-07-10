@@ -20,7 +20,7 @@ class KubeflowMPILauncher:
 
         for task in tasks:
             task.type = 'container.mpi'
-            task.mpi_setup = {"workers:": self.num_workers,
+            task.mpi_setup = {"workers": self.num_workers,
                               "slots": self.slots_per_worker,
                               "scheduler": ""}
             self.manager.incoming_q.put(task)
@@ -94,15 +94,22 @@ class Kubeflow():
     def _start_kueue(self):
 
         url1 = "https://github.com/kubernetes-sigs/kueue/releases" \
-               "/download/v0.3.2/manifests.yaml"
+               "/download/v0.4.0/manifests.yaml"
         url2 = "https://raw.githubusercontent.com/kubernetes-sigs" \
                "/kueue/main/examples/single-clusterqueue-setup.yaml"
 
         # download both files to the cluster sandbox
         files = download_files([url1, url2], self.cluster.sandbox)
 
-        # update the Kueue yaml to accept MPIJobs
-        cmd = 'sed -i \'s/# - "kubeflow.org\\/mpijob"/ - "kubeflow.org\\/mpijob"/\' {0}'.format(files[0])
+        # Some jobs need all pods to be running at the same time to operate;
+        # for example, synchronized distributed training or MPI-based jobs
+        # which require pod-to-pod communication. On a default Kueue configuration,
+        # a pair of such jobs may deadlock if the physical availability of resources
+        # do not match the configured quotas in Kueue. The same pair of jobs could
+        # run to completion if their pods were scheduled sequentially.
+        # https://kueue.sigs.k8s.io/docs/tasks/setup_sequential_admission/#enabling-waitforpodsready
+        cmd = "sed -i -e 's/#waitForPodsReady/waitForPodsReady/' "
+        cmd += "-e 's/#\s*enable:\s*true/  enable: true/' {0}".format(files[0])
         out, err, ret = sh_callout(cmd, shell=True)
 
         # load the Kueue cluster instances and update
@@ -124,6 +131,8 @@ class Kubeflow():
         out, err, ret = sh_callout(kueue_cmd, shell=True, kube=self.cluster)
         if ret:
             self.cluster.logger.error("failed to install Kueue: {0}".format(err))
+        else:
+            self.cluster.logger.trace("Kueue is installed on the target cluster")
 
 
     # --------------------------------------------------------------------------
