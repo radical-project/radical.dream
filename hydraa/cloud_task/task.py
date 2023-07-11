@@ -176,6 +176,7 @@ class Task(Future):
 
 
     def reset_state(self):
+        self.state = None
         self._state = 'PENDING'
         self._exception = None
 

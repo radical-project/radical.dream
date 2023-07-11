@@ -273,11 +273,10 @@ class Cluster:
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
         mpip = [] # mpi pods
-        
+
         # FIXME: check misc/build_mpi_deployment
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
-        pod_id = str(self.pod_counter).zfill(6)
         #self.profiler.prof('create_pod_start', uid=pod_id)
         #self.profiler.prof('create_pod_stop', uid=pod_id)
 
@@ -285,6 +284,7 @@ class Cluster:
         # ``SCHEDULER`` not pod generator.
         # filter the tasks based on their types
         for ctask in ctasks:
+            pod_id = str(self.pod_counter).zfill(6)
             # Single Container Per Pod (use kubernetes default scheduler here)
             if ctask.type in POD or not ctask.type:
                 pod = build_pod([ctask], pod_id)

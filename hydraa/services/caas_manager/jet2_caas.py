@@ -446,21 +446,24 @@ class Jet2Caas():
                         # state is changed so reset the task state to 'PENDING'
                         if task.name not in statuses['failed']:
                             task.reset_state()
+                            marked_tasks.remove(task)
                     else:
                         continue
 
-                if task.pending():
-                    if task.name in statuses['stopped']:
+                if task.name in statuses['stopped']:
+                    if not task.done():
                         task.state = 'DONE'
                         task.set_result('Done')
                         marked_tasks.add(task)
 
-                    elif task.name in statuses['failed']:
+                elif task.name in statuses['failed']:
+                    if task.state != 'FAILED':
                         task.state = 'FAILED'
                         task.set_exception(Exception('Failed'))
                         marked_tasks.add(task)
 
-                    elif task.name in statuses['running']:
+                elif task.name in statuses['running']:
+                    if not task.running():
                         task.state = 'RUNNING'
                         task.set_running_or_notify_cancel()
 
