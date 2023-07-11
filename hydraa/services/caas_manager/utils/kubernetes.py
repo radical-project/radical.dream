@@ -274,7 +274,6 @@ class Cluster:
         mcpp = [] # multiple containers per pod
         mpip = [] # mpi pods
 
-        # FIXME: check misc/build_mpi_deployment
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
         #self.profiler.prof('create_pod_start', uid=pod_id)
@@ -562,6 +561,7 @@ class Cluster:
                                     already_checked.append(c['name'])
 
             statuses = {'stopped': stopped, 'failed': failed, 'running':running}
+
             return statuses
 
 

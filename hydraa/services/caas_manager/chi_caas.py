@@ -511,10 +511,10 @@ class ChiCaas:
     def _wait_tasks(self):
 
         if self.asynchronous:
-            raise Exception('Task wait is not supported in asynchronous mode')
-        
-        marked_tasks = []
-        
+            self.logger.error('tasks wait is not supported in asynchronous mode')
+
+        marked_tasks = set()
+
         while not self._terminate.is_set():
 
             statuses = self.cluster._get_task_statuses()
@@ -525,17 +525,33 @@ class ChiCaas:
 
             for task in self._tasks_book.values():
                 if task in marked_tasks:
-                    continue
+                    # NOTE: the MPI task takes sometime to connect to 
+                    # the worker which is reported to be "failed" then running
+                    # this approach should update task state after failer for now.
+                    if task.state == 'FAILED':
+                        # state is changed so reset the task state to 'PENDING'
+                        if task.name not in statuses['failed']:
+                            task.reset_state()
+                            marked_tasks.remove(task)
+                    else:
+                        continue
+
                 if task.name in statuses['stopped']:
-                    task.set_result('Done')
+                    if not task.done():
+                        task.state = 'DONE'
+                        task.set_result('Done')
+                        marked_tasks.add(task)
 
                 elif task.name in statuses['failed']:
-                    task.set_exception(Exception('Failed'))
+                    if task.state != 'FAILED':
+                        task.state = 'FAILED'
+                        task.set_exception(Exception('Failed'))
+                        marked_tasks.add(task)
 
                 elif task.name in statuses['running']:
-                    task.set_running_or_notify_cancel()
-                
-                marked_tasks.append(task)
+                    if not task.running():
+                        task.state = 'RUNNING'
+                        task.set_running_or_notify_cancel()
 
             self.outgoing_q.put(msg)
 

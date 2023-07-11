@@ -439,7 +439,7 @@ class Jet2Caas():
 
             for task in self._tasks_book.values():
                 if task in marked_tasks:
-                    # FIXME: the MPI task takes sometime to connect to 
+                    # NOTE: the MPI task takes sometime to connect to 
                     # the worker which is reported to be "failed" then running
                     # this approach should update task state after failer for now.
                     if task.state == 'FAILED':
