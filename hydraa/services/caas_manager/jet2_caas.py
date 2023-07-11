@@ -427,7 +427,7 @@ class Jet2Caas():
         if self.asynchronous:
             self.logger.error('tasks wait is not supported in asynchronous mode')
 
-        marked_tasks = []
+        marked_tasks = set()
 
         while not self._terminate.is_set():
 
@@ -439,17 +439,30 @@ class Jet2Caas():
 
             for task in self._tasks_book.values():
                 if task in marked_tasks:
-                    continue
-                if task.name in statuses['stopped']:
-                    task.set_result('Done')
+                    # FIXME: the MPI task takes sometime to connect to 
+                    # the worker which is reported to be "failed" then running
+                    # this approach should update task state after failer for now.
+                    if task.state == 'FAILED':
+                        # state is changed so reset the task state to 'PENDING'
+                        if task.name not in statuses['failed']:
+                            task.reset_state()
+                    else:
+                        continue
 
-                elif task.name in statuses['failed']:
-                    task.set_exception(Exception('Failed'))
+                if task.pending():
+                    if task.name in statuses['stopped']:
+                        task.state = 'DONE'
+                        task.set_result('Done')
+                        marked_tasks.add(task)
 
-                elif task.name in statuses['running']:
-                    task.set_running_or_notify_cancel()
+                    elif task.name in statuses['failed']:
+                        task.state = 'FAILED'
+                        task.set_exception(Exception('Failed'))
+                        marked_tasks.add(task)
 
-                marked_tasks.append(task)
+                    elif task.name in statuses['running']:
+                        task.state = 'RUNNING'
+                        task.set_running_or_notify_cancel()
 
             self.outgoing_q.put(msg)
 

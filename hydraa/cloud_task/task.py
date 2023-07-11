@@ -174,6 +174,16 @@ class Task(Future):
         """
         pass
 
+
+    def reset_state(self):
+        self._state = 'PENDING'
+        self._exception = None
+
+
+    def pending(self):
+        return self._state == 'PENDING'
+
+
 class Pod:
     global containers
     containers = []
