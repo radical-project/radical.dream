@@ -140,7 +140,8 @@ class Kubeflow():
                 time.sleep(10)
 
         if not ret:
-            self.cluster.logger.trace("Kueue is installed on the target cluster")
+            self.cluster.logger.trace("Kueue is installed on {0}"\
+                                      .format(self.cluster.name))
 
 
     # --------------------------------------------------------------------------

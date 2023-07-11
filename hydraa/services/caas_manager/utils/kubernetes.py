@@ -97,6 +97,7 @@ class Cluster:
         """
         self.id           = run_id
         self.vm           = vm
+        self.name         = 'cluster-{0}.{1}'.format(self.vm.Provider, run_id)
         self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
@@ -218,14 +219,17 @@ class Cluster:
         while True:
             check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
             if not check_cluster.return_code:
-                self.logger.trace('installation succeeded, logs are under $HOME/kubespray/ansible.*')
+                self.logger.trace('{0} installation succeeded, logs are under' \
+                                  '$HOME/kubespray/ansible.*'.format(self.name))
                 break
             else:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= timeout_minutes * 60:
-                    raise Exception('timeout: failed to install Kubernetes within the specified time.')
+                    raise Exception('timeout: failed to build {0} within' \
+                                    ' [{1}] min.'.format(self.name, timeout_minutes))
                 else:
-                    self.logger.warning('installation is still in progress. Retrying in 1 minute.')
+                    self.logger.warning('installation of {0} is still in progress. ' \
+                                        'Retrying in 1 minute.'.format(self.name))
                     time.sleep(60)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
@@ -236,7 +240,7 @@ class Cluster:
 
         self.status = READY
 
-        print('Kubernetes cluster is active on provider: {0}'.format(self.vm.Provider))
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
