@@ -158,8 +158,8 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
-                                                                                   self.vm.Provider))
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                       len(self.vm.Servers)))
 
         self.status = BUSY
 
@@ -225,8 +225,8 @@ class Cluster:
             else:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= timeout_minutes * 60:
-                    raise Exception('timeout: failed to build {0} within' \
-                                    ' [{1}] min.'.format(self.name, timeout_minutes))
+                    raise TimeoutError('failed to build {0} within' \
+                                       ' [{1}] min.'.format(self.name, timeout_minutes))
                 else:
                     self.logger.warning('installation of {0} is still in progress. ' \
                                         'Retrying in 1 minute.'.format(self.name))
@@ -767,14 +767,17 @@ class AKS_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('building AKS cluster..')
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                len(self.vm.Servers)))
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        print('AKS cluster is active on provider: {0}'.format(self.vm.Provider))
+        self.status = READY
+
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
@@ -990,7 +993,8 @@ class EKS_Cluster(Cluster):
 
         self.size = self.get_vm_size(self.vm.InstanceID) - 1
 
-        print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                len(self.vm.Servers)))
 
         cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
@@ -1011,7 +1015,9 @@ class EKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        print('EKS cluster is active on provider: {0}'.format(self.vm.Provider))
+        self.status = READY
+
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
