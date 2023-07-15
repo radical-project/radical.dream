@@ -81,18 +81,4 @@ kf = Kubeflow(manager=caas_mgr.Jet2Caas).start(launcher=MPIlauncher)
 # luanch the containers
 kf.launcher.launch_mpi_container(mpi_tasks)
 ```
-#### 2- Or by letting Hydraa setup the MPI workers and Masters automatically:
-```python
-mpi_tasks = []
-for i in range(5):
-    task = Task()
-    task.vcpus = 15
-    task.memory = 1000
-    task.image = 'cylon/cylon-mpi'
-    task.cmd = 'python3 mpi_example.py'
-    task.provider = JET2
-    task.type = 'container.mpi'
-    mpi_tasks.append(task)
-caas_mgr.submit(mpi_tasks)
-```
 
