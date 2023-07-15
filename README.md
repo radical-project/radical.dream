@@ -75,10 +75,11 @@ for i in range(5):
     mpi_tasks.append(task)
 
 # create a kubeflow MPI-launcher
-MPIlauncher = KubeflowMPILauncher(num_workers=3, slots_per_worker=7)
-kf = Kubeflow(manager=caas_mgr.Jet2Caas).start(launcher=MPIlauncher)
+mpi_launcher = KubeflowMPILauncher(caas_mgr.Jet2Caas,
+                                   num_workers=1, slots_per_worker=5)
+mpi_launcher.launch(mpi_tasks)
 
-# luanch the containers
-kf.launcher.launch_mpi_container(mpi_tasks)
+# wait for all tasks to finish
+all(t.result() for t in mpi_tasks)
 ```
 
