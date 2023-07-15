@@ -397,12 +397,10 @@ class AzureCaas():
     #
     def _get_task_statuses(self, container_group_names):
 
-        # FIXME: this function should performs a general task info pulling
-        # (not only tasks statuses)
+        statuses = {}
         stopped  = []
         failed   = []
         running  = []
-        statuses = []
 
         groups = [g for g in container_group_names.keys()]
         for group in groups:
@@ -410,7 +408,7 @@ class AzureCaas():
                                                                                         group)
             
             for container in container_group.as_dict()['containers']:
-                name           = container.get('name', '')
+                name = container.get('name', '')
                 container_task = container.get('instance_view', {})
                 if name and container_task:
                     try:
@@ -435,12 +433,10 @@ class AzureCaas():
                             running.append(name)
 
                     except AttributeError:
-                        self.logger.warning('no task statuses avilable yet, sleeping')
-                        time.sleep(0.2)
+                        self.logger.warning('no task statuses avilable yet')
+                        time.sleep(1)
 
-            statuses.append(stopped)
-            statuses.append(failed)
-            statuses.append(running)
+            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
 
         return statuses
 
@@ -452,53 +448,52 @@ class AzureCaas():
         if self.asynchronous:
             raise Exception('Task wait is not supported in asynchronous mode')
 
+        marked_tasks = set()
+
         while not self._terminate.is_set():
 
-            if self.vm.LaunchType  in AKS:
+            if self.vm.LaunchType in AKS:
                 statuses = self.AKS_Cluster._get_task_statuses()
             else:
                 statuses = self._get_task_statuses(self._container_group_names)
 
             if statuses:
-                stopped = statuses[0]
-                failed  = statuses[1]
-                running = statuses[2]
-
-                msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
-                                                                   len(stopped),
-                                                                   len(running))
+                msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
+                                                                   len(statuses['stopped']),
+                                                                   len(statuses['running']))
 
                 for task in self._tasks_book.values():
-                    if task.name in stopped:
-                        if task.done():
-                            continue
+                    if task in marked_tasks:
+                        if task.state == 'FAILED':
+                            # state is changed so reset the task state to 'PENDING'
+                            if task.name not in statuses['failed']:
+                                task.reset_state()
+                                marked_tasks.remove(task)
                         else:
+                            continue
+
+                    if task.name in statuses['stopped']:
+                        if not task.done():
+                            task.state = 'DONE'
                             task.set_result('Done')
+                            marked_tasks.add(task)
 
-                    # FIXME: better approach?
-                    elif task.name in failed:
-                        try:
-                            # check if the task marked failed
-                            # or not and wait for 0.1s to return
-                            exc = task.exception(0.1)
-                            # we already marked it
-                            if exc:
-                                continue
-                        except:
-                            # never marked so mark it.
-                            task.set_exception('Failed')
+                    elif task.name in statuses['failed']:
+                        if task.state != 'FAILED':
+                            task.state = 'FAILED'
+                            task.set_exception(Exception('Failed'))
+                            marked_tasks.add(task)
 
-                    elif task.name in running:
-                        if task.running():
-                            continue
-                        else:
+                    elif task.name in statuses['running']:
+                        if not task.running():
+                            task.state = 'RUNNING'
                             task.set_running_or_notify_cancel()
 
+                self.outgoing_q.put(msg)
+    
+                time.sleep(5)
+            else:
                 time.sleep(1)
-
-            self.outgoing_q.put(msg)
-
-            time.sleep(5)
 
 
     # --------------------------------------------------------------------------

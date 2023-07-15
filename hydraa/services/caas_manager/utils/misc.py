@@ -1,4 +1,8 @@
 import os
+import yaml
+import math
+import copy
+import json
 import shlex
 import string
 import random
@@ -6,6 +10,8 @@ import logging
 import subprocess as sp
 
 from pathlib import Path
+from urllib import request
+from kubernetes import client
 
 
 TRUE=true=True
@@ -104,7 +110,7 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     setattr(logging, levelName, levelNum)
     setattr(logging.getLoggerClass(), methodName, logForLevel)
     setattr(logging, methodName, logToRoot)
-    logging.basicConfig(filename=path , format='%(asctime)s | %(module)s: %(message)s')
+    logging.basicConfig(filename=path , format='%(asctime)s | %(levelname)s: %(module)s: %(message)s')
     logging.getLogger(__name__).setLevel("TRACE")
 
     return logging.getLogger(__name__)
@@ -130,3 +136,160 @@ def generate_eks_id(prefix="eks", length=8):
     random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
     cluster_id = "{0}-{1}".format(prefix, random_string)
     return cluster_id
+
+
+# --------------------------------------------------------------------------
+#
+def build_pod(batch: list, pod_id):
+
+    pod_name = "hydraa-pod-{0}".format(pod_id)
+    pod_metadata = client.V1ObjectMeta(name = pod_name)
+
+    # build n container(s)
+    containers = []
+    
+    for ctask in batch:
+        envs = []
+        if ctask.env_var:
+            for env in ctask.env_vars:
+                pod_env  = client.V1EnvVar(name = env[0], value = env[1])
+                envs.append(pod_env)
+
+        pod_cpu = "{0}m".format(ctask.vcpus * 1000)
+        pod_mem = "{0}Mi".format(ctask.memory)
+
+        resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
+                                                    limits={"cpu": pod_cpu, "memory": pod_mem})
+
+        pod_container = client.V1Container(name = ctask.name, image = ctask.image,
+                    resources = resources, command = ctask.cmd, env = envs)
+
+        containers.append(pod_container)
+
+    # feed the containers to the pod object
+    if ctask.restart:
+        restart_policy = ctask.restart
+    else:
+        restart_policy = 'Never'
+
+    pod_spec  = client.V1PodSpec(containers=containers,
+                        restart_policy=restart_policy)
+
+    pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
+                    metadata=pod_metadata, spec=pod_spec)
+
+    # santize the json object
+    sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
+
+    return sn_pod
+
+
+# --------------------------------------------------------------------------
+#
+def calculate_kubeflow_workers(nodes, cpn, task):
+    # FIXME: The work down need to be part of a
+    # ``SCHEDULER``.
+    num_workers = 0
+    total_cpus = nodes * cpn
+    
+    if task.vcpus > total_cpus:
+        print('Insufficient cpus to run container of size {0}'.format(task.vcpus))
+        return num_workers
+
+    if cpn < task.vcpus:
+        num_workers = math.ceil(task.vcpus / cpn)
+        return num_workers
+
+    elif cpn >= task.vcpus:
+        num_workers = 1
+
+
+# --------------------------------------------------------------------------
+#
+def build_mpi_deployment(mpi_tasks):
+
+    combined_deployments = []
+    loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+    mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
+
+    kf_template = load_yaml(mpi_kubeflow_template)
+
+    for mpi_task in mpi_tasks:
+
+        kf_task = copy.deepcopy(kf_template)
+        kf_task["metadata"]["name"] += "-" + mpi_task.name
+
+        slots = mpi_task.mpi_setup['slots']
+        workers = mpi_task.mpi_setup['workers']
+       
+        # FIXME: this function should be part of class: Kubeflow
+        if not mpi_task.mpi_setup["scheduler"]:
+            kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
+        else:
+            raise NotImplementedError("scheduler specfication not implmented yet")
+
+        kf_task['spec']['slotsPerWorker'] = slots
+        worker = kf_task['spec']['mpiReplicaSpecs']['Worker']
+        launcher = kf_task['spec']['mpiReplicaSpecs']['Launcher']
+
+        worker['replicas'] = workers
+        worker['template']['spec']['containers'][0]['image'] = mpi_task.image
+        worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+        worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
+
+        cmd_list = mpi_task.cmd.split(" ")
+        cmd_list.insert(0, str(mpi_task.vcpus))
+        for c in cmd_list:
+            launcher['template']['spec']['containers'][0]['args'].append(c)
+
+        launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
+        launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+
+        combined_deployments.append(kf_task)
+
+    return combined_deployments
+
+
+# --------------------------------------------------------------------------
+#
+def load_yaml(fp):
+    with open(fp, "r") as file:
+        yaml_obj = yaml.safe_load(file)
+    return yaml_obj
+
+# --------------------------------------------------------------------------
+#
+def dump_yaml(obj, fp):
+    with open(fp, "w") as file:
+        yaml.safe_dump(file, obj)
+
+
+# --------------------------------------------------------------------------
+#
+def load_multiple_yamls(fp):
+    with open(fp, "r") as file:
+        yaml_objs = list(yaml.safe_load_all(file))
+    return yaml_objs
+
+
+# --------------------------------------------------------------------------
+#
+def dump_multiple_yamls(yaml_objects: list, fp):
+    # Dump the YAML objects into a single file
+    with open(fp, 'w') as file:
+        yaml.dump_all(yaml_objects, file)
+
+
+# --------------------------------------------------------------------------
+#
+def download_files(urls, destination):    
+    destinations = []
+    for url in urls:
+        try:
+            dest = destination + "/" + url.split("/")[-1]
+            request.urlretrieve(url, dest)
+            destinations.append(dest)
+        except Exception as e:
+            raise(e)
+
+    return destinations

@@ -1,3 +1,4 @@
+import copy
 from typing import OrderedDict
 from concurrent.futures import Future
 
@@ -19,12 +20,10 @@ class Task(Future):
         self.ip       = None
         self.port     = None
         self.arn      = None
-
+        self.type     = None
         self.cmd      = None
         self.image    = None
-
         self.state    = None
-
         self.restart  = None
 
 
@@ -176,3 +175,66 @@ class Task(Future):
         """
         pass
 
+
+    def reset_state(self):
+        self.state = None
+        self._state = 'PENDING'
+        self._exception = None
+
+
+    def pending(self):
+        return self._state == 'PENDING'
+
+
+class Pod:
+    global containers
+    containers = []
+    
+    def add_containers(tasks: list):
+        for t in tasks:
+            containers.append(t)
+
+    def get_containers():
+        return containers
+
+
+class MPI_Pod(Pod):
+    pass
+
+
+class BatchTasks:
+    """
+    Represents a batch of replicated tasks.
+
+    Args:
+        replicas (int): The number of task replicas to create.
+        task (Task): The original task to be replicated.
+
+    Raises:
+        Exception: If replicas argument is not provided or evaluates to False.
+
+    Returns:
+        list: A list containing the replicated tasks futures to the user.
+
+    Example:
+        replicas = 3
+        task = Task(...)
+        batch = BatchTasks(replicas, task)
+        # batch.tasks will contain a list of three replicated task instances.
+    """
+
+    def __init__(self, replicas, task: Task) -> None:
+        
+        self.replicas = replicas
+        if not self.replicas:
+            raise Exception('BatchTasks type requires replicas to be set')
+        
+        tasks = []
+        for _ in range(self.replicas):
+            _task = copy.copy(task)
+            tasks.append(_task)
+
+        return self
+
+
+    

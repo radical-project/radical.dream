@@ -55,6 +55,7 @@ class Remote:
         into a json object
         '''
 
+        # FIXME: why not?
         if logger and munch:
             raise Exception('can not munch a loggable value')
 

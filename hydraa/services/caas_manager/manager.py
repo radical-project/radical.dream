@@ -160,8 +160,7 @@ class CaasManager:
             try:
                 msg = manager_queue.get(block=True, timeout=0.1)
                 if msg:
-                    self.log.trace('manager {0} reported: {1}'.format(manager_name,
-                                                                              msg))
+                    self.log.trace('{0} reported: {1}'.format(manager_name, msg))
             except queue.Empty:
                 continue
 
@@ -187,9 +186,9 @@ class CaasManager:
                     print('submitting tasks: ', tasks_counter, end='\r')
                     tasks_counter +=1
 
-                if task.provider not in self._registered_managers.keys():
-                    self.log.trace('no manager ({0}) found for task {0}'.format(task.provider,
-                                                                                        task))
+                if not task.provider or task.provider not in self._registered_managers.keys():
+                    self.log.warning('no manager found for this task, submitting to a any manager')
+                    list(self._registered_managers.values())[0]['in_q'].put(task)
 
 
     # --------------------------------------------------------------------------

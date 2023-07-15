@@ -146,13 +146,10 @@ class ChiCaas:
         for server in self.vm.Servers:
             public_ip = server.access_ipv4
             self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'cc', public_ip,
-                                                                           self.logger)
+                                                      self.logger)
 
-        # containers per pod
-        cluster_size = self.server.flavor.vcpus - 1
-
-        self.cluster = kubernetes.Cluster(self.run_id, self.vm, cluster_size,
-                                                   self.sandbox, self.logger)
+        self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
+                                          self.logger)
 
         self.cluster.bootstrap()
 
@@ -308,7 +305,7 @@ class ChiCaas:
 
         server_name = 'hydraa-chi-{0}'.format(self.run_id)
         instance    = None
-        self.logger.trace('creating {0}'.format(server_name))
+        self.logger.trace('creating {0} x [{1}]'.format(server_name, min_count))
         if self.vm.LaunchType == 'KVM':
             instance = self.client.create_server(name=server_name, 
                                                  image=image, 
@@ -342,7 +339,7 @@ class ChiCaas:
         if not security == 'default':
             self.client.add_server_security_groups(instance, [security.name])
 
-        self.logger.trace('instance is ACTIVE')
+        self.logger.trace('all servers(s) are active x [{0}]'.format(min_count))
         return instance
 
 
@@ -355,7 +352,6 @@ class ChiCaas:
             keypair = self.client.compute.find_keypair(self.vm.KeyPair)
         
         if not keypair: 
-            self.logger.trace("creating ssh key Pair")
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
@@ -379,6 +375,8 @@ class ChiCaas:
             # modify the permission
             os.chmod(keypair_pri, 0o600)
             os.chmod(keypair_pub, 0o644)
+
+            self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
 
         if not keypair:
             raise Exception('keypair creation failed')
@@ -513,43 +511,46 @@ class ChiCaas:
     def _wait_tasks(self):
 
         if self.asynchronous:
-            raise Exception('Task wait is not supported in asynchronous mode')
+            self.logger.error('tasks wait is not supported in asynchronous mode')
+
+        marked_tasks = set()
 
         while not self._terminate.is_set():
 
             statuses = self.cluster._get_task_statuses()
 
-            stopped = statuses[0]
-            failed  = statuses[1]
-            running = statuses[2]
-            msg = '[failed: {0}, done {1}, running {2}]'.format(len(failed),
-                                                                len(stopped),
-                                                                len(running))
+            msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
+                                                                len(statuses['stopped']),
+                                                                len(statuses['running']))
 
             for task in self._tasks_book.values():
-                if task.name in stopped:
-                    if task.done():
-                        continue
+                if task in marked_tasks:
+                    # NOTE: the MPI task takes sometime to connect to 
+                    # the worker which is reported to be "failed" then running
+                    # this approach should update task state after failer for now.
+                    if task.state == 'FAILED':
+                        # state is changed so reset the task state to 'PENDING'
+                        if task.name not in statuses['failed']:
+                            task.reset_state()
+                            marked_tasks.remove(task)
                     else:
+                        continue
+
+                if task.name in statuses['stopped']:
+                    if not task.done():
+                        task.state = 'DONE'
                         task.set_result('Done')
+                        marked_tasks.add(task)
 
-                # FIXME: better approach?
-                elif task.name in failed:
-                    try:
-                        # check if the task marked failed
-                        # or not and wait for 0.1s to return
-                        exc = task.exception(0.1)
-                        if exc:
-                            # we already marked it
-                            continue
-                    except TimeoutError:
-                        # never marked so mark it.
-                        task.set_exception('Failed')
+                elif task.name in statuses['failed']:
+                    if task.state != 'FAILED':
+                        task.state = 'FAILED'
+                        task.set_exception(Exception('Failed'))
+                        marked_tasks.add(task)
 
-                elif task.name in running:
-                    if task.running():
-                        continue
-                    else:
+                elif task.name in statuses['running']:
+                    if not task.running():
+                        task.state = 'RUNNING'
                         task.set_running_or_notify_cancel()
 
             self.outgoing_q.put(msg)

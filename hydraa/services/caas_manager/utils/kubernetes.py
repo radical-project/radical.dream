@@ -12,10 +12,14 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from .misc          import sh_callout, generate_eks_id
-from hydraa         import CHI, JET2
-from kubernetes     import client
-#from azure.cli.core import get_default_cli
+from hydraa import CHI, JET2
+
+# this should be from hydraa.utils import x, y, z
+from .misc import build_pod
+from .misc import sh_callout
+from .misc import generate_eks_id
+from .misc import dump_multiple_yamls
+from .misc import build_mpi_deployment
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -43,6 +47,9 @@ SLEEP = 2
 
 KUBECTL = shutil.which('kubectl')
 
+POD = ['pod', 'Pod']
+CONTAINER = ['container', 'Container']
+MPI_CONTAINER = ['container.mpi']
 
 # --------------------------------------------------------------------------
 #
@@ -64,6 +71,8 @@ class Cluster:
     3- Container(s) a unit of software that packages code and its
        dependencies so the application.
 
+    4- MPI pod(s)/container(s): kubeflow deployment
+
 
     This cluster can:
 
@@ -77,27 +86,27 @@ class Cluster:
        performance metrics.
     """
 
-    def __init__(self, run_id, vm, cluster_size, sandbox, log):
+    def __init__(self, run_id, vm, sandbox, log):
         """
         The constructor for Cluster class.
 
         Parameters:
             run_id       (str)      : Unique id deliverd by the controller manager.
             vm           (hydraa.vm): A AWS/Azure/OpenStack Hydraa VM.
-            cluster_size (int)      : The number of cores each node has.
             sandbox      (str)      : A path for the folder of hydraa manager.
             log          (logging)  : A logger object.
 
         """
         self.id           = run_id
         self.vm           = vm
+        self.name         = 'cluster-{0}.{1}'.format(self.vm.Provider, run_id)
         self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
         self.logger       = log
         self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = cluster_size     
-        self.active_nodes = 0
+        self.size         = {'vcpus': -1, 'memory': 0, 'storage': 0}
+ 
         self.kube_config  = None
         self.status       = None
 
@@ -151,8 +160,10 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building {0} nodes Kubernetes cluster on {1} started....'.format(len(self.vm.Servers),
-                                                                                   self.vm.Provider))
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                       len(self.vm.Servers)))
+
+        self.status = BUSY
 
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
@@ -163,11 +174,16 @@ class Cluster:
 
         nodes_map = []
         for server in self.vm.Servers:
+            # build then nodes map
             network = server.addresses.values()
             fixed_ip = next(iter(network))[0]['addr']
             hostname_ip = server.name + ',' + fixed_ip
             nodes_map.append(hostname_ip)
-        
+
+            # update the cluster size based on each node
+            self.size['vcpus'] += server.flavor.vcpus
+            self.size['memory'] += server.flavor.ram
+            self.size['storage'] += server.flavor.disk
 
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
@@ -188,21 +204,35 @@ class Cluster:
             self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
 
         self.logger.trace('change bootstrap.sh permission')
-
-        res = self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True)
-
+        self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True, hide=True)
         self.logger.trace('invoke bootstrap.sh')
 
-        bootstrap_cmd = './bootstrap_kubernetes.sh -m "{0}" -u "{1}" -k "{2}" > /dev/null'.format(nodes_map,
-                                                                                           self.remote.user,
-                                                                                            remote_key_path)
+        # start the bootstraping as a background process.
+        bootstrap_cmd = 'nohup ./bootstrap_kubernetes.sh '
+        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
+                                                                 self.remote.user,
+                                                                 remote_key_path)
+        bootstrap_cmd += '/dev/null < /dev/null &'
+        bootstrap_res = self.remote.run(bootstrap_cmd, hide=True, warn=True)
 
-        res = self.remote.run(bootstrap_cmd, in_stream=False, hide=True, warn=True)
+        timeout_minutes = 30
+        start_time = time.time()
 
-        if res.return_code:
-            raise Exception('failed to build Kuberentes cluster: {0}'.format(res.stderr))
-        else:
-            self.logger.trace(res.stdout)
+        while True:
+            check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
+            if not check_cluster.return_code:
+                self.logger.trace('{0} installation succeeded, logs are under' \
+                                  '$HOME/kubespray/ansible.*'.format(self.name))
+                break
+            else:
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= timeout_minutes * 60:
+                    raise TimeoutError('failed to build {0} within' \
+                                       ' [{1}] min.'.format(self.name, timeout_minutes))
+                else:
+                    self.logger.warning('installation of {0} is still in progress. ' \
+                                        'Retrying in 1 minute.'.format(self.name))
+                    time.sleep(60)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
@@ -210,7 +240,9 @@ class Cluster:
 
         self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
 
-        print('Kubernetes cluster is active on provider: {0}'.format(self.vm.Provider))
+        self.status = READY
+
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
@@ -223,8 +255,7 @@ class Cluster:
         open(config_file, 'x')
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-       
-        # FIXME: delay in here, why?
+
         self.remote.get('.kube/config', local=config_file, preserve_mode=True)
 
         return config_file
@@ -245,82 +276,63 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
+        scpp = [] # single container per pod
+        mcpp = [] # multiple containers per pod
+        mpip = [] # mpi pods
 
-        pods            = []
-        pods_names      = []
+        deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
-        self.profiler.prof('schedule_pods_start', uid=self.id)
-        batches         = self.schedule(ctasks)
-        self.profiler.prof('schedule_pods_stop', uid=self.id)
+        #self.profiler.prof('create_pod_start', uid=pod_id)
+        #self.profiler.prof('create_pod_stop', uid=pod_id)
 
-        depolyment_file = '{0}/hydraa_pods.json'.format(self.sandbox, self.id)
+        # FIXME: The work down need to be part of a
+        # ``SCHEDULER`` not pod generator.
+        # filter the tasks based on their types
+        for ctask in ctasks:
+            pod_id = str(self.pod_counter).zfill(6)
+            # Single Container Per Pod (use kubernetes default scheduler here)
+            if ctask.type in POD or not ctask.type:
+                pod = build_pod([ctask], pod_id)
+                scpp.append(pod)
+                self.pod_counter +=1
 
-        for batch in batches:
-            pod_id     = str(self.pod_counter).zfill(6)
-            containers = []
+            # Multiple Containers Per Pod. TODO: use orhestrator.scheduler
+            elif ctask.type in CONTAINER:
+                mcpp.append(ctask)
 
-            self.profiler.prof('create_pod_start', uid=pod_id)
-            for ctask in batch:
-                envs = []
-                if ctask.env_var:
-                    for env in ctask.env_vars:
-                        pod_env  = client.V1EnvVar(name = env[0], value = env[1])
-                        envs.append(pod_env)
+            # Kubeflow based MPI-Pods (use Kueue job controller or user scheduler here)
+            elif ctask.type in MPI_CONTAINER:
+                mpip.append(ctask)
 
-                pod_cpu = "{0}m".format(ctask.vcpus * 1000)
-                pod_mem = "{0}Mi".format(ctask.memory)
+        if mcpp:
+            # FIXME: use orhestrator.scheduler
+            self.profiler.prof('schedule_pods_start', uid=self.id)
+            batches = self.schedule(mcpp)
+            self.profiler.prof('schedule_pods_stop', uid=self.id)
 
-                resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                          limits={"cpu": pod_cpu, "memory": pod_mem})
+            for batch in batches:
+                pod = build_pod(batch, pod_id)
+                scpp.append(pod)
+                self.pod_counter +=1
 
-                pod_container = client.V1Container(name = ctask.name, image = ctask.image,
-                            resources = resources, command = ctask.cmd, env = envs)
+            dump_multiple_yamls(mcpp, deployment_file)
 
-                containers.append(pod_container)
+        if scpp:
+            dump_multiple_yamls(scpp, deployment_file)
 
-            pod_name      = "hydraa-pod-{0}".format(pod_id)
-            pod_metadata  = client.V1ObjectMeta(name = pod_name)
+        # FIXME: use orhestrator.mpi_scheduler
+        # FIXME: support heterogenuous tasks and fit them within the MPI world size
+        if mpip:
+            mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
+            dump_multiple_yamls(mpi_objs, deployment_file)
+            self.pod_counter += len(mpip)
 
-            # check if we need to restart the task
-            if ctask.restart:
-                restart_policy = ctask.restart
-            else:
-                restart_policy = 'Never'
-
-            pod_spec  = client.V1PodSpec(containers=containers,
-                                restart_policy=restart_policy)
-
-            pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
-                            metadata=pod_metadata, spec=pod_spec)
-
-            # santize the json object
-            sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
-
-            pods.append(sn_pod)
-            pods_names.append(pod_name)
-
-            self.pod_counter +=1
-        
-            self.profiler.prof('create_pod_stop', uid=pod_id)
-
-        with open(depolyment_file, 'w') as f:
-            for p in pods:
-                print(p, file=f)
-
-        # we are faking a json file here
-        with open(depolyment_file, "r") as f:
-            text = f.read()
-            text = text.replace("'", '"')
-        
-        with open(depolyment_file, "w") as f:
-            text = f.write(text)
-
-        return depolyment_file, pods_names, batches
+        return deployment_file, [], []
 
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks):
+    def submit(self, ctasks=[], deployment_file=None):
         
         """
         This function to coordiante the submission of list of tasks.
@@ -334,23 +346,32 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
+        batches = []
+        pods_names = []
+        if not ctasks and not deployment_file:
+            self.logger.error('at least deployment or tasks must be specified')
+            return None, [], []
 
-        self.profiler.prof('generate_pods_start', uid=self.id)
-        depolyment_file, pods_names, batches = self.generate_pods(ctasks)
-        self.profiler.prof('generate_pods_stop', uid=self.id)
+        if deployment_file and ctasks:
+            self.logger.error('can not submit both deployment and tasks')
+            return None, [], []
 
-        cmd = 'kubectl apply -f {0} --validate=false'.format(depolyment_file)
-        out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        if ctasks:
+            self.profiler.prof('generate_pods_start', uid=self.id)
+            deployment_file, pods_names, batches = self.generate_pods(ctasks)
+            self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if ret:
-            raise Exception(err)
+        if deployment_file:
+            cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
+            out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-        print('all pods are submitted')
-
-        self.status = BUSY
-
-        return depolyment_file, pods_names, batches
-
+            if not ret:
+                print('all pods are submitted')
+                return deployment_file, pods_names, batches
+            else:
+                self.logger.error(err)
+                print('failed to submit pods, please check the logs for more info.')
+  
 
     # --------------------------------------------------------------------------
     #
@@ -374,7 +395,7 @@ class Cluster:
             raise Exception('Batch size can not be 0')
 
         # containers per pod
-        CPP = self.size
+        CPP = math.ceil(self.size['vcpus'] / self.vm.MinCount)
 
         tasks_per_pod = []
 
@@ -491,17 +512,19 @@ class Cluster:
 
         response = sh_callout(cmd, shell=True, munch=True, kube=self)
 
-        statuses   = []
+        statuses   = {}
         stopped    = []
-        failed     = [] 
+        failed     = []
         running    = []
 
         if response:
-            items = response['items']
+            items = response.get('items', [])
             for item in items:
                 if item['kind'] == 'Pod':
+                    pod_name = item['metadata'].get('name', '')
                     # this is a hydraa pod
-                    if item['metadata']['name'].startswith('hydraa-pod-'):
+                    if pod_name.startswith('hydraa-pod-') or \
+                        pod_name.startswith('hydraa-mpi-ctask') and 'launcher' in pod_name:
                         already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):
@@ -543,9 +566,7 @@ class Cluster:
 
                                     already_checked.append(c['name'])
 
-            statuses.append(stopped)
-            statuses.append(failed)
-            statuses.append(running)
+            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
 
             return statuses
 
@@ -643,7 +664,7 @@ class Cluster:
 
         def collect(ids):
             self.logger.trace('collecting a profiles checkpoint')
-            fname = self.sandbox+'/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            fname = self.sandbox + '/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
@@ -698,9 +719,10 @@ class Cluster:
     def shutdown(self):
         # nothing to shutdown here besides closing
         # the ssh channels and tunnels
-        self.remote.close()
-        self._tunnel.stop()
-
+        if self.remote:
+            self.remote.close()
+            if self._tunnel:
+                self._tunnel.stop()
 
 
 class AKS_Cluster(Cluster):
@@ -723,7 +745,7 @@ class AKS_Cluster(Cluster):
         vm.Remotes = []
 
         # we set size to 0 and we determine it later
-        super().__init__(run_id, vm, 0, sandbox, log)
+        super().__init__(run_id, vm, sandbox, log)
 
         atexit.register(self.shutdown)
 
@@ -737,8 +759,7 @@ class AKS_Cluster(Cluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
-        if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
+        self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
@@ -748,14 +769,17 @@ class AKS_Cluster(Cluster):
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
-        print('building AKS cluster..')
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                len(self.vm.Servers)))
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        print('AKS cluster is active on provider: {0}'.format(self.vm.Provider))
+        self.status = READY
+
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
@@ -846,7 +870,7 @@ class AKS_Cluster(Cluster):
         """
 
         if not self.auto_scaler:
-            raise Exception('No autoscaler in this cluster, you need to create one')
+            self.logger.error('No autoscaler in this cluster, you need to create one')
         
         cmd = 'az aks nodepool update '
         cmd += '--update-cluster-autoscaler '
@@ -886,12 +910,12 @@ class AKS_Cluster(Cluster):
     #
     def submit(self, ctasks):
 
-        depolyment_file, pods_names, batches = super().submit(ctasks)
+        deployment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
         super().collect_profiles()
 
-        return depolyment_file, pods_names, batches
+        return deployment_file, pods_names, batches
     
 
     # --------------------------------------------------------------------------
@@ -943,7 +967,7 @@ class EKS_Cluster(Cluster):
 
         vm.Remotes          = []
 
-        super().__init__(run_id, vm, 0, sandbox, log)
+        super().__init__(run_id, vm, sandbox, log)
 
         atexit.register(self.shutdown)
 
@@ -969,10 +993,10 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('cofigure_start', uid=self.id)
         self.kube_config = self.configure()
 
-        if not self.size:
-            self.size = self.get_vm_size(self.vm.InstanceID) - 1
+        self.size = self.get_vm_size(self.vm.InstanceID) - 1
 
-        print('Building eks cluster with {0} nodes..'.format(self.vm.MinCount))
+        print('building {0} with x [{1}] nodes'.format(self.name,
+                                                len(self.vm.Servers)))
 
         cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
         cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
@@ -993,7 +1017,9 @@ class EKS_Cluster(Cluster):
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
-        print('EKS cluster is active on provider: {0}'.format(self.vm.Provider))
+        self.status = READY
+
+        print('{0} is in {1} state'.format(self.name, self.status))
 
 
     # --------------------------------------------------------------------------
@@ -1104,12 +1130,12 @@ class EKS_Cluster(Cluster):
     #
     def submit(self, ctasks):
 
-        depolyment_file, pods_names, batches = super().submit(ctasks)
+        deployment_file, pods_names, batches = super().submit(ctasks)
 
         # start the profiles thread
         super().collect_profiles()
 
-        return depolyment_file, pods_names, batches
+        return deployment_file, pods_names, batches
 
 
     # --------------------------------------------------------------------------
