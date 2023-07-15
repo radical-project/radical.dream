@@ -71,6 +71,8 @@ class Cluster:
     3- Container(s) a unit of software that packages code and its
        dependencies so the application.
 
+    4- MPI pod(s)/container(s): kubeflow deployment
+
 
     This cluster can:
 
@@ -743,7 +745,7 @@ class AKS_Cluster(Cluster):
         vm.Remotes = []
 
         # we set size to 0 and we determine it later
-        super().__init__(run_id, vm, 0, sandbox, log)
+        super().__init__(run_id, vm, sandbox, log)
 
         atexit.register(self.shutdown)
 
@@ -965,7 +967,7 @@ class EKS_Cluster(Cluster):
 
         vm.Remotes          = []
 
-        super().__init__(run_id, vm, 0, sandbox, log)
+        super().__init__(run_id, vm, sandbox, log)
 
         atexit.register(self.shutdown)
 

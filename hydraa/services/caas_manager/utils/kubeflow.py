@@ -8,43 +8,33 @@ from .misc import dump_multiple_yamls
 
 # --------------------------------------------------------------------------
 #
-class KubeflowMPILauncher:
+class Kubeflow:
+    """
+    A class for managing Kubeflow deployments and operations.
 
-    def __init__(self, num_workers, slots_per_worker):
-        self.num_workers = num_workers
-        self.slots_per_worker = slots_per_worker
+    Args:
+        manager (CaasManager): An instance of the hydraa.caas_manager class.
 
-    # --------------------------------------------------------------------------
-    #
-    def launch_mpi_container(self, tasks):
+    Attributes:
+        manager (CaasManager): An instance of the hydraa.caas_manager class.
 
-        for task in tasks:
-            task.type = 'container.mpi'
-            task.mpi_setup = {"workers": self.num_workers,
-                              "slots": self.slots_per_worker,
-                              "scheduler": ""}
-            self.manager.incoming_q.put(task)
-
-    # --------------------------------------------------------------------------
-    #
-    def kill(self):
-        cmd = "kubectl delete MPIJob"
-        res = self.manager.cluster.remote.run(cmd)
-
-
-# --------------------------------------------------------------------------
-#
-class Kubeflow():
+    """
 
     def __init__(self, manager):
         self.manager = manager
-        self.launcher = None
         self.cluster = self.manager.cluster
 
 
    # --------------------------------------------------------------------------
    #
     def _install_kf_mpi(self):
+        """
+        Installs the Kubeflow MPI operator.
+
+        Returns:
+            str: None
+
+        """
         kf_cmd = "kubectl create -f "
         kf_cmd += "https://raw.githubusercontent.com/kubeflow/mpi-operator" \
                   "/master/deploy/v2beta1/mpi-operator.yaml"
@@ -55,7 +45,11 @@ class Kubeflow():
     #
     def check(self):
         """
-        check if Kubeflow mpi-operator is deployed or not
+        Checks if Kubeflow mpi-operator is deployed or not.
+
+        Returns:
+            bool: True if mpi-operator is deployed, False otherwise.
+
         """
         cmd = "kubectl get crd"
         res = self.cluster.remote.run(cmd, hide=True)
@@ -66,16 +60,18 @@ class Kubeflow():
             return False
 
         if res.stdout:
-            if "mpijobs.kubeflow" in res.stdout:
-                return True
-            else:
-                return False
+            return "mpijobs.kubeflow" in res.stdout
 
 
     # --------------------------------------------------------------------------
     #
     def _deploy_scheduler(self, scheduler):
         """
+        Deploys the specified MPI scheduler to Kubeflow.
+
+        Args:
+            scheduler (str): Name of the MPI scheduler to deploy.
+
         As of now this function would deploy Kueue scheduler
         TODO: This should be a univeral function to add any
         scheduler to Kubeflow.
@@ -92,11 +88,15 @@ class Kubeflow():
     # --------------------------------------------------------------------------
     #
     def _start_kueue(self):
+        """
+        Starts the Kueue job controller in Kubeflow.
+
+        """
 
         url1 = "https://github.com/kubernetes-sigs/kueue/releases" \
                "/download/v0.4.0/manifests.yaml"
-        url2 = "https://raw.githubusercontent.com/kubernetes-sigs" \
-               "/kueue/main/examples/single-clusterqueue-setup.yaml"
+        url2 = "https://raw.githubusercontent.com/kubernetes-sigs/kueue/main" \
+               "/site/static/examples/single-clusterqueue-setup.yaml"
 
         # download both files to the cluster sandbox
         files = download_files([url1, url2], self.cluster.sandbox)
@@ -128,9 +128,9 @@ class Kubeflow():
         # "inject_kube_config" (invoked by sh_callout) can apply the cluster
         # config to one cmd at a time
         ret = None
-        for idx, f in enumerate(files):
-            out, err, ret = sh_callout("kubectl apply -f {0}".format(f),
-                                        shell=True, kube=self.cluster)
+        for idx, file in enumerate(files):
+            out, err, ret = sh_callout("kubectl apply -f {0}".format(file),
+                                       shell=True, kube=self.cluster)
             # reprot the error for any command
             if ret:
                 self.cluster.logger.error(err)
@@ -146,19 +146,128 @@ class Kubeflow():
 
     # --------------------------------------------------------------------------
     #
-    def start(self, launcher, scheduler=None):
+    def start(self, scheduler=None):
+        """
+        Starts the Kubeflow deployment with the specified MPI scheduler.
+
+        Args:
+            scheduler (str, optional): Name of the MPI scheduler to deploy. Defaults to None.
+
+        """
 
         while True:
-            if self.cluster and self.cluster.status =='Ready':
-                kf_installed = self.check()
-                if kf_installed:
+            if self.cluster and self.cluster.status == 'Ready':
+                if self.check():
+                    self.cluster.logger.trace("Kueue job controller is " \
+                                              "already installed on {0}"\
+                                              .format(self.cluster.name))
                     return
-                self.launcher = launcher
                 self._install_kf_mpi()
                 self._deploy_scheduler(scheduler)
-                self.launcher.manager = self.manager
                 break
-            else:
-                time.sleep(5)
 
-        return self
+            self.cluster.logger.trace("{0} is in {1} state, waiting..."\
+                                     .format(self.cluster.name, self.cluster.status))
+            time.sleep(5)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def submit(self, task):
+
+        self.manager.incoming_q.put(task)
+
+
+# --------------------------------------------------------------------------
+#
+class KubeflowMPILauncher(Kubeflow):
+    """
+    A class for launching MPI (Message Passing Interface) jobs using Kubeflow.
+
+    Args:
+        num_workers (int): Number of workers to launch for the MPI job.
+        slots_per_worker (int): Number of slots per worker.
+
+    Attributes:
+        num_workers (int): Number of workers for the MPI job.
+        slots_per_worker (int): Number of slots per worker.
+
+    """
+
+    def __init__(self, manager, num_workers, slots_per_worker, scheduler=None):
+        self.num_workers = num_workers
+        self.slots_per_worker = slots_per_worker
+
+        super().__init__(manager)
+
+        self.start(scheduler)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def launch(self, tasks):
+        """
+        Launches MPI jobs using Kubeflow. Each task results
+        in an isolated MPI pod deployment with 1 launcher
+        and N workers.
+
+        Args:
+            tasks (list): List of tasks to be launched.
+
+        """
+        for task in tasks:
+            task.type = 'container.mpi'
+            task.mpi_setup = {"workers": self.num_workers,
+                              "slots": self.slots_per_worker,
+                              "scheduler": ""}
+            self.submit(task)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def kill(self):
+        """
+        Kills the MPI job.
+
+        Returns:
+            str: None
+        """
+        cmd = "kubectl delete MPIJob"
+        res = self.manager.cluster.remote.run(cmd)
+
+
+# --------------------------------------------------------------------------
+#
+class KubeflowTraning(Kubeflow):
+    """
+    A class for launching training operator provides Kubernetes custom
+    resources that makes it easy to run distributed or
+    non-distributed TensorFlow/PyTorch/Apache MXNet/XGBoost/MPI
+    jobs on Kubernetes
+
+    ref: https://github.com/kubeflow/training-operator
+    """
+    def __init__(self):
+        raise NotImplementedError('KubeflowTraning operator not supported yet')
+
+
+# --------------------------------------------------------------------------
+#
+class KubeflowPipelines(Kubeflow):
+    """
+    A class for Kubeflow pipelines a reusable end-to-end ML
+    workflows built using the Kubeflow Pipelines SDK. The
+    Kubeflow pipelines service has the following goals:
+
+    * End to end orchestration: enabling and simplifying the
+      orchestration of end to end machine learning pipelines
+    * Easy experimentation: making it easy for you to try numerous
+      ideas and techniques, and manage your various trials/experiments.
+    * Easy re-use: enabling you to re-use components and pipelines to
+      quickly cobble together end to end solutions, without having to
+      re-build each time.
+
+    ref: https://github.com/kubeflow/pipelines
+    """
+    def __init__(self):
+        raise NotImplementedError('KubeflowPipelines operator not supported yet')
