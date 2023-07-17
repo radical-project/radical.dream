@@ -13,6 +13,8 @@ import threading     as mt
 import radical.utils as ru
 
 from hydraa import CHI, JET2
+from kubernetes import client
+from kubernetes import config
 
 # this should be from hydraa.utils import x, y, z
 from .misc import build_pod
@@ -282,25 +284,21 @@ class Cluster:
 
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
-        #self.profiler.prof('create_pod_start', uid=pod_id)
-        #self.profiler.prof('create_pod_stop', uid=pod_id)
-
-        # FIXME: The work down need to be part of a
-        # ``SCHEDULER`` not pod generator.
-        # filter the tasks based on their types
         for ctask in ctasks:
             pod_id = str(self.pod_counter).zfill(6)
-            # Single Container Per Pod (use kubernetes default scheduler here)
-            if ctask.type in POD or not ctask.type:
-                pod = build_pod([ctask], pod_id)
-                scpp.append(pod)
-                self.pod_counter +=1
 
-            # Multiple Containers Per Pod. TODO: use orhestrator.scheduler
+            # Single Container Per Pod 
+            # (use kubernetes default scheduler here)
+            if not ctask.type or ctask.type in POD:
+                scpp.append(ctask)
+
+            # Multiple Containers Per Pod. 
+            # TODO: use orhestrator.scheduler
             elif ctask.type in CONTAINER:
                 mcpp.append(ctask)
 
-            # Kubeflow based MPI-Pods (use Kueue job controller or user scheduler here)
+            # Kubeflow based MPI-Pods (use
+            # Kueue job controller or user scheduler here)
             elif ctask.type in MPI_CONTAINER:
                 mpip.append(ctask)
 
@@ -314,14 +312,18 @@ class Cluster:
                 pod = build_pod(batch, pod_id)
                 scpp.append(pod)
                 self.pod_counter +=1
-
             dump_multiple_yamls(mcpp, deployment_file)
 
         if scpp:
-            dump_multiple_yamls(scpp, deployment_file)
+            _scpp = []
+            for task in scpp:
+                pod = build_pod([task], pod_id)
+                _scpp.append(pod)
+                self.pod_counter +=1
+            dump_multiple_yamls(_scpp, deployment_file)
 
-        # FIXME: use orhestrator.mpi_scheduler
-        # FIXME: support heterogenuous tasks and fit them within the MPI world size
+        # FIXME: support heterogenuous tasks and fit them
+        #  within the MPI world size
         if mpip:
             mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
             dump_multiple_yamls(mpi_objs, deployment_file)
@@ -362,7 +364,7 @@ class Cluster:
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
         if deployment_file:
-            cmd = 'kubectl apply -f {0} --validate=false'.format(deployment_file)
+            cmd = 'nohup kubectl apply -f {0} &'.format(deployment_file)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             if not ret:

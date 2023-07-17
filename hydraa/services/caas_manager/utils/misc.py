@@ -178,7 +178,7 @@ def build_pod(batch: list, pod_id):
     pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
                     metadata=pod_metadata, spec=pod_spec)
 
-    # santize the json object
+    # sanitize the json object
     sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)
 
     return sn_pod
