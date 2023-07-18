@@ -112,18 +112,11 @@ class Remote:
 
     # --------------------------------------------------------------------------
     #
-    def setup_ssh_tunnel(self, kube_config):
-        # default Kube API service port
-        out, err, ret = sh_callout('grep "server: https://" {0}'.format(kube_config),
-                                                                          shell=True)
+    def setup_ssh_tunnel(self, kube_server):
 
-        if ret:
-            raise Exception('failed to fetch kubectl config ip: {0}'.format(err))
-
-        ip_port = out.strip().split('server: https://')[1]
         remote_port = 22
 
-        local_host, local_port = ip_port.split(":", 1)
+        local_host, local_port = kube_server.split('//')[1].split(':')
         open_port = self.find_open_port(local_host)
 
         server = SSHTunnelForwarder((self.ip, remote_port),
@@ -143,7 +136,7 @@ class Remote:
     # --------------------------------------------------------------------------
     #
     def find_open_port(self, host):
-    
+
         '''
         Check for the HYDRAA_USED_PORTS env var exist, which will hold
         the used port of the tunnelized Kuberentes cluster endpoints.
@@ -178,7 +171,7 @@ class Remote:
                 continue
             finally:
                 sock.close()
-        
+
         return port
 
 

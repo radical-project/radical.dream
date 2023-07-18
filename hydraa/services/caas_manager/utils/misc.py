@@ -25,7 +25,7 @@ def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False
     call a shell command, return `[stdout, stderr, retval]`.
     '''
     if kube:
-        cmd = inject_kubeconfig(cmd, kube.kube_config, kube._tunnel.local_bind_port)
+        cmd = inject_kubeconfig(cmd, kube.kube_config, kube.tunnel.local_bind_port)
     # convert string into arg list if needed
     if hasattr(str, cmd) and \
        not shell: cmd    = shlex.split(cmd)
@@ -257,11 +257,15 @@ def load_yaml(fp):
         yaml_obj = yaml.safe_load(file)
     return yaml_obj
 
+
 # --------------------------------------------------------------------------
 #
-def dump_yaml(obj, fp):
+def dump_yaml(obj, fp, safe=True):
     with open(fp, "w") as file:
-        yaml.safe_dump(file, obj)
+        if not safe:
+            yaml.dump(obj, file)
+        else:
+            yaml.safe_dump(obj, file)
 
 
 # --------------------------------------------------------------------------

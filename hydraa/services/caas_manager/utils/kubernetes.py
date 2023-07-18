@@ -16,6 +16,8 @@ from kubernetes import client
 from kubernetes import config
 
 from .misc import build_pod
+from .misc import load_yaml
+from .misc import dump_yaml
 from .misc import sh_callout
 from .misc import generate_eks_id
 from .misc import dump_multiple_yamls
@@ -250,13 +252,25 @@ class Cluster:
         config_file = self.sandbox + "/.kube/config"
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
-        self.logger.trace('kubeconfig path: {0}'.format(config_file))
         self.remote.get('.kube/config', local=config_file, preserve_mode=True)
 
-        self.tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
+        kf = load_yaml(config_file)
+        kube_server = kf['clusters'][0]['cluster']['server']
 
-        sh_callout(" {0} {1}".format(config_file,
-                                    self.tunnel.local_bind_address), shell=True)
+        # create the ssh tunnel
+        self.tunnel = self.remote.setup_ssh_tunnel(kube_server)
+
+        # update the Kube config file with the tunneled port
+        kf['clusters'][0]['cluster']['server'] = 'https://127.0.0.1:{0}'.\
+        format(self.tunnel.local_bind_port)
+
+        # write the changes to the disk
+        dump_yaml(kf, config_file, safe=False)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(config_file)
+
+        self.logger.trace('kubeconfig path: {0}'.format(config_file))
 
         return config_file
 
