@@ -159,7 +159,7 @@ def build_pod(batch: list, pod_id):
         pod_mem = "{0}Mi".format(ctask.memory)
 
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                    limits={"cpu": pod_cpu, "memory": pod_mem})
+                                                limits={"cpu": pod_cpu, "memory": pod_mem})
 
         pod_container = client.V1Container(name = ctask.name, image = ctask.image,
                     resources = resources, command = ctask.cmd, env = envs)

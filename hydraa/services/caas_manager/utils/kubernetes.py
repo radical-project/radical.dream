@@ -12,11 +12,9 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from hydraa import CHI, JET2
 from kubernetes import client
 from kubernetes import config
 
-# this should be from hydraa.utils import x, y, z
 from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
@@ -239,9 +237,7 @@ class Cluster:
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
         self.kube_config = self.configure()
-
-        self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
-
+        self.namespace = self.create_namespace('hydraa-namespace')
         self.status = READY
 
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -251,17 +247,41 @@ class Cluster:
     #
     def configure(self):
 
-        self.logger.trace('creating .kube folder')
         config_file = self.sandbox + "/.kube/config"
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
-
-        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-
+        self.logger.trace('kubeconfig path: {0}'.format(config_file))
         self.remote.get('.kube/config', local=config_file, preserve_mode=True)
+
+        self.tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
+
+        sh_callout(" {0} {1}".format(config_file,
+                                    self.tunnel.local_bind_address), shell=True)
 
         return config_file
 
+
+    # --------------------------------------------------------------------------
+    #
+    def create_namespace(self, namespace):
+
+        namespaces = client.CoreV1Api().list_namespace()
+        all_namespaces = []
+        for ns in namespaces.items:
+            all_namespaces.append(ns.metadata.name)
+
+        if namespace in all_namespaces:
+            self.logger.warning.info("namespace {0} exists on {1} and "\
+                                     "will be reused".format(namespace, self.name))
+        else:
+            namespace_metadata = client.V1ObjectMeta(name=namespace)
+            client.CoreV1Api().create_namespace(
+                client.V1Namespace(metadata=namespace_metadata)
+            )
+            self.logger.trace("namespace {0} is created on {1}".\
+                              format(namespace, self.name))
+
+        return namespace
 
     # --------------------------------------------------------------------------
     #
@@ -303,6 +323,7 @@ class Cluster:
                 mpip.append(ctask)
 
         if mcpp:
+            _mcpp = []
             # FIXME: use orhestrator.scheduler
             self.profiler.prof('schedule_pods_start', uid=self.id)
             batches = self.schedule(mcpp)
@@ -310,9 +331,9 @@ class Cluster:
 
             for batch in batches:
                 pod = build_pod(batch, pod_id)
-                scpp.append(pod)
+                _mcpp.append(pod)
                 self.pod_counter +=1
-            dump_multiple_yamls(mcpp, deployment_file)
+            return _mcpp
 
         if scpp:
             _scpp = []
@@ -320,22 +341,20 @@ class Cluster:
                 pod = build_pod([task], pod_id)
                 _scpp.append(pod)
                 self.pod_counter +=1
-            dump_multiple_yamls(_scpp, deployment_file)
+            return _scpp
 
         # FIXME: support heterogenuous tasks and fit them
         #  within the MPI world size
         if mpip:
             mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
-            dump_multiple_yamls(mpi_objs, deployment_file)
             self.pod_counter += len(mpip)
-
-        return deployment_file, [], []
+        return mpi_objs
 
 
     # --------------------------------------------------------------------------
     #
     def submit(self, ctasks=[], deployment_file=None):
-        
+
         """
         This function to coordiante the submission of list of tasks.
         to the cluster main node.
@@ -348,8 +367,6 @@ class Cluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
-        batches = []
-        pods_names = []
         if not ctasks and not deployment_file:
             self.logger.error('at least deployment or tasks must be specified')
             return None, [], []
@@ -360,19 +377,28 @@ class Cluster:
 
         if ctasks:
             self.profiler.prof('generate_pods_start', uid=self.id)
-            deployment_file, pods_names, batches = self.generate_pods(ctasks)
+            pods = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} &'.format(deployment_file)
+            for pod in pods:
+                client.CoreV1Api().create_namespaced_pod(self.namespace, pod)
+            return [], [], []
+
+        elif deployment_file:
+            cmd = 'nohup kubectl apply -f {0} -n {1} &'.format(deployment_file,
+                                                                self.namespace)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             if not ret:
-                print('all pods are submitted')
-                return deployment_file, pods_names, batches
+                return [], [], []
+
             else:
                 self.logger.error(err)
-                print('failed to submit pods, please check the logs for more info.')
+                print('failed to submit deployment file , please check the '\
+                      'logs for more info.')
+
+        print('all pods/deployment file(s) are submitted to {0}/{1}'.format(self.name,
+                                                                             self.namespace))
   
 
     # --------------------------------------------------------------------------
@@ -723,8 +749,8 @@ class Cluster:
         # the ssh channels and tunnels
         if self.remote:
             self.remote.close()
-            if self._tunnel:
-                self._tunnel.stop()
+            if self.tunnel:
+                self.tunnel.stop()
 
 
 class AKS_Cluster(Cluster):
