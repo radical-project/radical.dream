@@ -42,9 +42,11 @@ PFAILED_STATE = ['OutOfCPU','OutOfMemory',
                 'CreateContainerConfigError','RunContainerError',
                 'OOMKilled','ErrImagePull','Evicted']
 
-BUSY            = 'Busy'
-READY           = 'Ready'
-MAX_PODS        = 250
+DEFAULT_POD = 'regular'
+
+BUSY = 'Busy'
+READY = 'Ready'
+MAX_PODS = 250
 SLEEP = 2
 
 KUBECTL = shutil.which('kubectl')
@@ -315,6 +317,7 @@ class Cluster:
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
         mpip = [] # mpi pods
+        pods = []
 
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
@@ -337,7 +340,6 @@ class Cluster:
                 mpip.append(ctask)
 
         if mcpp:
-            _mcpp = []
             # FIXME: use orhestrator.scheduler
             self.profiler.prof('schedule_pods_start', uid=self.id)
             batches = self.schedule(mcpp)
@@ -345,24 +347,23 @@ class Cluster:
 
             for batch in batches:
                 pod = build_pod(batch, pod_id)
-                _mcpp.append(pod)
+                pods.append({DEFAULT_POD: pod})
                 self.pod_counter +=1
-            return _mcpp
 
         if scpp:
-            _scpp = []
             for task in scpp:
                 pod = build_pod([task], pod_id)
-                _scpp.append(pod)
+                pods.append({DEFAULT_POD: pod})
                 self.pod_counter +=1
-            return _scpp
 
         # FIXME: support heterogenuous tasks and fit them
         #  within the MPI world size
         if mpip:
-            mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
+            mpi_pods = build_mpi_deployment(mpi_tasks=mpip)
             self.pod_counter += len(mpip)
-        return mpi_objs
+            pods.extend(mpi_pods)
+
+        return pods
 
 
     # --------------------------------------------------------------------------
@@ -395,24 +396,29 @@ class Cluster:
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
             for pod in pods:
-                client.CoreV1Api().create_namespaced_pod(self.namespace, pod)
-            return [], [], []
+                if pod.get(DEFAULT_POD):
+                    client.CoreV1Api().create_namespaced_pod(self.namespace,
+                                                             pod[DEFAULT_POD])
+                else:
+                    client.CustomObjectsApi().create_namespaced_custom_object \
+                        ('kubeflow.org','v2beta1', self.namespace, 'mpijobs', pod)
 
         elif deployment_file:
             cmd = 'nohup kubectl apply -f {0} -n {1} &'.format(deployment_file,
-                                                                self.namespace)
+                                                               self.namespace)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-            if not ret:
-                return [], [], []
-
-            else:
+            if ret:
                 self.logger.error(err)
                 print('failed to submit deployment file , please check the '\
                       'logs for more info.')
+                return None, [], []
+
 
         print('all pods/deployment file(s) are submitted to {0}/{1}'.format(self.name,
-                                                                             self.namespace))
+                                                                            self.namespace))
+
+        return None, [], []
   
 
     # --------------------------------------------------------------------------
