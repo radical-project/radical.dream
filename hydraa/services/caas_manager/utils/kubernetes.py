@@ -364,7 +364,8 @@ class Cluster:
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
         if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} &'.format(deployment_file)
+            cmd = 'nohup kubectl apply -f {0} > {1}/apply_output.log 2>&1 </dev/null &'.\
+                   format(deployment_file, self.sandbox)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             if not ret:

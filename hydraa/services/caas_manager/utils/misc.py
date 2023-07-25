@@ -122,7 +122,13 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port):
     cmd = cmd.split()
     kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
     kube_skip_tls = '--insecure-skip-tls-verify'
-    cmd.insert(1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
+
+    for idx, c in enumerate(cmd):
+        if c == 'kubectl':
+            index = idx
+            break
+
+    cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
                                                     kube_endpoint,
                                                     kube_config))
     cmd = ' '.join(cmd)
