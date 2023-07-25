@@ -125,7 +125,6 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port):
 
     for idx, c in enumerate(cmd):
         if c == 'kubectl':
-            index = idx
             break
 
     cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
