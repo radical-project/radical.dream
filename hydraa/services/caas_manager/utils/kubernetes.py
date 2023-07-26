@@ -303,6 +303,7 @@ class Cluster:
                 mpip.append(ctask)
 
         if mcpp:
+            _mcpp = []
             # FIXME: use orhestrator.scheduler
             self.profiler.prof('schedule_pods_start', uid=self.id)
             batches = self.schedule(mcpp)
@@ -310,9 +311,9 @@ class Cluster:
 
             for batch in batches:
                 pod = build_pod(batch, pod_id)
-                scpp.append(pod)
+                _mcpp.append(pod)
                 self.pod_counter +=1
-            dump_multiple_yamls(mcpp, deployment_file)
+            dump_multiple_yamls(_mcpp, deployment_file)
 
         if scpp:
             _scpp = []
