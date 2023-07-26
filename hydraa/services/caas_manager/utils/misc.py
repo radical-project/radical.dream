@@ -119,6 +119,24 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
 # --------------------------------------------------------------------------
 #
 def inject_kubeconfig(cmd, kube_config, local_bind_port):
+    """
+    Injects a custom kubeconfig into a kubectl command and modifies
+    the endpoint and TLS settings to connect to a locally running
+    Kubernetes API server.
+
+    Args:
+        cmd (str): The original kubectl command to be modified.
+        kube_config (str): The path to the custom kubeconfig file.
+        local_bind_port (int): The local port to which the Kubernetes
+        API server is bound.
+
+    Returns:
+        str: The modified kubectl command with the custom kubeconfig and
+        endpoint settings.
+
+    Raises:
+        None
+    """
     cmd = cmd.split()
     kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
     kube_skip_tls = '--insecure-skip-tls-verify'
@@ -128,8 +146,8 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port):
             break
 
     cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
-                                                    kube_endpoint,
-                                                    kube_config))
+                                                        kube_endpoint,
+                                                        kube_config))
     cmd = ' '.join(cmd)
 
     return cmd
