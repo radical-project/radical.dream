@@ -401,7 +401,7 @@ class Jet2Caas():
             self._tasks_book[str(ctask.id)] = ctask
             self._task_id +=1
 
-        # submit to kubernets cluster
+        # submit to Kubernets cluster
         depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
 
         # create entry for the pod in the pods book
@@ -411,13 +411,10 @@ class Jet2Caas():
             self._pods_book[pod_name]['task_list']     = batches[idx]
             self._pods_book[pod_name]['batch_size']    = len(batches[idx])
             self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        
+
         self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks)))
 
         self.profiler.prof('submit_batch_stop', uid=self.run_id)
-
-
-        #self.profiles()
 
 
     # --------------------------------------------------------------------------

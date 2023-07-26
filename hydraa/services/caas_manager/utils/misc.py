@@ -182,10 +182,11 @@ def build_pod(batch: list, pod_id):
         pod_mem = "{0}Mi".format(ctask.memory)
 
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                    limits={"cpu": pod_cpu, "memory": pod_mem})
+                                                limits={"cpu": pod_cpu, "memory": pod_mem})
 
-        pod_container = client.V1Container(name = ctask.name, image = ctask.image,
-                    resources = resources, command = ctask.cmd, env = envs)
+        pod_container = client.V1Container(name=ctask.name, image=ctask.image,
+                                           args=ctask.args, resources=resources,
+                                           command=ctask.cmd, env=envs)
 
         containers.append(pod_container)
 
@@ -195,8 +196,8 @@ def build_pod(batch: list, pod_id):
     else:
         restart_policy = 'Never'
 
-    pod_spec  = client.V1PodSpec(containers=containers,
-                        restart_policy=restart_policy)
+    pod_spec  = client.V1PodSpec(containers=containers, 
+                                 restart_policy=restart_policy)
 
     pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
                     metadata=pod_metadata, spec=pod_spec)

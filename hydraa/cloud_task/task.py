@@ -22,6 +22,7 @@ class Task(Future):
         self.arn      = None
         self.type     = None
         self.cmd      = None
+        self.args     = list
         self.image    = None
         self.state    = None
         self.restart  = None
@@ -154,7 +155,18 @@ class Task(Future):
     @cmd.setter
     def cmd(self, cmd) -> list:
         self.__cmd = cmd
-    
+
+
+    @property
+    def args(self) -> list:
+        return self.__args
+
+
+    @args.setter
+    def args(self, args) -> list:
+        self.__args = args
+
+
     @property
     def image(self) -> str:
         return self.__image
