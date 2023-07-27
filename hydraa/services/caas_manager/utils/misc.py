@@ -276,16 +276,22 @@ def build_mpi_deployment(mpi_tasks):
 
 # --------------------------------------------------------------------------
 #
-def load_yaml(fp):
+def load_yaml(fp, safe=True):
     with open(fp, "r") as file:
-        yaml_obj = yaml.safe_load(file)
+        if not safe:
+            yaml_obj = yaml.load(file)
+        else:
+            yaml_obj = yaml.safe_load(file)
     return yaml_obj
 
 # --------------------------------------------------------------------------
 #
-def dump_yaml(obj, fp):
+def dump_yaml(obj, fp, safe=True):
     with open(fp, "w") as file:
-        yaml.safe_dump(file, obj)
+        if not safe:
+            yaml.dump(obj, file)
+        else:
+            yaml.safe_dump(obj, file)
 
 
 # --------------------------------------------------------------------------
