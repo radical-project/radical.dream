@@ -32,14 +32,20 @@ class Volume:
     # --------------------------------------------------------------------------
     #
     def __init__(self, targeted_cluster, kind, accessModes,
-                 storageClassName='standard', name='hydraa-volume-', size='1Gi'):
+                 storageClassName='standard', name='hydraa-volume', size='1Gi'):
 
         self.kind = kind
-        self.name = 'hydraa-volume-{0}'.format(self.kind) if not name else name
+        self.name = '{0}-{1}'.format(name, self.kind)
+
         self.size = size
         self.accessModes = accessModes
         self.targeted_cluster = targeted_cluster
         self.storageClassName = storageClassName
+
+        if not self.targeted_cluster and not \
+              self.targeted_cluster.status == 'Ready':
+            
+
 
 
     # --------------------------------------------------------------------------
@@ -53,9 +59,13 @@ class Volume:
     
         """
 
-        loc = os.path.join(os.path.dirname(__file__)).split('volume-templates')[0]
+        loc = os.path.join(os.path.dirname(__file__))
+        loc += '/templates/volume-templates.yaml'
+
         v_templates = load_multiple_yamls(loc)
 
+        # we have multiple templates, so based on the 
+        # specifed kind pull the targeted template.
         for t in v_templates:
             if t.get('kind') == self.kind:
                 v_template = t
@@ -83,7 +93,6 @@ class PersistentVolume(Volume):
         name (str): The name of the volume.
         size (str): The size of the volume.
 
-
     """
 
     def __init__(self, targeted_cluster, accessModes, volumeMode='Filesystem',
@@ -98,9 +107,14 @@ class PersistentVolume(Volume):
         self.volumeMode = volumeMode
 
         pv_file = self.build_pv()
-        sh_callout('kubectl apply -f {0}'.format(pv_file), shell=True,
-                   kube=self.targeted_cluster)
-        self.targeted_cluster.pv = self
+        out, err, ret = sh_callout('kubectl apply -f {0}'.format(pv_file),
+                                    shell=True, kube=self.targeted_cluster)
+
+        if ret:
+            self.targeted_cluster.pv = self
+            self.targeted_cluster.logger.error(err)
+        else: 
+            self.targeted_cluster.logger.trace(out)
 
 
     # --------------------------------------------------------------------------
@@ -119,7 +133,7 @@ class PersistentVolume(Volume):
         spec['capacity']['storage'] = self.size
         spec['volumeMode'] = self.volumeMode
         spec['storageClassName'] = self.storageClassName
-        spec['accessModes'] = self.accessModes
+        spec['accessModes'] = [self.accessModes]
         spec['hostPath']['path'] = self.hostPath.get('path')
         spec['hostPath']['type'] = self.hostPath.get('type')
 
@@ -156,10 +170,14 @@ class PersistentVolumeClaim(Volume):
         self.volumeName = volumeName
 
         pvc_file = self.build_pvc()
-        sh_callout('kubectl apply -f {0}'.format(pvc_file), shell=True,
-                   kube=self.targeted_cluster)
-
-        self.targeted_cluster.pvc = self
+        out, err, ret = sh_callout('kubectl apply -f {0}'.format(pvc_file),
+                                   shell=True, kube=self.targeted_cluster)
+        
+        if ret:
+            self.targeted_cluster.pvc = self
+            self.targeted_cluster.logger.error(err)
+        else: 
+            self.targeted_cluster.logger.trace(out)
 
     # --------------------------------------------------------------------------
     #
@@ -177,7 +195,7 @@ class PersistentVolumeClaim(Volume):
         spec = pvc['spec']
         spec['volumeName'] = self.volumeName
         spec['storageClassName'] = self.storageClassName
-        spec['accessModes'] = self.accessModes
+        spec['accessModes'] = [self.accessModes]
         spec['resources']['requests']['storage'] = self.size
 
         pvc_file = '{0}/{1}-pvc.yaml'.format(self.targeted_cluster.sandbox,
@@ -185,3 +203,13 @@ class PersistentVolumeClaim(Volume):
         dump_yaml(pvc, pvc_file)
 
         return pvc_file
+
+
+class EphemeralVolume(Volume):
+    def __init__(self, targeted_cluster, kind,
+                 accessModes, storageClassName='standard',
+                 name='hydraa-volume-', size='1Gi'):
+        super().__init__(targeted_cluster, kind, accessModes,
+                         storageClassName, name, size)
+
+        raise NotImplementedError

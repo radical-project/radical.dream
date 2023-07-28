@@ -5,7 +5,7 @@ metadata:
 spec: 
   volumeName: host-pv
   accessModes: 
-    - ReadWriteOnce
+    - ReadWriteMany
   storageClassName: standard
   resources: 
     requests: 
@@ -23,7 +23,7 @@ spec:
   volumeMode: Filesystem
   storageClassName: standard
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   hostPath:
     path: /data
     type: DirectoryOrCreate
