@@ -32,7 +32,8 @@ class Volume:
     # --------------------------------------------------------------------------
     #
     def __init__(self, targeted_cluster, kind, accessModes,
-                 storageClassName='standard', name='hydraa-volume', size='1Gi'):
+                 storageClassName='standard', name='hydraa',
+                size='1Gi'):
 
         self.kind = kind
         self.name = '{0}-{1}'.format(name, self.kind)
@@ -41,11 +42,6 @@ class Volume:
         self.accessModes = accessModes
         self.targeted_cluster = targeted_cluster
         self.storageClassName = storageClassName
-
-        if not self.targeted_cluster and not \
-              self.targeted_cluster.status == 'Ready':
-            
-
 
 
     # --------------------------------------------------------------------------
