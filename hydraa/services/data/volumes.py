@@ -165,7 +165,7 @@ class PersistentVolumeClaim(Volume):
         # pvc needs a pv installed and ready to
         # operate on the top of it.
         if not hasattr(self.targeted_cluster, 'pv'):
-            self.targeted_cluster.logger.warning('creating PV (required)'
+            self.targeted_cluster.logger.warning('creating PV (required) '
                                                  'for {0}'.format(self.name))
             
             PersistentVolume(self.targeted_cluster)
