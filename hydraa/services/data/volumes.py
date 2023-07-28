@@ -36,7 +36,7 @@ class Volume:
                 size='1Gi'):
 
         self.kind = kind
-        self.name = '{0}-{1}'.format(name, self.kind)
+        self.name = '{0}-{1}'.format(name, self.kind.lower())
 
         self.size = size
         self.accessModes = accessModes
@@ -57,7 +57,7 @@ class Volume:
 
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/templates/volume-templates.yaml'
-
+        
         v_templates = load_multiple_yamls(loc)
 
         # we have multiple templates, so based on the 
@@ -87,14 +87,14 @@ class PersistentVolume(Volume):
         hostPath (dict): The host path for the volume.
         storageClassName (str): The storage class name for the volume.
         name (str): The name of the volume.
-        size (str): The size of the volume.
-
+        size (str): The size of the volume in Gigibytes.
     """
 
-    def __init__(self, targeted_cluster, accessModes, volumeMode='Filesystem',
+    def __init__(self, targeted_cluster,
+                 accessModes='ReadWriteMany', volumeMode='Filesystem',
                  hostPath={'path': '/data', 'type': 'DirectoryOrCreate'},
-                 storageClassName='standard', name='hydraa-volume-', size='1Gi'):
-        
+                 storageClassName='manual', name='hydraa', size='2Gi'):
+
         kind = PV
         super().__init__(targeted_cluster, kind, accessModes,
                          storageClassName, name, size)
@@ -153,17 +153,22 @@ class PersistentVolumeClaim(Volume):
     Args:
         targeted_cluster (Cluster): The targeted cluster.
         accessModes (list): The access modes for the volume.
-        volumeName (str): The name of the volume.
     
     """
-    def __init__(self, targeted_cluster, accessModes, volumeName,
-                 storageClassName='standard', name='hydraa-volume-', size='1Gi'):
+    def __init__(self, targeted_cluster, accessModes='ReadWriteMany',
+                 storageClassName='manual', name='hydraa', size='1Gi'):
 
         kind = PVC
         super().__init__(targeted_cluster, kind, accessModes,
                          storageClassName, name, size)
 
-        self.volumeName = volumeName
+        # pvc needs a pv installed and ready to
+        # operate on the top of it.
+        if not hasattr(self.targeted_cluster, 'pv'):
+            self.targeted_cluster.logger.warning('creating PV (required)'
+                                                 'for {0}'.format(self.name))
+            
+            PersistentVolume(self.targeted_cluster)
 
         pvc_file = self.build_pvc()
         out, err, ret = sh_callout('kubectl apply -f {0}'.format(pvc_file),
@@ -189,7 +194,6 @@ class PersistentVolumeClaim(Volume):
         pvc = super().build()
         pvc['metadata']['name'] = self.name
         spec = pvc['spec']
-        spec['volumeName'] = self.volumeName
         spec['storageClassName'] = self.storageClassName
         spec['accessModes'] = [self.accessModes]
         spec['resources']['requests']['storage'] = self.size
@@ -202,9 +206,9 @@ class PersistentVolumeClaim(Volume):
 
 
 class EphemeralVolume(Volume):
-    def __init__(self, targeted_cluster, kind,
-                 accessModes, storageClassName='standard',
-                 name='hydraa-volume-', size='1Gi'):
+    def __init__(self, targeted_cluster, kind, accessModes,
+                 storageClassName='standard', name='hydraa',
+                 size='1Gi'):
         super().__init__(targeted_cluster, kind, accessModes,
                          storageClassName, name, size)
 
