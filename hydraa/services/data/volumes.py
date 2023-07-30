@@ -168,12 +168,15 @@ class PersistentVolumeClaim(Volume):
             self.targeted_cluster.logger.warning('creating PV (required) '
                                                  'for {0}'.format(self.name))
             
-            PersistentVolume(self.targeted_cluster)
+            pv = PersistentVolume(self.targeted_cluster)
 
         pvc_file = self.build_pvc()
         out, err, ret = sh_callout('kubectl apply -f {0}'.format(pvc_file),
                                    shell=True, kube=self.targeted_cluster)
         
+        self.host_path = pv.hostPath.get('path', '/data')
+        self.mount_path = '/mnt'
+
         if ret:
             self.targeted_cluster.pvc = self
             self.targeted_cluster.logger.error(err)

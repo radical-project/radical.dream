@@ -286,12 +286,12 @@ def load_yaml(fp, safe=True):
 
 # --------------------------------------------------------------------------
 #
-def dump_yaml(obj, fp, safe=True):
+def dump_yaml(obj, fp, safe=True, **kwargs):
     with open(fp, "w") as file:
         if not safe:
-            yaml.dump(obj, file)
+            yaml.dump(obj, file, **kwargs)
         else:
-            yaml.safe_dump(obj, file)
+            yaml.safe_dump(obj, file, **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -304,10 +304,10 @@ def load_multiple_yamls(fp):
 
 # --------------------------------------------------------------------------
 #
-def dump_multiple_yamls(yaml_objects: list, fp):
+def dump_multiple_yamls(yaml_objects: list, fp, **kwargs):
     # Dump the YAML objects into a single file
     with open(fp, 'w') as file:
-        yaml.dump_all(yaml_objects, file)
+        yaml.dump_all(yaml_objects, file, **kwargs)
 
 
 # --------------------------------------------------------------------------

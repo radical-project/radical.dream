@@ -1,0 +1,12 @@
+# This example demonstrates the ability to pass artifacts
+# from one step to the next.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hydraa-workflow-
+spec:
+  entrypoint: hydraa-workflow
+  volumes:
+  - name: workdir
+    persistentVolumeClaim:
+      claimName: hydraa-persistentvolumeclaim

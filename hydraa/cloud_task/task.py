@@ -26,6 +26,10 @@ class Task(Future):
         self.image    = None
         self.state    = None
         self.restart  = None
+        self.inputs   = None
+        self.outputs  = []
+        self.volume   = None
+        self.depends_on = []
 
 
     def name(self):
