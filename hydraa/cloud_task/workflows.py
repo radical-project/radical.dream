@@ -14,13 +14,13 @@ class Workflow:
         self.tasks = []
         self.name = name
         self._workflows = []
-        self.argo_object = None
 
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/argo_template.yaml'
         self.argo_template = load_yaml(loc)
+        self.argo_template['spec']['entrypoint'] = self.name
 
-        #self._setup_volume(volume)
+        self._setup_volume(volume)
 
 
     # --------------------------------------------------------------------------
@@ -29,7 +29,7 @@ class Workflow:
         if volume:
             self.volume = volume
             self.argo_template['volumes'] = [{'name': 'workdir',
-                                              self.volume.kind: {'claimName': self.volume.name}}]
+                                               self.volume.kind: {'claimName': self.volume.name}}]
         else:
             self.argo_template['spec'].pop('volumes')
 
@@ -57,39 +57,35 @@ class Workflow:
     #
     def create(self):
 
-        self._tasks = copy.copy(self.tasks)
+        self.argo_object = copy.deepcopy(self.argo_template)
 
         # iterate on each task in the tasks list
-        for task in self._tasks:
+        for task in self.tasks:
             task.id = str(self._counter)
             task.name = 'ctask-{0}'.format(self._counter)
 
-            # move the output of this task to 
-            # the volume if exists
+            # mv task.ouputs >> /volume/data
             if task.outputs:
                 self.move_to_volume(task)
 
-            # if this task depends on other tasks
-            # then move the output of the tasks that
-            # we depend on to the shared volume so this
-            # task can access it.
+            # mv /volume/data/outputs >> /image/local 
             if task.depends_on:
-                self.move_from_volume(task)
+                self.move_to_local(task)
 
             # create a step entry in the yaml file
             self._create_step(task)
 
             self._counter +=1
 
-        self.argo_template['spec']['templates'] = []
-        self.argo_template['spec']['templates'].append({'name': self.name, 'steps': None})
+        self.argo_object['spec']['templates'] = []
+        self.argo_object['spec']['templates'].append({'name': self.name, 'steps': None})
+        self.argo_object['spec']['templates'][0]['steps'] = [t.step for t in self.tasks]
 
-        self.argo_template['spec']['templates'][0]['steps'] = [t.step for t in self.tasks]
-        
         for t in self.tasks:
-            self.argo_template['spec']['templates'].append(t.template)
-        
-        self._workflows.append(self.argo_template)
+            self.argo_object['spec']['templates'].append(t.template)
+
+        self._workflows.append(self.argo_object)
+        self.tasks = []
 
 
     # --------------------------------------------------------------------------
@@ -101,17 +97,15 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def move_from_volume(self, task):
+    def move_to_local(self, task):
         if self.volume:
-            v_path = '/data'#self.volume.host_path
             outputs = []
             for t in task.depends_on:
                 outputs.extend(t.outputs)
 
             outputs = ",".join(outputs)
-            move_data = f' ; mv {v_path}/{{{outputs}}} .'
-
-            task.cmd[-1] += move_data
+            move_data = f'mv {self.volume.host_path}/{{{outputs}}} . ;'
+            task.cmd[0] = move_data + ' ' + task.cmd[0]
         
         else:
             raise Exception('exchanging outputs between workflows tasks'
@@ -120,9 +114,8 @@ class Workflow:
 
     def move_to_volume(self, task):
         if self.volume:
-            v_path = '/data'#self.volume.host_path
             outputs = " ".join(task.outputs)
-            move_data = f' ; mv {outputs} {v_path}'
+            move_data = f' ; mv {outputs} {self.volume.host_path}'
 
             task.cmd[-1] += move_data
 

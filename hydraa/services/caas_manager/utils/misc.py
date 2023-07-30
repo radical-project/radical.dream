@@ -181,12 +181,16 @@ def build_pod(batch: list, pod_id):
         pod_cpu = "{0}m".format(ctask.vcpus * 1000)
         pod_mem = "{0}Mi".format(ctask.memory)
 
+        if ctask.volume:
+            volume = client.V1VolumeMount(name=volume.name, mount_path=volume.host_path)
+
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
                                                 limits={"cpu": pod_cpu, "memory": pod_mem})
 
         pod_container = client.V1Container(name=ctask.name, image=ctask.image,
                                            args=ctask.args, resources=resources,
-                                           command=ctask.cmd, env=envs)
+                                           command=ctask.cmd, env=envs,
+                                           volume_mounts=[volume])
 
         containers.append(pod_container)
 

@@ -1,6 +1,8 @@
 import copy
-from typing import OrderedDict
+from typing import OrderedDict, Optional, Union
 from concurrent.futures import Future
+from ..services.data.volumes import PersistentVolume, PersistentVolumeClaim
+
 
 class Task(Future):
     """
@@ -28,7 +30,8 @@ class Task(Future):
         self.restart  = None
         self.inputs   = None
         self.outputs  = []
-        self.volume   = None
+        self.volume   : Optional[Union[PersistentVolume,
+                                       PersistentVolumeClaim]] = None
         self.depends_on = []
 
 
