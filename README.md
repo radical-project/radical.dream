@@ -61,7 +61,7 @@ def do_something():
   
 ```
 ### Executing MPI containers:
-#### 1- By specifying the setup of the MPI workers and Masters (Launchers): 
+#### Specify the setup of the MPI workers and Masters (Launchers): 
 ```python
 from hydraa.services.caas_manager.utils import Kubeflow, KubeflowMPILauncher
 mpi_tasks = []
@@ -82,4 +82,55 @@ mpi_launcher.launch(mpi_tasks)
 # wait for all tasks to finish
 all(t.result() for t in mpi_tasks)
 ```
+
+### Executing Workflows:
+#### 1- create a PVC
+```python
+from hydraa.services import PersistentVolume, PersistentVolumeClaim
+pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessModes='ReadWriteMany')
+```
+#### 1- create N workflows and assign the created PVC to the workflow instance
+```python
+from hydraa.cloud_task.workflows import Workflow
+wf = Workflow('facts-workflow', volume=pvc)
+for i in range(4):
+   task = Task()
+   task.vcpus = 2
+   task.memory = 2000
+   task.image = 'aymenalsaadi/facts-fair'
+   task.cmd = ['sh', '-c', f'python3 fair_temperature_preprocess.py --pipeline_id {i}']
+   task.outputs.append(f'{i}_preprocess.pkl')
+   task.volume = pvc
+   task.args = []
+
+   task1 = Task()
+   task1.vcpus = 2
+   task1.memory = 2000
+   task1.image = 'aymenalsaadi/facts-fair'
+   task1.cmd = ['sh', '-c', f'python3 fair_temperature_fit.py --pipeline_id {i}']
+   task1.outputs.append(f'{i}_fit.pkl')
+   task1.volume = pvc
+   task1.args = []
+
+
+   task2 = Task()
+   task2.vcpus = 2
+   task2.memory = 2000
+   task2.image = 'aymenalsaadi/facts-fair'
+   task2.cmd = ['sh', '-c', f'python3 fair_temperature_project.py --pipeline_id {i}']
+   task2.volume = pvc
+   task2.args = []
+
+   task2.depends_on.append(task)
+   task2.depends_on.append(task1)
+
+   wf.add_task(task)
+   wf.add_task(task1)
+   wf.add_task(task2)
+
+   wf.create()
+
+wf.run(caas_mgr.Jet2Caas.cluster)
+```
+
 
