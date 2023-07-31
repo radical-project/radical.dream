@@ -182,7 +182,8 @@ def build_pod(batch: list, pod_id):
         pod_mem = "{0}Mi".format(ctask.memory)
 
         if ctask.volume:
-            volume = client.V1VolumeMount(name=volume.name, mount_path=volume.host_path)
+            volume = client.V1VolumeMount(name=ctask.volume.name+'-workdir',
+                                          mount_path=ctask.volume.host_path)
 
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
                                                 limits={"cpu": pod_cpu, "memory": pod_mem})

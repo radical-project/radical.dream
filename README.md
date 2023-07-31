@@ -89,7 +89,7 @@ all(t.result() for t in mpi_tasks)
 from hydraa.services import PersistentVolume, PersistentVolumeClaim
 pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessModes='ReadWriteMany')
 ```
-#### 1- create N workflows and assign the created PVC to the workflow instance
+#### 2- create N workflows and assign the created PVC to the workflow instance
 ```python
 from hydraa.cloud_task.workflows import Workflow
 wf = Workflow('facts-workflow', volume=pvc)

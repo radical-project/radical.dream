@@ -27,12 +27,14 @@ class Workflow:
     #
     def _setup_volume(self, volume):
         if volume:
+            # FIXME: support multiple volumes instead of one
             self.volume = volume
-            self.argo_template['volumes'] = [{'name': 'workdir',
-                                               self.volume.kind: {'claimName': self.volume.name}}]
+            self.argo_template['spec']['volumes'][0]['name'] = self.volume.name + '-workdir'
+            self.argo_template['spec']['volumes'][0]['persistentVolumeClaim'] = \
+                              {'claimName': self.volume.name}
         else:
             self.argo_template['spec'].pop('volumes')
-
+    
 
     # --------------------------------------------------------------------------
     #
@@ -103,10 +105,16 @@ class Workflow:
             for t in task.depends_on:
                 outputs.extend(t.outputs)
 
-            outputs = ",".join(outputs)
-            move_data = f'mv {self.volume.host_path}/{{{outputs}}} . ;'
-            task.cmd[0] = move_data + ' ' + task.cmd[0]
-        
+            #outputs = ",".join(outputs)
+            #move_data = f'mv {self.volume.host_path}/{{{outputs}}} $PWD ;'
+            outputs = [self.volume.host_path + '/' + filename for filename in outputs]
+            outputs = " ".join(outputs)
+            move_data = f'mv {outputs} $PWD ;'
+
+            # FIXME: we assume the user is doing sh -c python3
+            # and we are inserting between sh-c and python3
+            task.cmd[2] = move_data + ' ' + task.cmd[2]
+
         else:
             raise Exception('exchanging outputs between workflows tasks'
                             'requires an exisiting volume to be specified')

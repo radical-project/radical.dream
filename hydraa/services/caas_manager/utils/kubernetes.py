@@ -528,6 +528,7 @@ class Cluster:
                     pod_name = item['metadata'].get('name', '')
                     # this is a hydraa pod
                     if pod_name.startswith('hydraa-pod-') or \
+                        pod_name.startswith('hydraa-workflow') or \
                         pod_name.startswith('hydraa-mpi-ctask') and 'launcher' in pod_name:
                         already_checked = []
                         # check if this pod completed successfully
