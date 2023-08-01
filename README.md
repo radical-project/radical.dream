@@ -93,7 +93,7 @@ pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessMo
 ```python
 from hydraa.cloud_task.workflows import Workflow
 
-# Intiliaze a workflow instance
+# Initialize a workflow instance
 wf = Workflow(name='fair-facts-workflow', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
 
 # create x 4 workflows
