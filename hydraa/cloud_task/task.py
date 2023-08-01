@@ -35,159 +35,246 @@ class Task(Future):
         self.depends_on = []
 
 
+    # --------------------------------------------------------------------------
+    #
+    def add_dependency(self, tasks):
+        for t in tasks:
+            self.depends_on.append(t)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_dependency(self):
+        return [t for t in self.depends_on]
+
+
+    # --------------------------------------------------------------------------
+    #
     def name(self):
         return self.name
 
 
+    # --------------------------------------------------------------------------
+    #
     def id(self):
         return self.id
 
 
+    # --------------------------------------------------------------------------
+    #
     def run_id(self):
         """represents the run id that the task belongs to"""
         return self.run_id
 
 
+    # --------------------------------------------------------------------------
+    #
     def port(self):
         """represents the port of a task"""
         return self.port
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def ip(self):
         """represents the ip of a task"""
         return self.__ip
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     @ip.setter
     def ip(self, ip):
         self.__ip = ip
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def provider(self):
         """represents the ptovider of that task (AZURE, AWS, G-CLOUD)"""
         return self.__provider
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     @provider.setter
     def provider(self, provider):
         self.__provider = provider
     
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def launch_type(self):
         """represents the launch_type of that task (EC2, B1)"""
         return self.__launch_type
 
 
+    # --------------------------------------------------------------------------
+    #
     @launch_type.setter
     def launch_type(self, launch_type):
         self.__launch_type = launch_type
 
+
+    # --------------------------------------------------------------------------
+    #
     @property
     def env_var(self):
         return self.__env_var
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     @env_var.setter
     def env_var(self, env_var):
         self.__env_var = env_var
 
 
+
+    # --------------------------------------------------------------------------
+    #
     @property
     def arn(self) -> str:
         return self.__arn
 
+
+    # --------------------------------------------------------------------------
+    #
     @arn.setter
     def arn(self, arn):        
         self.__arn = arn
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def dns(self) -> str:
         pass
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def restart(self) -> str:
         return self.__restart
-    
+
+
+    # --------------------------------------------------------------------------
+    #
     @restart.setter
     def restart(self, restart):
         self.__restart = restart
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def memory(self) -> float:
         return self.__memory
 
 
+    # --------------------------------------------------------------------------
+    #
     @memory.setter
     def memory(self, memory) -> float:
         self.__memory = memory
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def vcpus(self) -> float:
         return self.__vcpus
 
+
+    # --------------------------------------------------------------------------
+    #
     @vcpus.setter
     def vcpus(self, vcpus) -> float:
         self.__vcpus = vcpus
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def state(self) -> str:
         return self.__state
 
 
+    # --------------------------------------------------------------------------
+    #
     @state.setter
     def state(self, state):
         self.__state = state
 
-    
+
+    # --------------------------------------------------------------------------
+    #
     @property
     def events(self) -> OrderedDict:
         return self.__events
-    
 
+
+    # --------------------------------------------------------------------------
+    #
     @events.setter
     def events(self, events):
         self.__events = events
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def cmd(self) -> list:
         return self.__cmd
 
 
+    # --------------------------------------------------------------------------
+    #
     @cmd.setter
     def cmd(self, cmd) -> list:
         self.__cmd = cmd
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def args(self) -> list:
         return self.__args
 
 
+    # --------------------------------------------------------------------------
+    #
     @args.setter
     def args(self, args) -> list:
         self.__args = args
 
 
+    # --------------------------------------------------------------------------
+    #
     @property
     def image(self) -> str:
         return self.__image
 
 
+    # --------------------------------------------------------------------------
+    #
     @image.setter
     def image(self, image) -> list:
         self.__image = image
 
-    
+
+    # --------------------------------------------------------------------------
+    #
     def exit_code(self):
         pass
 
 
+    # --------------------------------------------------------------------------
+    #
     def is_service(self):
         """True if task needs to run for every.
            if True then self.retry() must be True
@@ -195,12 +282,16 @@ class Task(Future):
         pass
 
 
+    # --------------------------------------------------------------------------
+    #
     def reset_state(self):
         self.state = None
         self._state = 'PENDING'
         self._exception = None
 
 
+    # --------------------------------------------------------------------------
+    #
     def pending(self):
         return self._state == 'PENDING'
 

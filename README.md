@@ -92,12 +92,16 @@ pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessMo
 #### 2- create N workflows and assign the created PVC to the workflow instance
 ```python
 from hydraa.cloud_task.workflows import Workflow
-wf = Workflow('facts-workflow', volume=pvc)
+
+# Intiliaze a workflow instance
+wf = Workflow(name='fair-facts-workflow', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
+
+# create x 4 workflows
 for i in range(4):
    task = Task()
    task.vcpus = 2
    task.memory = 2000
-   task.image = 'aymenalsaadi/facts-fair'
+   task.image = 'facts-fair'
    task.cmd = ['sh', '-c', f'python3 fair_temperature_preprocess.py --pipeline_id {i}']
    task.outputs.append(f'{i}_preprocess.pkl')
    task.volume = pvc
@@ -106,7 +110,7 @@ for i in range(4):
    task1 = Task()
    task1.vcpus = 2
    task1.memory = 2000
-   task1.image = 'aymenalsaadi/facts-fair'
+   task1.image = 'facts-fair'
    task1.cmd = ['sh', '-c', f'python3 fair_temperature_fit.py --pipeline_id {i}']
    task1.outputs.append(f'{i}_fit.pkl')
    task1.volume = pvc
@@ -116,21 +120,26 @@ for i in range(4):
    task2 = Task()
    task2.vcpus = 2
    task2.memory = 2000
-   task2.image = 'aymenalsaadi/facts-fair'
+   task2.image = 'facts-fair'
    task2.cmd = ['sh', '-c', f'python3 fair_temperature_project.py --pipeline_id {i}']
    task2.volume = pvc
    task2.args = []
 
-   task2.depends_on.append(task)
-   task2.depends_on.append(task1)
+   task3 = Task()
+   task3.vcpus = 2
+   task3.memory = 2000
+   task3.image = 'facts-fair'
+   task3.cmd = ['sh', '-c', f'python3 fair_temperature_postprocess.py --pipeline_id {i}']
+   task3.volume = pvc
+   task3.args = []
 
-   wf.add_task(task)
-   wf.add_task(task1)
-   wf.add_task(task2)
+   task2.add_dependency([task ,task1])
 
+   wf.add_tasks([task, task1, task2, task3])
    wf.create()
 
-wf.run(caas_mgr.Jet2Caas.cluster)
+# submit all of the 4 workflows to the cluster
+wf.run()
 ```
 
 

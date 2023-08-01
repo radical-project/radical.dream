@@ -3,9 +3,9 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  generateName: hydraa-workflow-
+  name: workflow-name
 spec:
-  entrypoint: hydraa-workflow
+  entrypoint: entrypoint-name
   volumes:
   - name: workdir
     persistentVolumeClaim:

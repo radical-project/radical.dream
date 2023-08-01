@@ -325,6 +325,10 @@ class Cluster:
 
         # FIXME: support heterogenuous tasks and fit them
         #  within the MPI world size
+        # FIXME: We should not expose build_mpi_deployment
+        # here, this should be part of Kubeflow class.
+        # This class should be standard class that supports
+        # standard kubernetes CRD only.
         if mpip:
             mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
             dump_multiple_yamls(mpi_objs, deployment_file)

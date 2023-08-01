@@ -9,18 +9,26 @@ from ..services.caas_manager.utils.misc import load_yaml, dump_multiple_yamls
 # --------------------------------------------------------------------------
 #
 class Workflow:
-    def __init__(self, name, volume=None) -> None:
-        self._counter = 0
+    def __init__(self, name, cluster, volume=None) -> None:
         self.tasks = []
         self.name = name
-        self._workflows = []
+        self.workflows = []
+        self.cluster = cluster
+        self._tasks_counter = 0
+        self._workflows_counter = 0
 
+        self._setup_template()
+        self._setup_volume(volume)
+        self._setup_argo()
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _setup_template(self):
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/argo_template.yaml'
         self.argo_template = load_yaml(loc)
         self.argo_template['spec']['entrypoint'] = self.name
-
-        self._setup_volume(volume)
 
 
     # --------------------------------------------------------------------------
@@ -34,12 +42,13 @@ class Workflow:
                               {'claimName': self.volume.name}
         else:
             self.argo_template['spec'].pop('volumes')
-    
+
 
     # --------------------------------------------------------------------------
     #
-    def add_task(self, task: Task):
-        self.tasks.append(task)
+    def add_tasks(self, tasks: Task):
+        for task in tasks:
+            self.tasks.append(task)
 
 
     # --------------------------------------------------------------------------
@@ -61,23 +70,27 @@ class Workflow:
 
         self.argo_object = copy.deepcopy(self.argo_template)
 
+        # set the workflow name
+        wf_name = 'hydraa-' + self.name + '-' + str(self._workflows_counter)
+        self.argo_object['metadata']['name'] = wf_name
+
         # iterate on each task in the tasks list
         for task in self.tasks:
-            task.id = str(self._counter)
-            task.name = 'ctask-{0}'.format(self._counter)
+            task.id = str(self._tasks_counter)
+            task.name = 'ctask-{0}'.format(self._tasks_counter)
 
             # mv task.ouputs >> /volume/data
             if task.outputs:
                 self.move_to_volume(task)
 
             # mv /volume/data/outputs >> /image/local 
-            if task.depends_on:
+            if task.get_dependency():
                 self.move_to_local(task)
 
             # create a step entry in the yaml file
             self._create_step(task)
 
-            self._counter +=1
+            self._tasks_counter +=1
 
         self.argo_object['spec']['templates'] = []
         self.argo_object['spec']['templates'].append({'name': self.name, 'steps': None})
@@ -86,15 +99,38 @@ class Workflow:
         for t in self.tasks:
             self.argo_object['spec']['templates'].append(t.template)
 
-        self._workflows.append(self.argo_object)
         self.tasks = []
+        self.workflows.append(self.argo_object)
+        self._workflows_counter +=1
 
 
     # --------------------------------------------------------------------------
     #
     def run(self):
-        dump_multiple_yamls(self._workflows, '/home/aymenalsaadi/dump.yaml',
-                            sort_keys=False)
+
+        print('submitting workflows x [{0}] to {1}'.format(self._workflows_counter,
+                                                           self.cluster.name))
+        file_path = self.cluster.sandbox + '/' + 'workflow.yaml'
+        dump_multiple_yamls(self.workflows, file_path, sort_keys=False)
+        self.cluster.submit(deployment_file=file_path)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _setup_argo(self):
+
+        cmd = "kubectl create namespace argo ;"
+        cmd += "kubectl apply -n argo -f"
+        cmd += "https://github.com/argoproj/argo-workflows/" \
+               "releases/download/v3.4.9/install.yaml"
+        
+        res = self.cluster.remote.run('kubectl get crd', hide=True)
+        if res.return_code:
+            self.cluster.logger.error('checking for Argo CRD failed: {0}\
+                                      '.format(res.stderr))
+
+        elif not "argo-server" in res.stdout:
+            res = self.cluster.remote.run(cmd, hide=True)
 
 
     # --------------------------------------------------------------------------
@@ -102,11 +138,9 @@ class Workflow:
     def move_to_local(self, task):
         if self.volume:
             outputs = []
-            for t in task.depends_on:
+            for t in task.get_dependency():
                 outputs.extend(t.outputs)
 
-            #outputs = ",".join(outputs)
-            #move_data = f'mv {self.volume.host_path}/{{{outputs}}} $PWD ;'
             outputs = [self.volume.host_path + '/' + filename for filename in outputs]
             outputs = " ".join(outputs)
             move_data = f'mv {outputs} $PWD ;'
