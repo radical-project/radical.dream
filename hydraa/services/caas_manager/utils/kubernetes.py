@@ -12,10 +12,6 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from hydraa import CHI, JET2
-from kubernetes import client
-from kubernetes import config
-
 # this should be from hydraa.utils import x, y, z
 from .misc import build_pod
 from .misc import sh_callout
@@ -52,6 +48,8 @@ KUBECTL = shutil.which('kubectl')
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
 MPI_CONTAINER = ['container.mpi']
+
+TASK_PREFIX = ['hydraa-', 'hydraa-launcher']
 
 # --------------------------------------------------------------------------
 #
@@ -373,9 +371,16 @@ class Cluster:
                    format(deployment_file, self.sandbox)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
+            msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
+                                                            self.name)
             if not ret:
-                print('all pods are submitted')
+                print(msg)
+                self.logger.trace('{0}, deployemnt output is under'
+                                  ' apply_output.log'.format(msg))
                 return deployment_file, pods_names, batches
+
+            # FIXME: we use nohup, to apply the deployemnt in the 
+            # background, so how can we report error if we fail?
             else:
                 self.logger.error(err)
                 print('failed to submit pods, please check the logs for more info.')
@@ -530,10 +535,9 @@ class Cluster:
             for item in items:
                 if item['kind'] == 'Pod':
                     pod_name = item['metadata'].get('name', '')
-                    # this is a hydraa pod
-                    if pod_name.startswith('hydraa-pod-') or \
-                        pod_name.startswith('hydraa-workflow') or \
-                        pod_name.startswith('hydraa-mpi-ctask') and 'launcher' in pod_name:
+                    # in the check, we distinguish hydraa deployed
+                    # tasks from any other pods on the same namespace.
+                    if any(px in pod_name for px in TASK_PREFIX):
                         already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):

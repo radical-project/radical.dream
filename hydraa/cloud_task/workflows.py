@@ -26,7 +26,7 @@ class Workflow:
     #
     def _setup_template(self):
         loc = os.path.join(os.path.dirname(__file__))
-        loc += '/argo_template.yaml'
+        loc += '/argo_templates.yaml'
         self.argo_template = load_yaml(loc)
         self.argo_template['spec']['entrypoint'] = self.name
 
@@ -37,7 +37,8 @@ class Workflow:
         if volume:
             # FIXME: support multiple volumes instead of one
             self.volume = volume
-            self.argo_template['spec']['volumes'][0]['name'] = self.volume.name + '-workdir'
+            self.argo_template['spec']['volumes'][0]['name'] = \
+                              self.volume.name + '-workdir'
             self.argo_template['spec']['volumes'][0]['persistentVolumeClaim'] = \
                               {'claimName': self.volume.name}
         else:
@@ -93,8 +94,10 @@ class Workflow:
             self._tasks_counter +=1
 
         self.argo_object['spec']['templates'] = []
-        self.argo_object['spec']['templates'].append({'name': self.name, 'steps': None})
-        self.argo_object['spec']['templates'][0]['steps'] = [t.step for t in self.tasks]
+        self.argo_object['spec']['templates'].append({'name': self.name,
+                                                      'steps': None})
+        self.argo_object['spec']['templates'][0]['steps'] = \
+                        [t.step for t in self.tasks]
 
         for t in self.tasks:
             self.argo_object['spec']['templates'].append(t.template)
