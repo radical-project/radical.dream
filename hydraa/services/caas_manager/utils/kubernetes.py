@@ -12,7 +12,6 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-# this should be from hydraa.utils import x, y, z
 from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
@@ -533,7 +532,7 @@ class Cluster:
         if response:
             items = response.get('items', [])
             for item in items:
-                if item['kind'] == 'Pod':
+                if item['kind'] in POD:
                     pod_name = item['metadata'].get('name', '')
                     # in the check, we distinguish hydraa deployed
                     # tasks from any other pods on the same namespace.
