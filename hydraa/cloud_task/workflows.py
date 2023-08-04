@@ -3,13 +3,20 @@ import copy
 
 from .task import Task
 from ..services.caas_manager.utils.misc import build_pod
-from ..services.caas_manager.utils.misc import load_yaml, dump_multiple_yamls
+from ..services.caas_manager.utils.misc import load_multiple_yamls, dump_multiple_yamls
+
+WORKFLOW_TYPE = ['steps', 'containerset']
 
 
 # --------------------------------------------------------------------------
 #
 class Workflow:
-    def __init__(self, name, cluster, volume=None) -> None:
+    def __init__(self, name, type, cluster, volume=None) -> None:
+        
+        if not type in WORKFLOW_TYPE:
+            raise TypeError('Workflow type must be one of {0}'.format(WORKFLOW_TYPE))
+
+        self.type = type        
         self.tasks = []
         self.name = name
         self.workflows = []
@@ -27,7 +34,12 @@ class Workflow:
     def _setup_template(self):
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/argo_templates.yaml'
-        self.argo_template = load_yaml(loc)
+        templates = load_multiple_yamls(loc)
+
+        for t in templates:
+            if t['metadata'].get('name') == self.type.lower():
+                self.argo_template = t
+
         self.argo_template['spec']['entrypoint'] = self.name
 
 
@@ -54,19 +66,6 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def _create_step(self, task):
-
-        template_name = 'template-{0}'.format(task.name)
-        step_name = 'step-{0}'.format(task.name)
-        step = [{'name' : step_name, 'template': template_name}]
-        task.step = step
-
-        container = build_pod([task], task.id)['spec']['containers'][0]
-        task.template = {'name': template_name, 'container': container}
-
-
-    # --------------------------------------------------------------------------
-    #
     def create(self):
 
         self.argo_object = copy.deepcopy(self.argo_template)
@@ -88,23 +87,7 @@ class Workflow:
             if task.get_dependency():
                 self.move_to_local(task)
 
-            # create a step entry in the yaml file
-            self._create_step(task)
-
             self._tasks_counter +=1
-
-        self.argo_object['spec']['templates'] = []
-        self.argo_object['spec']['templates'].append({'name': self.name,
-                                                      'steps': None})
-        self.argo_object['spec']['templates'][0]['steps'] = \
-                        [t.step for t in self.tasks]
-
-        for t in self.tasks:
-            self.argo_object['spec']['templates'].append(t.template)
-
-        self.tasks = []
-        self.workflows.append(self.argo_object)
-        self._workflows_counter +=1
 
 
     # --------------------------------------------------------------------------
@@ -126,7 +109,7 @@ class Workflow:
         cmd += "kubectl apply -n argo -f"
         cmd += "https://github.com/argoproj/argo-workflows/" \
                "releases/download/v3.4.9/install.yaml"
-        
+
         res = self.cluster.remote.run('kubectl get crd', hide=True)
         if res.return_code:
             self.cluster.logger.error('checking for Argo CRD failed: {0}\
@@ -167,3 +150,103 @@ class Workflow:
         else:
             raise Exception('exchanging outputs between workflows tasks'
                             'requires an exisiting volume to be specified')
+
+
+
+# --------------------------------------------------------------------------
+#
+class StepsWorkflow(Workflow):
+    def __init__(self, name, cluster, volume=None) -> None:
+
+        type = WORKFLOW_TYPE[0]
+        super().__init__(name, type, cluster, volume)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def add_step(self, task):
+
+        template_name = 'template-{0}'.format(task.name)
+        step_name = 'step-{0}'.format(task.name)
+        step = [{'name' : step_name, 'template': template_name}]
+        task.step = step
+
+        container = build_pod([task], task.id)['spec']['containers'][0]
+        task.template = {'name': template_name, 'container': container}
+    
+
+    # --------------------------------------------------------------------------
+    #
+    def create(self):
+
+        # FIXME: Argo has 2 modes of steps and we only support Mode1:
+        # Mode-1:
+        # --name: step-1
+        # --name: step-2
+        # step will run as: step1 >> step2 run sequentially 
+
+        # Mode-2
+        # --name: step-1
+        #  -name: step2
+        # steps will run as: step1 and step2 will run in paralle
+        # https://argoproj.github.io/argo-workflows/walk-through/steps/#steps
+
+        super().create()
+
+        self.argo_object['spec']['templates'] = []
+        self.argo_object['spec']['templates'].append({'name': self.name,
+                                                      'steps': None})
+
+        for task in self.tasks:
+            # create a step entry in the yaml file
+            self.add_step(task)
+            self.argo_object['spec']['templates'].append(task.template)
+
+        self.argo_object['spec']['templates'][0]['steps'] = \
+                        [t.step for t in self.tasks]
+
+        self.workflows.append(self.argo_object)
+        self._workflows_counter +=1
+        # reset the tasks for a new wf
+        self.tasks.clear()
+
+
+# --------------------------------------------------------------------------
+#
+class ContainerSetWorkflow(Workflow):
+    def __init__(self, name, cluster, volume=None) -> None:
+
+        type = WORKFLOW_TYPE[1]
+        super().__init__(name, type, cluster, volume)
+    
+
+    def create(self):
+
+        super().create()
+
+        # check Argo ContainerSet/Inputs and Outputs
+        # All container set templates that have artifacts
+        # must/should have a container named "main".
+
+        spec = self.argo_object['spec']['templates'][0]
+        spec['name'] = self.name
+        spec['containerSet']['volumeMounts'][0]['name'] = self.volume.name + '-workdir'
+        spec['containerSet']['volumeMounts'][0]['mountPath'] = self.volume.host_path
+        containers_set = spec['containerSet']['containers'] = []
+
+        for idx, task in enumerate(self.tasks):
+            if idx == 0:
+                # entry point of the workflow in a containerSet
+                task.name = 'main'
+
+            c = build_pod([task], task.id)['spec']['containers'][0]
+            if task.get_dependency():
+                deps = [dep.name for dep in task.get_dependency()]
+                c['dependencies'] = deps
+
+            containers_set.append(c)
+
+        self.workflows.append(self.argo_object)
+        self._workflows_counter +=1
+        # reset the tasks for a new wf
+        self.tasks.clear()

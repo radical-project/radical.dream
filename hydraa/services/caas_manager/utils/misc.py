@@ -181,6 +181,7 @@ def build_pod(batch: list, pod_id):
         pod_cpu = "{0}m".format(ctask.vcpus * 1000)
         pod_mem = "{0}Mi".format(ctask.memory)
 
+        volume = []
         if ctask.volume:
             volume = client.V1VolumeMount(name=ctask.volume.name+'-workdir',
                                           mount_path=ctask.volume.host_path)
@@ -188,12 +189,12 @@ def build_pod(batch: list, pod_id):
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
                                                 limits={"cpu": pod_cpu, "memory": pod_mem})
 
-        pod_container = client.V1Container(name=ctask.name, image=ctask.image,
-                                           args=ctask.args, resources=resources,
-                                           command=ctask.cmd, env=envs,
-                                           volume_mounts=[volume])
+        container = client.V1Container(name=ctask.name, image=ctask.image,
+                                       args=ctask.args, resources=resources,
+                                       command=ctask.cmd, env=envs,
+                                       volume_mounts=volume)
 
-        containers.append(pod_container)
+        containers.append(container)
 
     # feed the containers to the pod object
     if ctask.restart:

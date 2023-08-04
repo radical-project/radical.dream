@@ -23,14 +23,14 @@ metadata:
   name: containerset
 spec:
   entrypoint: main
+  volumes:
+  - name: workdir
+    persistentVolumeClaim:
+      claimName: hydraa-persistentvolumeclaim
   templates:
     - name: main
-      volumes:
-        - name: workdir
-          persistentVolumeClaim:
-            claimName: hydraa-persistentvolumeclaim
       containerSet:
         volumeMounts:
-          - mountPath: /data
-            name: workdir
+          - mountPath: 
+            name: 
         containers:
