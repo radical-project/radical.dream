@@ -31,7 +31,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def _setup_template(self):
+    def _setup_template(self) -> None:
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/argo_templates.yaml'
         templates = load_multiple_yamls(loc)
@@ -45,7 +45,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def _setup_volume(self, volume):
+    def _setup_volume(self, volume) -> None:
         if volume:
             # FIXME: support multiple volumes instead of one
             self.volume = volume
@@ -59,14 +59,14 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def add_tasks(self, tasks: Task):
+    def add_tasks(self, tasks: Task) -> None:
         for task in tasks:
             self.tasks.append(task)
 
 
     # --------------------------------------------------------------------------
     #
-    def create(self):
+    def create(self) -> None:
 
         self.argo_object = copy.deepcopy(self.argo_template)
 
@@ -92,7 +92,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def run(self):
+    def run(self) -> None:
 
         print('submitting workflows x [{0}] to {1}'.format(self._workflows_counter,
                                                            self.cluster.name))
@@ -103,7 +103,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def _setup_argo(self):
+    def _setup_argo(self) -> None:
 
         cmd = "kubectl create namespace argo ;"
         cmd += "kubectl apply -n argo -f"
@@ -122,6 +122,12 @@ class Workflow:
     # --------------------------------------------------------------------------
     #
     def move_to_local(self, task):
+        """
+        move data from PV or PVC to a local container
+        storage to be used during execution time if 
+        the container has no awarness of the volume
+        path
+        """
         if self.volume:
             outputs = []
             for t in task.get_dependency():
@@ -141,6 +147,13 @@ class Workflow:
 
 
     def move_to_volume(self, task):
+        """
+        move data from local container storage to a
+        shared node PV or PVC storage to be used
+        during execution time by other containers or
+        stored for other purposes even after the 
+        pod/container is deleted
+        """
         if self.volume:
             outputs = " ".join(task.outputs)
             move_data = f' ; mv {outputs} {self.volume.host_path}'
@@ -164,7 +177,7 @@ class StepsWorkflow(Workflow):
 
     # --------------------------------------------------------------------------
     #
-    def add_step(self, task):
+    def add_step(self, task) -> None:
 
         template_name = 'template-{0}'.format(task.name)
         step_name = 'step-{0}'.format(task.name)
@@ -177,7 +190,7 @@ class StepsWorkflow(Workflow):
 
     # --------------------------------------------------------------------------
     #
-    def create(self):
+    def create(self) -> None:
 
         # FIXME: Argo has 2 modes of steps and we only support Mode1:
         # Mode-1:
@@ -220,13 +233,14 @@ class ContainerSetWorkflow(Workflow):
         super().__init__(name, type, cluster, volume)
     
 
-    def create(self):
+    def create(self) -> None:
 
         super().create()
 
         # check Argo ContainerSet/Inputs and Outputs
         # All container set templates that have artifacts
-        # must/should have a container named "main".
+        # must/should have a container named "main" when
+        # collecting outputs.
 
         spec = self.argo_object['spec']['templates'][0]
         spec['name'] = self.name
