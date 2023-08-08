@@ -96,7 +96,7 @@ from hydraa.services.caas_manager.integrations.workflows import ContainerSetWork
 # Initialize a workflow instance
 wf = ContainerSetWorkflow(name='fair-facts', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
 
-# create x 4 workflows
+# create x 1000 workflows
 for i in range(1000):
    task = Task()
    task.vcpus = 2
@@ -132,6 +132,9 @@ for i in range(1000):
    task3.volume = pvc
    task3.args = []
 
+   # task2 will wait for task and task1
+   # hydraa will move any depndent files
+   # from task and task1 to task2
    task2.add_dependency([task ,task1])
 
    wf.add_tasks([task, task1, task2, task3])
