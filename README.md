@@ -94,10 +94,10 @@ pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessMo
 from hydraa.services.caas_manager.integrations.workflows import ContainerSetWorkflow
 
 # Initialize a workflow instance
-wf = Workflow(name='fair-facts-workflow', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
+wf = ContainerSetWorkflow(name='fair-facts', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
 
 # create x 4 workflows
-for i in range(4):
+for i in range(1000):
    task = Task()
    task.vcpus = 2
    task.memory = 2000
@@ -115,7 +115,6 @@ for i in range(4):
    task1.outputs.append(f'{i}_fit.pkl')
    task1.volume = pvc
    task1.args = []
-
 
    task2 = Task()
    task2.vcpus = 2
@@ -138,7 +137,7 @@ for i in range(4):
    wf.add_tasks([task, task1, task2, task3])
    wf.create()
 
-# submit all of the 4 workflows to the cluster
+# submit all of the 1000 workflows to the cluster
 wf.run()
 ```
 
