@@ -67,9 +67,6 @@ class Cluster:
     3- Container(s) a unit of software that packages code and its
        dependencies so the application.
 
-    4- MPI pod(s)/container(s): kubeflow deployment
-
-
     This cluster can:
 
     1- Manager multiple nodes across different physical and

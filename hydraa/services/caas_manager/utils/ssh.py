@@ -107,7 +107,8 @@ class Remote:
             except OSError as ex:
                 time.sleep(10)
                 if time.perf_counter() - start_time >= timeout:
-                    self.logger.trace("could not connect via ssh after waiting for {0} seconds, ".format(timeout))
+                    self.logger.trace("could not connect to {0} after waiting"
+                                      " for {1} seconds, ".format(ip, timeout))
 
 
     # --------------------------------------------------------------------------
