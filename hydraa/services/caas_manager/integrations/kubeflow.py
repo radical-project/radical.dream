@@ -204,10 +204,10 @@ class Kubeflow:
             worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
             worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
     
-            cmd_list = mpi_task.cmd.split(" ")
-            cmd_list.insert(0, str(mpi_task.vcpus))
-            for c in cmd_list:
-                launcher['template']['spec']['containers'][0]['args'].append(c)
+            user_cmd_list = mpi_task.cmd.split(" ")
+            temp_cmd = launcher['template']['spec']['containers'][0]['command']
+            temp_cmd.insert(3, str(mpi_task.vcpus))
+            temp_cmd.extend(user_cmd_list)
     
             launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
             launcher['template']['spec']['containers'][0]['image'] = mpi_task.image

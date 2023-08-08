@@ -18,8 +18,7 @@ spec:
             name: hydraa-launcher
             securityContext:
               runAsUser: 1000
-            command: ["mpirun"]
-            args: ["--allow-run-as-root", "-np"]
+            command: ["mpirun", "--allow-run-as-root", "-np", "-x", "LD_LIBRARY_PATH"]
             resources:
               limits:
                 cpu: 1
