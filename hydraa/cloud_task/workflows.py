@@ -11,6 +11,14 @@ WORKFLOW_TYPE = ['steps', 'containerset']
 # --------------------------------------------------------------------------
 #
 class Workflow:
+    """
+    This parent class and its subclasses extends the functionality of
+    Argo workflows (or any workflow backend) such as Steps, DAGs,
+    containerSets by:
+    1- Parsing the pythonic API of the workflow and convert it into Yaml.
+    2- Performs data movements in the background between local <==> volume.
+    """
+
     def __init__(self, name, type, cluster, volume=None) -> None:
         
         if not type in WORKFLOW_TYPE:
@@ -227,6 +235,14 @@ class StepsWorkflow(Workflow):
 # --------------------------------------------------------------------------
 #
 class ContainerSetWorkflow(Workflow):
+    """
+    check Argo ContainerSet/Inputs and Outputs
+    All container set templates that have artifacts
+    must/should have a container named "main" when
+    collecting outputs. Thus, since we do not depend
+    on Argo artifacts input/ouput, Hydraa, extends 
+    the capabilitey
+    """
     def __init__(self, name, cluster, volume=None) -> None:
 
         type = WORKFLOW_TYPE[1]
@@ -237,22 +253,13 @@ class ContainerSetWorkflow(Workflow):
 
         super().create()
 
-        # check Argo ContainerSet/Inputs and Outputs
-        # All container set templates that have artifacts
-        # must/should have a container named "main" when
-        # collecting outputs.
-
         spec = self.argo_object['spec']['templates'][0]
         spec['name'] = self.name
         spec['containerSet']['volumeMounts'][0]['name'] = self.volume.name + '-workdir'
         spec['containerSet']['volumeMounts'][0]['mountPath'] = self.volume.host_path
         containers_set = spec['containerSet']['containers'] = []
 
-        for idx, task in enumerate(self.tasks):
-            if idx == 0:
-                # entry point of the workflow in a containerSet
-                task.name = 'main'
-
+        for task in (self.tasks):
             c = build_pod([task], task.id)['spec']['containers'][0]
             if task.get_dependency():
                 deps = [dep.name for dep in task.get_dependency()]

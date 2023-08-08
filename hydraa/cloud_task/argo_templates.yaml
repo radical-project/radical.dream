@@ -21,6 +21,8 @@ apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
   name: containerset
+  labels:
+    workflows.argoproj.io/container-runtime-executor: emissary
 spec:
   entrypoint: main
   volumes:

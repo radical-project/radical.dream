@@ -99,7 +99,6 @@ class Cluster:
         self.id           = run_id
         self.vm           = vm
         self.name         = 'cluster-{0}.{1}'.format(self.vm.Provider, run_id)
-        self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
         self.logger       = log
@@ -125,6 +124,14 @@ class Cluster:
     def recover(self):
         pass
 
+    # --------------------------------------------------------------------------
+    #
+    def assign_nodes_remote_access(self):
+        for ndx, node_conn in enumerate(self.vm.Remotes.values()):
+            if ndx == 0:
+                self.remote = node_conn
+            else:
+                setattr(self, f'node{ndx}', node_conn)
 
     # --------------------------------------------------------------------------
     #
@@ -167,7 +174,7 @@ class Cluster:
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
 
-        self.remote = list(self.remote.values())[0]
+        self.assign_nodes_remote_access()
     
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
