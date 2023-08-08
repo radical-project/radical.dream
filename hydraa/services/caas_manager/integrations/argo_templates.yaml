@@ -1,0 +1,38 @@
+# This template demonstrates the ability to create Steps or DAG
+# Each step or DAG node is a pod that can run on different nodes
+# Thus, you need to setup a NFS, or MiniIO or any SharedFileSystem
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: steps
+spec:
+  entrypoint: entrypoint-name
+  volumes:
+  - name: workdir
+    persistentVolumeClaim:
+      claimName: hydraa-persistentvolumeclaim
+
+---
+# This template demonstrates the ability to create Steps or DAG
+# In a containerSet. Each step or DAG node is a container within
+# a pod that must run all on the same node and
+# the pod_resources <= node_resources. No need to have NFS or so.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: containerset
+  labels:
+    workflows.argoproj.io/container-runtime-executor: emissary
+spec:
+  entrypoint: main
+  volumes:
+  - name: workdir
+    persistentVolumeClaim:
+      claimName: hydraa-persistentvolumeclaim
+  templates:
+    - name: main
+      containerSet:
+        volumeMounts:
+          - mountPath: 
+            name: 
+        containers:

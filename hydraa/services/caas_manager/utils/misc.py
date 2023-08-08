@@ -181,14 +181,20 @@ def build_pod(batch: list, pod_id):
         pod_cpu = "{0}m".format(ctask.vcpus * 1000)
         pod_mem = "{0}Mi".format(ctask.memory)
 
+        volume = []
+        if ctask.volume:
+            volume = client.V1VolumeMount(name=ctask.volume.name+'-workdir',
+                                          mount_path=ctask.volume.host_path)
+
         resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
                                                 limits={"cpu": pod_cpu, "memory": pod_mem})
 
-        pod_container = client.V1Container(name=ctask.name, image=ctask.image,
-                                           args=ctask.args, resources=resources,
-                                           command=ctask.cmd, env=envs)
+        container = client.V1Container(name=ctask.name, image=ctask.image,
+                                       args=ctask.args, resources=resources,
+                                       command=ctask.cmd, env=envs,
+                                       volume_mounts=volume)
 
-        containers.append(pod_container)
+        containers.append(container)
 
     # feed the containers to the pod object
     if ctask.restart:
@@ -230,52 +236,6 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 
 # --------------------------------------------------------------------------
 #
-def build_mpi_deployment(mpi_tasks):
-
-    combined_deployments = []
-    loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-    mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
-
-    kf_template = load_yaml(mpi_kubeflow_template)
-
-    for mpi_task in mpi_tasks:
-
-        kf_task = copy.deepcopy(kf_template)
-        kf_task["metadata"]["name"] += "-" + mpi_task.name
-
-        slots = mpi_task.mpi_setup['slots']
-        workers = mpi_task.mpi_setup['workers']
-       
-        # FIXME: this function should be part of class: Kubeflow
-        if not mpi_task.mpi_setup["scheduler"]:
-            kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
-        else:
-            raise NotImplementedError("scheduler specfication not implmented yet")
-
-        kf_task['spec']['slotsPerWorker'] = slots
-        worker = kf_task['spec']['mpiReplicaSpecs']['Worker']
-        launcher = kf_task['spec']['mpiReplicaSpecs']['Launcher']
-
-        worker['replicas'] = workers
-        worker['template']['spec']['containers'][0]['image'] = mpi_task.image
-        worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
-        worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
-
-        cmd_list = mpi_task.cmd.split(" ")
-        cmd_list.insert(0, str(mpi_task.vcpus))
-        for c in cmd_list:
-            launcher['template']['spec']['containers'][0]['args'].append(c)
-
-        launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
-        launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
-
-        combined_deployments.append(kf_task)
-
-    return combined_deployments
-
-
-# --------------------------------------------------------------------------
-#
 def load_yaml(fp, safe=True):
     with open(fp, "r") as file:
         if not safe:
@@ -286,12 +246,12 @@ def load_yaml(fp, safe=True):
 
 # --------------------------------------------------------------------------
 #
-def dump_yaml(obj, fp, safe=True):
+def dump_yaml(obj, fp, safe=True, **kwargs):
     with open(fp, "w") as file:
         if not safe:
-            yaml.dump(obj, file)
+            yaml.dump(obj, file, **kwargs)
         else:
-            yaml.safe_dump(obj, file)
+            yaml.safe_dump(obj, file, **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -304,10 +264,10 @@ def load_multiple_yamls(fp):
 
 # --------------------------------------------------------------------------
 #
-def dump_multiple_yamls(yaml_objects: list, fp):
+def dump_multiple_yamls(yaml_objects: list, fp, **kwargs):
     # Dump the YAML objects into a single file
     with open(fp, 'w') as file:
-        yaml.dump_all(yaml_objects, file)
+        yaml.dump_all(yaml_objects, file, **kwargs)
 
 
 # --------------------------------------------------------------------------

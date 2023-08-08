@@ -61,9 +61,9 @@ def do_something():
   
 ```
 ### Executing MPI containers:
-#### 1- By specifying the setup of the MPI workers and Masters (Launchers): 
+#### Specify the setup of the MPI workers and Masters (Launchers): 
 ```python
-from hydraa.services.caas_manager.utils import Kubeflow, KubeflowMPILauncher
+from hydraa.services.caas_manager.integrations.kubeflow import Kubeflow, KubeflowMPILauncher
 mpi_tasks = []
 for i in range(5):
     task = Task()
@@ -82,4 +82,66 @@ mpi_launcher.launch(mpi_tasks)
 # wait for all tasks to finish
 all(t.result() for t in mpi_tasks)
 ```
+
+### Executing Workflows:
+#### 1- create a PVC
+```python
+from hydraa.services import PersistentVolume, PersistentVolumeClaim
+pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessModes='ReadWriteMany')
+```
+#### 2- create N workflows and assign the created PVC to the workflow instance
+```python
+from hydraa.services.caas_manager.integrations.workflows import ContainerSetWorkflow
+
+# Initialize a workflow instance
+wf = ContainerSetWorkflow(name='fair-facts', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
+
+# create x 1000 workflows
+for i in range(1000):
+   task = Task()
+   task.vcpus = 2
+   task.memory = 2000
+   task.image = 'facts-fair'
+   task.cmd = ['sh', '-c', f'python3 fair_temperature_preprocess.py --pipeline_id {i}']
+   task.outputs.append(f'{i}_preprocess.pkl')
+   task.volume = pvc
+   task.args = []
+
+   task1 = Task()
+   task1.vcpus = 2
+   task1.memory = 2000
+   task1.image = 'facts-fair'
+   task1.cmd = ['sh', '-c', f'python3 fair_temperature_fit.py --pipeline_id {i}']
+   task1.outputs.append(f'{i}_fit.pkl')
+   task1.volume = pvc
+   task1.args = []
+
+   task2 = Task()
+   task2.vcpus = 2
+   task2.memory = 2000
+   task2.image = 'facts-fair'
+   task2.cmd = ['sh', '-c', f'python3 fair_temperature_project.py --pipeline_id {i}']
+   task2.volume = pvc
+   task2.args = []
+
+   task3 = Task()
+   task3.vcpus = 2
+   task3.memory = 2000
+   task3.image = 'facts-fair'
+   task3.cmd = ['sh', '-c', f'python3 fair_temperature_postprocess.py --pipeline_id {i}']
+   task3.volume = pvc
+   task3.args = []
+
+   # task2 will wait for task and task1
+   # hydraa will move any depndent files
+   # from task and task1 to task2
+   task2.add_dependency([task ,task1])
+
+   wf.add_tasks([task, task1, task2, task3])
+   wf.create()
+
+# submit all of the 1000 workflows to the cluster
+wf.run()
+```
+
 

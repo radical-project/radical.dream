@@ -12,16 +12,10 @@ import pandas        as pd
 import threading     as mt
 import radical.utils as ru
 
-from hydraa import CHI, JET2
-from kubernetes import client
-from kubernetes import config
-
-# this should be from hydraa.utils import x, y, z
 from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
 from .misc import dump_multiple_yamls
-from .misc import build_mpi_deployment
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -51,7 +45,7 @@ KUBECTL = shutil.which('kubectl')
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-MPI_CONTAINER = ['container.mpi']
+TASK_PREFIX = ['hydraa-', 'hydraa-launcher']
 
 # --------------------------------------------------------------------------
 #
@@ -102,7 +96,6 @@ class Cluster:
         self.id           = run_id
         self.vm           = vm
         self.name         = 'cluster-{0}.{1}'.format(self.vm.Provider, run_id)
-        self.remote       = vm.Remotes
         self.pod_counter  = 0
         self.sandbox      = sandbox
         self.logger       = log
@@ -128,6 +121,14 @@ class Cluster:
     def recover(self):
         pass
 
+    # --------------------------------------------------------------------------
+    #
+    def assign_nodes_remote_access(self):
+        for ndx, node_conn in enumerate(self.vm.Remotes.values()):
+            if ndx == 0:
+                self.remote = node_conn
+            else:
+                setattr(self, f'node{ndx}', node_conn)
 
     # --------------------------------------------------------------------------
     #
@@ -170,7 +171,7 @@ class Cluster:
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
 
-        self.remote = list(self.remote.values())[0]
+        self.assign_nodes_remote_access()
     
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
@@ -280,7 +281,6 @@ class Cluster:
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
-        mpip = [] # mpi pods
 
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
@@ -296,11 +296,6 @@ class Cluster:
             # TODO: use orhestrator.scheduler
             elif ctask.type in CONTAINER:
                 mcpp.append(ctask)
-
-            # Kubeflow based MPI-Pods (use
-            # Kueue job controller or user scheduler here)
-            elif ctask.type in MPI_CONTAINER:
-                mpip.append(ctask)
 
         if mcpp:
             _mcpp = []
@@ -322,13 +317,6 @@ class Cluster:
                 _scpp.append(pod)
                 self.pod_counter +=1
             dump_multiple_yamls(_scpp, deployment_file)
-
-        # FIXME: support heterogenuous tasks and fit them
-        #  within the MPI world size
-        if mpip:
-            mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
-            dump_multiple_yamls(mpi_objs, deployment_file)
-            self.pod_counter += len(mpip)
 
         return deployment_file, [], []
 
@@ -369,9 +357,16 @@ class Cluster:
                    format(deployment_file, self.sandbox)
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
+            msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
+                                                            self.name)
             if not ret:
-                print('all pods are submitted')
+                print(msg)
+                self.logger.trace('{0}, deployemnt output is under'
+                                  ' apply_output.log'.format(msg))
                 return deployment_file, pods_names, batches
+
+            # FIXME: we use nohup, to apply the deployemnt in the 
+            # background, so how can we report error if we fail?
             else:
                 self.logger.error(err)
                 print('failed to submit pods, please check the logs for more info.')
@@ -524,11 +519,11 @@ class Cluster:
         if response:
             items = response.get('items', [])
             for item in items:
-                if item['kind'] == 'Pod':
+                if item['kind'] in POD:
                     pod_name = item['metadata'].get('name', '')
-                    # this is a hydraa pod
-                    if pod_name.startswith('hydraa-pod-') or \
-                        pod_name.startswith('hydraa-mpi-ctask') and 'launcher' in pod_name:
+                    # in the check, we distinguish hydraa deployed
+                    # tasks from any other pods on the same namespace.
+                    if any(px in pod_name for px in TASK_PREFIX):
                         already_checked = []
                         # check if this pod completed successfully
                         for cond in item['status'].get('conditions', []):

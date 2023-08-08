@@ -1,9 +1,13 @@
+import os
 import time
+import copy
 
-from .misc import sh_callout
-from .misc import download_files
-from .misc import load_multiple_yamls
-from .misc import dump_multiple_yamls
+from ..utils.misc import load_yaml
+from ..utils.misc import sh_callout
+from ..utils.misc import download_files
+
+from ..utils.misc import load_multiple_yamls
+from ..utils.misc import dump_multiple_yamls
 
 
 # --------------------------------------------------------------------------
@@ -19,14 +23,14 @@ class Kubeflow:
         manager (CaasManager): An instance of the hydraa.caas_manager class.
 
     """
-
+    # --------------------------------------------------------------------------
+    #
     def __init__(self, manager):
         self.manager = manager
         self.cluster = self.manager.cluster
 
-
-   # --------------------------------------------------------------------------
-   #
+    # --------------------------------------------------------------------------
+    #
     def _install_kf_mpi(self):
         """
         Installs the Kubeflow MPI operator.
@@ -39,7 +43,6 @@ class Kubeflow:
         kf_cmd += "https://raw.githubusercontent.com/kubeflow/mpi-operator" \
                   "/master/deploy/v2beta1/mpi-operator.yaml"
         res = self.cluster.remote.run(kf_cmd, hide=True)
-
 
     # --------------------------------------------------------------------------
     #
@@ -62,7 +65,6 @@ class Kubeflow:
         if res.stdout:
             return "mpijobs.kubeflow" in res.stdout
 
-
     # --------------------------------------------------------------------------
     #
     def _deploy_scheduler(self, scheduler):
@@ -77,13 +79,12 @@ class Kubeflow:
         scheduler to Kubeflow.
         """
         if scheduler:
-            self.cluster.logger.error('adding a custom scheduler is not ' \
+            self.cluster.logger.error('adding a custom scheduler is not '
                                       'supported yet')
         else:
-            self.cluster.logger.warning('no MPI scheduler was specified, using ' \
-                                        'default Kueue job controller')
+            self.cluster.logger.warning('no MPI scheduler was specified,'
+                                        ' using default Kueue job controller')
             self._start_kueue()
-
 
     # --------------------------------------------------------------------------
     #
@@ -103,11 +104,12 @@ class Kubeflow:
 
         # Some jobs need all pods to be running at the same time to operate;
         # for example, synchronized distributed training or MPI-based jobs
-        # which require pod-to-pod communication. On a default Kueue configuration,
-        # a pair of such jobs may deadlock if the physical availability of resources
-        # do not match the configured quotas in Kueue. The same pair of jobs could
-        # run to completion if their pods were scheduled sequentially.
-        # https://kueue.sigs.k8s.io/docs/tasks/setup_sequential_admission/#enabling-waitforpodsready
+        # which require pod-to-pod communication. On a default Kueue
+        # configuration, a pair of such jobs may deadlock if the physical
+        # availability of resources do not match the configured quotas in
+        # Kueue. The same pair of jobs could run to completion if their pods
+        # were scheduled sequentially. 
+        # Check: https://kueue.sigs.k8s.io/docs
         cmd = "sed -i -e 's/#waitForPodsReady/waitForPodsReady/' "
         cmd += "-e 's/#\s*enable:\s*true/  enable: true/' {0}".format(files[0])
         out, err, ret = sh_callout(cmd, shell=True)
@@ -143,7 +145,6 @@ class Kubeflow:
             self.cluster.logger.trace("Kueue is installed on {0}"\
                                       .format(self.cluster.name))
 
-
     # --------------------------------------------------------------------------
     #
     def start(self, scheduler=None):
@@ -170,13 +171,50 @@ class Kubeflow:
                                      .format(self.cluster.name, self.cluster.status))
             time.sleep(5)
 
-
     # --------------------------------------------------------------------------
     #
-    def submit(self, task):
-
-        self.manager.incoming_q.put(task)
-
+    def build_mpi_deployment(self, mpi_tasks):
+    
+        combined_deployments = []
+        loc = os.path.join(os.path.dirname(__file__))
+        loc += "/kubeflow_template.yaml"
+    
+        kf_template = load_yaml(loc)
+    
+        for mpi_task in mpi_tasks:
+    
+            kf_task = copy.deepcopy(kf_template)
+            kf_task["metadata"]["name"] += "-" + mpi_task.name
+    
+            slots = mpi_task.mpi_setup['slots']
+            workers = mpi_task.mpi_setup['workers']
+           
+            # FIXME: this function should be part of class: Kubeflow
+            if not mpi_task.mpi_setup["scheduler"]:
+                kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
+            else:
+                raise NotImplementedError("scheduler specfication not implmented yet")
+    
+            kf_task['spec']['slotsPerWorker'] = slots
+            worker = kf_task['spec']['mpiReplicaSpecs']['Worker']
+            launcher = kf_task['spec']['mpiReplicaSpecs']['Launcher']
+    
+            worker['replicas'] = workers
+            worker['template']['spec']['containers'][0]['image'] = mpi_task.image
+            worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+            worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
+    
+            cmd_list = mpi_task.cmd.split(" ")
+            cmd_list.insert(0, str(mpi_task.vcpus))
+            for c in cmd_list:
+                launcher['template']['spec']['containers'][0]['args'].append(c)
+    
+            launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
+            launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+    
+            combined_deployments.append(kf_task)
+    
+        return combined_deployments
 
 # --------------------------------------------------------------------------
 #
@@ -202,7 +240,6 @@ class KubeflowMPILauncher(Kubeflow):
 
         self.start(scheduler)
 
-
     # --------------------------------------------------------------------------
     #
     def launch(self, tasks):
@@ -215,13 +252,22 @@ class KubeflowMPILauncher(Kubeflow):
             tasks (list): List of tasks to be launched.
 
         """
-        for task in tasks:
+        # FIXME: support heterogenuous tasks and fit them
+        #  within the MPI world size
+        for tdx, task in enumerate(tasks):
+            task.id = str(tdx)
+            task.name = 'ctask-{0}'.format(tdx)
             task.type = 'container.mpi'
             task.mpi_setup = {"workers": self.num_workers,
                               "slots": self.slots_per_worker,
                               "scheduler": ""}
-            self.submit(task)
 
+        kf_jobs = self.build_mpi_deployment(tasks)
+        print('submitting MPIJobs x [{0}] to {1}'.format(len(tasks),
+                                                         self.cluster.name))
+        file_path = self.cluster.sandbox + '/' + 'mpijobs.yaml'
+        dump_multiple_yamls(kf_jobs, file_path)
+        self.cluster.submit(deployment_file=file_path)
 
     # --------------------------------------------------------------------------
     #
@@ -234,7 +280,6 @@ class KubeflowMPILauncher(Kubeflow):
         """
         cmd = "kubectl delete MPIJob"
         res = self.manager.cluster.remote.run(cmd)
-
 
 # --------------------------------------------------------------------------
 #
@@ -249,7 +294,6 @@ class KubeflowTraning(Kubeflow):
     """
     def __init__(self):
         raise NotImplementedError('KubeflowTraning operator not supported yet')
-
 
 # --------------------------------------------------------------------------
 #

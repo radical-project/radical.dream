@@ -1,19 +1,16 @@
 import uuid
 import queue
-import threading     as mt
+import threading as mt
 import radical.utils as ru
 
-from typing                 import List
-from hydraa.cloud_vm        import vm
-from hydraa.cloud_task.task import Task
+from hydraa.cloud_vm import vm
 from hydraa.providers.proxy import proxy
 
-from hydraa.services.caas_manager.utils      import misc
-from hydraa.services.caas_manager.chi_caas   import ChiCaas
-from hydraa.services.caas_manager.aws_caas   import AwsCaas
-from hydraa.services.caas_manager.jet2_caas  import Jet2Caas
+from hydraa.services.caas_manager.utils import misc
+from hydraa.services.caas_manager.chi_caas import ChiCaas
+from hydraa.services.caas_manager.aws_caas import AwsCaas
+from hydraa.services.caas_manager.jet2_caas import Jet2Caas
 from hydraa.services.caas_manager.azure_caas import AzureCaas
-
 
 AWS    = 'aws'
 CHI    = 'chameleon'
@@ -27,13 +24,6 @@ class CaasManager:
     """
     ctask: container task
     """
-
-    # TODO: we might need to pass a TaskDescription
-    #       class that contains:
-    #       TaskDescription.AwsTaskDefination
-    #       TaskDescription.AwsContainerDefination
-    #       TaskDescription.AwsService
-
 
     # --------------------------------------------------------------------------
     #
@@ -167,7 +157,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, tasks: List[Task]):
+    def submit(self, tasks):
         """
         submit contianers and wait for them or not.
         """
