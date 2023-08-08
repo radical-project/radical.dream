@@ -16,7 +16,6 @@ from .misc import build_pod
 from .misc import sh_callout
 from .misc import generate_eks_id
 from .misc import dump_multiple_yamls
-from .misc import build_mpi_deployment
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -46,8 +45,6 @@ KUBECTL = shutil.which('kubectl')
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-MPI_CONTAINER = ['container.mpi']
-
 TASK_PREFIX = ['hydraa-', 'hydraa-launcher']
 
 # --------------------------------------------------------------------------
@@ -284,7 +281,6 @@ class Cluster:
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
-        mpip = [] # mpi pods
 
         deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
 
@@ -300,11 +296,6 @@ class Cluster:
             # TODO: use orhestrator.scheduler
             elif ctask.type in CONTAINER:
                 mcpp.append(ctask)
-
-            # Kubeflow based MPI-Pods (use
-            # Kueue job controller or user scheduler here)
-            elif ctask.type in MPI_CONTAINER:
-                mpip.append(ctask)
 
         if mcpp:
             _mcpp = []
@@ -326,17 +317,6 @@ class Cluster:
                 _scpp.append(pod)
                 self.pod_counter +=1
             dump_multiple_yamls(_scpp, deployment_file)
-
-        # FIXME: support heterogenuous tasks and fit them
-        #  within the MPI world size
-        # FIXME: We should not expose build_mpi_deployment
-        # here, this should be part of Kubeflow class.
-        # This class should be standard class that supports
-        # standard kubernetes CRD only.
-        if mpip:
-            mpi_objs = build_mpi_deployment(mpi_tasks=mpip)
-            dump_multiple_yamls(mpi_objs, deployment_file)
-            self.pod_counter += len(mpip)
 
         return deployment_file, [], []
 

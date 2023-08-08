@@ -236,52 +236,6 @@ def calculate_kubeflow_workers(nodes, cpn, task):
 
 # --------------------------------------------------------------------------
 #
-def build_mpi_deployment(mpi_tasks):
-
-    combined_deployments = []
-    loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-    mpi_kubeflow_template = "{0}config/kubeflow_kubernetes.yaml".format(loc)
-
-    kf_template = load_yaml(mpi_kubeflow_template)
-
-    for mpi_task in mpi_tasks:
-
-        kf_task = copy.deepcopy(kf_template)
-        kf_task["metadata"]["name"] += "-" + mpi_task.name
-
-        slots = mpi_task.mpi_setup['slots']
-        workers = mpi_task.mpi_setup['workers']
-       
-        # FIXME: this function should be part of class: Kubeflow
-        if not mpi_task.mpi_setup["scheduler"]:
-            kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
-        else:
-            raise NotImplementedError("scheduler specfication not implmented yet")
-
-        kf_task['spec']['slotsPerWorker'] = slots
-        worker = kf_task['spec']['mpiReplicaSpecs']['Worker']
-        launcher = kf_task['spec']['mpiReplicaSpecs']['Launcher']
-
-        worker['replicas'] = workers
-        worker['template']['spec']['containers'][0]['image'] = mpi_task.image
-        worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
-        worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
-
-        cmd_list = mpi_task.cmd.split(" ")
-        cmd_list.insert(0, str(mpi_task.vcpus))
-        for c in cmd_list:
-            launcher['template']['spec']['containers'][0]['args'].append(c)
-
-        launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
-        launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
-
-        combined_deployments.append(kf_task)
-
-    return combined_deployments
-
-
-# --------------------------------------------------------------------------
-#
 def load_yaml(fp, safe=True):
     with open(fp, "r") as file:
         if not safe:

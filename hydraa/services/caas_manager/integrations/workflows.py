@@ -1,9 +1,8 @@
 import os
 import copy
 
-from .task import Task
-from ..services.caas_manager.utils.misc import build_pod
-from ..services.caas_manager.utils.misc import load_multiple_yamls, dump_multiple_yamls
+from ..utils.misc import build_pod
+from ..utils.misc import load_multiple_yamls, dump_multiple_yamls
 
 WORKFLOW_TYPE = ['steps', 'containerset']
 
@@ -67,7 +66,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def add_tasks(self, tasks: Task) -> None:
+    def add_tasks(self, tasks) -> None:
         for task in tasks:
             self.tasks.append(task)
 
