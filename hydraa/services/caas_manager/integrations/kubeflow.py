@@ -254,10 +254,6 @@ class KubeflowMPILauncher(Kubeflow):
         """
         # FIXME: support heterogenuous tasks and fit them
         #  within the MPI world size
-        # FIXME: We should not expose build_mpi_deployment 
-        # here, this should be part of Kubeflow class.
-        # This class should be standard class that supports
-        # standard kubernetes CRD only.
         for tdx, task in enumerate(tasks):
             task.id = str(tdx)
             task.name = 'ctask-{0}'.format(tdx)

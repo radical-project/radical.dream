@@ -63,7 +63,7 @@ def do_something():
 ### Executing MPI containers:
 #### Specify the setup of the MPI workers and Masters (Launchers): 
 ```python
-from hydraa.services.caas_manager.utils import Kubeflow, KubeflowMPILauncher
+from hydraa.services.caas_manager.integrations.kubeflow import Kubeflow, KubeflowMPILauncher
 mpi_tasks = []
 for i in range(5):
     task = Task()
@@ -91,7 +91,7 @@ pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessMo
 ```
 #### 2- create N workflows and assign the created PVC to the workflow instance
 ```python
-from hydraa.cloud_task.workflows import Workflow
+from hydraa.services.caas_manager.integrations.workflows import ContainerSetWorkflow
 
 # Initialize a workflow instance
 wf = Workflow(name='fair-facts-workflow', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
