@@ -1,5 +1,6 @@
 import os
 import copy
+import threading
 
 from ..utils.misc import build_pod
 from ..utils.misc import load_multiple_yamls, dump_multiple_yamls
@@ -30,6 +31,7 @@ class Workflow:
         self.manager = manager
         self.cluster = manager.cluster
         self._workflows_counter = 0
+        self.update_lock = threading.Lock()
 
         self._setup_template()
         self._setup_volume(volume)
