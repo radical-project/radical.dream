@@ -1,6 +1,7 @@
 import os
 import time
 import copy
+import threading
 
 from ..utils.misc import load_yaml
 from ..utils.misc import sh_callout
@@ -27,6 +28,7 @@ class Kubeflow:
     #
     def __init__(self, manager):
         self.manager = manager
+        self.update_lock = threading.Lock()
         self.cluster = self.manager.cluster
 
     # --------------------------------------------------------------------------
@@ -201,8 +203,14 @@ class Kubeflow:
     
             worker['replicas'] = workers
             worker['template']['spec']['containers'][0]['image'] = mpi_task.image
-            worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+
+            # mpi task cores (ranks) request
             worker['template']['spec']['containers'][0]['resources']['limits']['cpu'] = slots
+            worker['template']['spec']['containers'][0]['resources']['requests']['cpu'] = slots
+
+            # mpi task memory request
+            worker['template']['spec']['containers'][0]['resources']['limits']['memory'] = str(mpi_task.memory)+'Mi'
+            worker['template']['spec']['containers'][0]['resources']['requests']['memory'] = str(mpi_task.memory)+'Mi'
     
             user_cmd_list = mpi_task.cmd.split(" ")
             temp_cmd = launcher['template']['spec']['containers'][0]['command']
@@ -221,20 +229,9 @@ class Kubeflow:
 class KubeflowMPILauncher(Kubeflow):
     """
     A class for launching MPI (Message Passing Interface) jobs using Kubeflow.
-
-    Args:
-        num_workers (int): Number of workers to launch for the MPI job.
-        slots_per_worker (int): Number of slots per worker.
-
-    Attributes:
-        num_workers (int): Number of workers for the MPI job.
-        slots_per_worker (int): Number of slots per worker.
-
     """
 
-    def __init__(self, manager, num_workers, slots_per_worker, scheduler=None):
-        self.num_workers = num_workers
-        self.slots_per_worker = slots_per_worker
+    def __init__(self, manager, scheduler=None):
 
         super().__init__(manager)
 
@@ -242,7 +239,7 @@ class KubeflowMPILauncher(Kubeflow):
 
     # --------------------------------------------------------------------------
     #
-    def launch(self, tasks):
+    def launch(self, tasks, num_workers, slots_per_worker):
         """
         Launches MPI jobs using Kubeflow. Each task results
         in an isolated MPI pod deployment with 1 launcher
@@ -250,17 +247,25 @@ class KubeflowMPILauncher(Kubeflow):
 
         Args:
             tasks (list): List of tasks to be launched.
+    
+            num_workers (int): Number of MPI workers to launch for each task.
 
+            slots_per_worker (int): Number of slots (cores) per worker.
         """
         # FIXME: support heterogenuous tasks and fit them
         #  within the MPI world size
-        for tdx, task in enumerate(tasks):
-            task.id = str(tdx)
-            task.name = 'ctask-{0}'.format(tdx)
+        for task in tasks:
+            task.id = str(self.manager._task_id)
+            task.name = 'ctask-{0}'.format(self.manager._task_id)
             task.type = 'container.mpi'
-            task.mpi_setup = {"workers": self.num_workers,
-                              "slots": self.slots_per_worker,
+            task.mpi_setup = {"workers": num_workers,
+                              "slots": slots_per_worker,
                               "scheduler": ""}
+    
+            # make sure only one instance is updating 
+            # the task_id at a time.
+            with self.update_lock:
+                self.manager._task_id +=1
 
         kf_jobs = self.build_mpi_deployment(tasks)
         print('submitting MPIJobs x [{0}] to {1}'.format(len(tasks),

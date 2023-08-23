@@ -63,7 +63,7 @@ def do_something():
 ### Executing MPI containers:
 #### Specify the setup of the MPI workers and Masters (Launchers): 
 ```python
-from hydraa.services.caas_manager.integrations.kubeflow import Kubeflow, KubeflowMPILauncher
+from hydraa.services.caas_manager.integrations.kubeflow import KubeflowMPILauncher
 mpi_tasks = []
 for i in range(5):
     task = Task()
@@ -75,9 +75,8 @@ for i in range(5):
     mpi_tasks.append(task)
 
 # create a kubeflow MPI-launcher
-mpi_launcher = KubeflowMPILauncher(caas_mgr.Jet2Caas,
-                                   num_workers=1, slots_per_worker=5)
-mpi_launcher.launch(mpi_tasks)
+mpi_launcher = KubeflowMPILauncher(caas_mgr.Jet2Caas)
+mpi_launcher.launch(mpi_tasks, num_workers=1, slots_per_worker=5)
 
 # wait for all tasks to finish
 all(t.result() for t in mpi_tasks)
@@ -94,7 +93,7 @@ pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessMo
 from hydraa.services.caas_manager.integrations.workflows import ContainerSetWorkflow
 
 # Initialize a workflow instance
-wf = ContainerSetWorkflow(name='fair-facts', cluster=caas_mgr.Jet2Caas.cluster, volume=pvc)
+wf = ContainerSetWorkflow(name='fair-facts', manager=caas_mgr.Jet2Caas, volume=pvc)
 
 # create x 1000 workflows
 for i in range(1000):

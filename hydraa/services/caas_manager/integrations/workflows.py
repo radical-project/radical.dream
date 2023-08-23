@@ -18,7 +18,7 @@ class Workflow:
     2- Performs data movements in the background between local <==> volume.
     """
 
-    def __init__(self, name, type, cluster, volume=None) -> None:
+    def __init__(self, name, type, manager, volume=None) -> None:
         
         if not type in WORKFLOW_TYPE:
             raise TypeError('Workflow type must be one of {0}'.format(WORKFLOW_TYPE))
@@ -27,8 +27,8 @@ class Workflow:
         self.tasks = []
         self.name = name
         self.workflows = []
-        self.cluster = cluster
-        self._tasks_counter = 0
+        self.manager = manager
+        self.cluster = manager.cluster
         self._workflows_counter = 0
 
         self._setup_template()
@@ -83,8 +83,8 @@ class Workflow:
 
         # iterate on each task in the tasks list
         for task in self.tasks:
-            task.id = str(self._tasks_counter)
-            task.name = 'ctask-{0}'.format(self._tasks_counter)
+            task.id = str(self.manager._task_id)
+            task.name = 'ctask-{0}'.format(self.manager._task_id)
 
             # mv task.ouputs >> /volume/data
             if task.outputs:
@@ -94,7 +94,10 @@ class Workflow:
             if task.get_dependency():
                 self.move_to_local(task)
 
-            self._tasks_counter +=1
+            # make sure only one instance is updating 
+            # the task_id at a time.
+            with self.update_lock:
+                self.manager._task_id +=1
 
 
     # --------------------------------------------------------------------------
@@ -176,10 +179,10 @@ class Workflow:
 # --------------------------------------------------------------------------
 #
 class StepsWorkflow(Workflow):
-    def __init__(self, name, cluster, volume=None) -> None:
+    def __init__(self, name, manager, volume=None) -> None:
 
         type = WORKFLOW_TYPE[0]
-        super().__init__(name, type, cluster, volume)
+        super().__init__(name, type, manager, volume)
 
 
     # --------------------------------------------------------------------------
@@ -242,10 +245,10 @@ class ContainerSetWorkflow(Workflow):
     on Argo artifacts input/ouput, Hydraa, extends 
     the capabilitey
     """
-    def __init__(self, name, cluster, volume=None) -> None:
+    def __init__(self, name, manager, volume=None) -> None:
 
         type = WORKFLOW_TYPE[1]
-        super().__init__(name, type, cluster, volume)
+        super().__init__(name, type, manager, volume)
     
 
     def create(self) -> None:
