@@ -47,7 +47,7 @@ class CaasManager:
         for provider in self._proxy._loaded_providers:
             if provider == AZURE:
                 cred = self._proxy._load_credentials(AZURE)
-                vmx  = next(v for v in vms if isinstance(v, vm.AzureVM))
+                vmx  = list((v for v in vms if isinstance(v, vm.AzureVM)))
                 self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[AZURE] = {'class' : self.AzureCaas,
                                                     'run_id': self.AzureCaas.run_id,
@@ -55,7 +55,7 @@ class CaasManager:
                                                     'out_q' : self.AzureCaas.outgoing_q}
             if provider == AWS:
                 cred = self._proxy._load_credentials(AWS)
-                vmx  = next(v for v in vms if isinstance(v, vm.AwsVM))
+                vmx  = list((v for v in vms if isinstance(v, vm.AwsVM)))
                 self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[AWS] = {'class' : self.AwsCaas,
                                                   'run_id': self.AwsCaas.run_id,
@@ -65,7 +65,7 @@ class CaasManager:
             # TODO: merge Jet2cass and ChiCaas in one class 
             if provider == JET2:
                 cred = self._proxy._load_credentials(JET2)
-                vmx  = next(v for v in vms if v.Provider == JET2)
+                vmx  = list((v for v in vms if v.Provider == JET2))
                 self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[JET2] = {'class' : self.Jet2Caas,
                                                    'run_id': self.Jet2Caas.run_id,
@@ -74,7 +74,7 @@ class CaasManager:
 
             if provider == CHI:
                 cred = self._proxy._load_credentials(CHI)
-                vmx  = next(v for v in vms if v.Provider == CHI)
+                vmx  = list((v for v in vms if v.Provider == CHI))
                 self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
                 self._registered_managers[CHI] = {'class' : self.ChiCaas,
                                                   'run_id': self.ChiCaas.run_id,
@@ -144,7 +144,7 @@ class CaasManager:
         Done/failed
         """
         manager_queue = manager_attrs['out_q']
-        manager_name  = manager_attrs['class'].vm.Provider
+        manager_name  = manager_attrs['class'].__class__.__name__
 
         while not self._terminate.is_set():
             try:

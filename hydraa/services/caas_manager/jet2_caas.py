@@ -34,29 +34,24 @@ class Jet2Caas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous,
                                           log, prof, DryRun=False):
 
         self.manager_id = manager_id
-
-        self.vm     = None
         self.status = False
         self.DryRun = DryRun
 
-        self.client   = self._create_client(cred)
-        self.network  = None
-        self.security = None
-        self.server   = None
-        self.ips      = []
-        self.remote   = None
-        self.cluster  = None
+        self.servers = None
+        self.network = None
+        self.cluster = None
+        self.client = self._create_client(cred)
+        self.launch_type = VMS[0].LaunchType.lower()
 
-        self._task_id = 0      
+        self._task_id = 0    
 
-        self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
-        # tasks_book is a datastructure that keeps most of the 
-        # cloud tasks info during the current run.
+        self.vms = VMS
+        self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
+
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
 
@@ -86,6 +81,8 @@ class Jet2Caas():
         atexit.register(self._shutdown)
 
 
+    # --------------------------------------------------------------------------
+    #
     def start(self):
 
         if self.status:
@@ -94,40 +91,19 @@ class Jet2Caas():
 
         print("starting run {0}".format(self.run_id))
 
-        self.profiler.prof('prep_start', uid=self.run_id)
+        # we use a single kypair for all servers
+        self.keypair = self.create_or_find_keypair()
 
-        self.image    = self.create_or_find_image()
-        self.flavor   = self.client.compute.find_flavor(self.vm.FlavorId)
-        self.security = self.create_security_with_rule()
-        self.keypair  = self.create_or_find_keypair()
-
-        self.profiler.prof('prep_stop', uid=self.run_id)
-
-        self.profiler.prof('server_create_start', uid=self.run_id)
-        
-        self.server = self._create_server(self.image, self.flavor, self.keypair,
-                              self.security, self.vm.MinCount, self.vm.MaxCount)
-        self.profiler.prof('server_create_stop', uid=self.run_id)
-
-        self.profiler.prof('ip_create_start', uid=self.run_id)
-
-        self.assign_ips()
-
-        self.profiler.prof('ip_create_stop', uid=self.run_id)
-
+        self.profiler.prof('servers_create_start', uid=self.run_id)
+        self.create_servers()
+        self.servers = self.list_servers()
+        self.assign_servers_ips()
         self.assign_ssh_security_groups()
+        self.setup_vms_remote_access()
 
-        self.vm.Servers = self.list_servers()
+        self.profiler.prof('servers_create_stop', uid=self.run_id)
 
-        self.vm.Remotes = {}
-        for server in self.vm.Servers:
-            public_ip = server.access_ipv4
-
-            #FIXME: VM should have a username instead of hard coded ubuntu
-            self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'ubuntu', public_ip,
-                                                      self.logger)
-
-        self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
+        self.cluster = kubernetes.Cluster(self.run_id, self.vms, self.sandbox,
                                           self.logger)
 
         self.cluster.bootstrap()
@@ -191,7 +167,24 @@ class Jet2Caas():
     #
     def _get_run_status(self, pod_id):
         self.cluster.get_pod_status(pod_id)
-    
+
+
+    # --------------------------------------------------------------------------
+    #
+    def setup_vms_remote_access(self):
+        while True:
+            if all(s.access_ipv4 for s in self.list_servers()):
+                break
+        for server in self.servers:
+            for vm in self.vms:
+                vm.Remotes = {}
+                vm.Servers = []
+                if server.flavor.id == vm.FlavorId:
+                    vm.Servers.append(server)
+                    public_ip = server.access_ipv4
+                    #FIXME: VM should have a username instead of hard coded ubuntu
+                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, 'ubuntu', public_ip,
+                                                         self.logger)
 
     # --------------------------------------------------------------------------
     #
@@ -202,9 +195,6 @@ class Jet2Caas():
         security_rule_exist = 'ConflictException: 409'
 
         security = self.client.get_security_group(security_group_name)
-
-        # FIXME: check if these rules already exist, if so pass
-        self.vm.Rules = []
         try:
             if security.id:
                 return security
@@ -224,10 +214,16 @@ class Jet2Caas():
     #
     def create_or_find_keypair(self):
 
+        keys = None
         keypair = None
-        if self.vm.KeyPair:
-            self.logger.trace('checking user provided ssh keypair')
-            keypair = self.client.compute.find_keypair(self.vm.KeyPair)
+        for vm in self.vms:
+            if vm.KeyPair:
+                if isinstance(vm.KeyPair, list):
+                    if len(vm.KeyPair) == 2:
+                        self.logger.trace('using a user provided ssh keypair')
+                        keys = vm.KeyPair
+                        keypair = self.client.compute.find_keypair(vm.KeyPair[0].split('/')[-1:])
+                        break
 
         if not keypair:
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
@@ -248,25 +244,28 @@ class Jet2Caas():
             with open(keypair_pub, 'w') as f:
                 f.write("%s" % keypair.public_key)
 
-            self.vm.KeyPair = [keypair_pri, keypair_pub]
-
             # modify the permission
             os.chmod(keypair_pri, 0o600)
             os.chmod(keypair_pub, 0o644)
 
-            self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
+            keys = [keypair_pri, keypair_pub]
 
         if not keypair:
             raise Exception('keypair creation failed')
+
+        for vm in self.vms:
+            vm.KeyPair = keys
+
+        self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
 
         return keypair
 
 
     # --------------------------------------------------------------------------
     #
-    def create_or_find_image(self):
+    def create_or_find_image(self, vm):
         
-        image = self.client.compute.find_image(self.vm.ImageId)
+        image = self.client.compute.find_image(vm.ImageId)
 
         if not image.id:
             raise NotImplementedError
@@ -276,12 +275,12 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def create_or_find_network(self):
+    def create_or_find_network(self, vm):
 
         network = None
         # user provided a newtwork name that we need to find
-        if self.vm.Network:
-            network = self.client.network.find_network(self.vm.Network)
+        if vm.Network:
+            network = self.client.network.find_network(vm.Network)
             if network and network.id:
                 self.logger.trace('network {0} found'.format(network.name))
                 return network
@@ -306,11 +305,8 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def assign_ips(self):
-
-        servers = self.list_servers()
-        
-        for server in servers:
+    def assign_servers_ips(self):
+        for server in self.servers:
             # if the server has an ip assigned then skip it
             if not server.access_ipv4:
                 self.client.add_auto_ip(server)
@@ -330,8 +326,7 @@ class Jet2Caas():
                 ssh_sec_group = sec
 
         if ssh_sec_group:
-            servers = self.list_servers()
-            for server in servers:
+            for server in self.servers:
                 ssh_is_associated = any([('SSH' or 'ssh') in d['name'] for d in server.security_groups])
 
                 # if ssh group already assigned then skip
@@ -353,35 +348,41 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def _create_server(self, image, flavor, key_pair, security, min_count, max_count):
+    def create_servers(self):
 
         server_name = 'hydraa-server-{0}'.format(self.run_id)
+        number_of_servers = sum([vm.MinCount for vm in self.vms])
 
-        self.logger.trace('creating {0} x [{1}]'.format(server_name, min_count))
+        for vm in self.vms:       
+            image = self.create_or_find_image(vm)
+            flavor = self.client.compute.find_flavor(vm.FlavorId)
+            security = self.create_security_with_rule()
 
-        user_data = ''
-        # bug: https://github.com/ansible/ansible/issues/51663
-        if 'ubuntu' or 'Ubuntu' in self.image['name']:
-            user_data = '''#!/bin/bash
-            sudo apt remove unattended-upgrades -y
-            '''
-        server = self.client.create_server(name=server_name,
-                                           image=image.id,
-                                           flavor=flavor.id,
-                                           key_name=key_pair.name,
-                                           min_count=min_count,
-                                           max_count=max_count,
-                                           userdata=user_data)
-        
-        # Wait for a server to reach ACTIVE status.
-        self.client.wait_for_server(server)
+            user_data = ''
+            # bug: https://github.com/ansible/ansible/issues/51663
+            if 'ubuntu' or 'Ubuntu' in self.image['name']:
+                user_data = '''#!/bin/bash
+                sudo apt remove unattended-upgrades -y
+                '''
+            vm.UserData = user_data
+            self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
+                                                                  vm.MinCount,
+                                                                  vm.FlavorId))
+            server = self.client.create_server(name=server_name,
+                                                image=image.id,
+                                                flavor=flavor.id,
+                                                key_name=self.keypair.name,
+                                                min_count=vm.MinCount,
+                                                max_count=vm.MaxCount,
+                                                userdata=user_data)
 
-        if not security.name == 'default':
-            self.client.add_server_security_groups(server, [security.name])
-        
-        self.logger.trace('all servers(s) are active x [{0}]'.format(min_count))
-        
-        return server
+            # Wait for all servers to reach ACTIVE status.
+            self.client.wait_for_server(server)
+
+            if not security.name == 'default':
+                self.client.add_server_security_groups(server, [security.name])
+
+        self.logger.trace('all servers(s) are active x [{0}]'.format(number_of_servers))
 
 
     # --------------------------------------------------------------------------
@@ -396,7 +397,7 @@ class Jet2Caas():
             ctask.id          = self._task_id
             ctask.name        = 'ctask-{0}'.format(self._task_id)
             ctask.provider    = JET2
-            ctask.launch_type = self.vm.LaunchType
+            ctask.launch_type = self.launch_type
 
             self._tasks_book[str(ctask.id)] = ctask
             self._task_id +=1
@@ -507,11 +508,7 @@ class Jet2Caas():
         if caller == '_shutdown':
             self.manager_id = None
             self.status = False
-
             self.client   = None
-            self.network  = None
-            self.security = None
-            self.server   = None
 
             self._pods_book.clear()
             self.logger.trace('done')
@@ -521,22 +518,14 @@ class Jet2Caas():
     #
     def _shutdown(self):
 
-        if not self.server:
+        if not self.servers:
             return
 
         self.logger.trace("termination started")
 
         self._terminate.set()
 
-        if self.vm.KeyPair:
-            self.logger.trace('deleting ssh keys')
-            for k in self.vm.KeyPair:
-                try:
-                    os.remove(k)
-                except OSError as e:
-                    if e.errno != errno.ENOENT:
-                        raise e
-
+        if self.keypair:
             if self.keypair.id:
                 self.logger.trace('deleting key-name from cloud storage')
                 self.client.delete_keypair(self.keypair.id)
@@ -549,17 +538,17 @@ class Jet2Caas():
                     self.client.network.delete_subnet(subnet, ignore_missing=False)
 
         # deleting the server
-        if self.server:
-            for server in self.list_servers():
-                self.client.delete_server(server.name)
-                self.logger.trace('server {0} is deleted'.format(server.name))
+        if self.servers:
+            for vm in self.vms:
+                for server in vm.Servers:
+                    self.client.delete_server(server.name)
+                    self.logger.trace('server {0} is deleted'.format(server.name))
 
-            if self.ips:
-                for ip in self.ips:
                     self.logger.trace('deleting allocated ip')
-                    self.client.delete_floating_ip(ip)
-        
-        self.cluster.shutdown()
+                    self.client.delete_floating_ip(server.access_ipv4)
+
+        if self.cluster:
+            self.cluster.shutdown()
 
         self.__cleanup()
 

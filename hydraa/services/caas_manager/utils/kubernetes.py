@@ -79,7 +79,7 @@ class Cluster:
        performance metrics.
     """
 
-    def __init__(self, run_id, vm, sandbox, log):
+    def __init__(self, run_id, vms, sandbox, log):
         """
         The constructor for Cluster class.
 
@@ -91,8 +91,9 @@ class Cluster:
 
         """
         self.id           = run_id
-        self.vm           = vm
-        self.name         = 'cluster-{0}.{1}'.format(self.vm.Provider, run_id)
+        self.vms           = vms
+        self.nodes        = sum([vm.MinCount for vm in self.vms])
+        self.name         = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
         self.pod_counter  = 0
         self.sandbox      = sandbox
         self.logger       = log
@@ -121,11 +122,12 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def assign_nodes_remote_access(self):
-        for ndx, node_conn in enumerate(self.vm.Remotes.values()):
-            if ndx == 0:
-                self.remote = node_conn
-            else:
-                setattr(self, f'node{ndx}', node_conn)
+        for vm in self.vms:
+            for ndx, node_conn in enumerate(vm.Remotes.values()):
+                if ndx == 0:
+                    self.remote = node_conn
+                else:
+                    setattr(self, f'node{ndx}', node_conn)
 
     # --------------------------------------------------------------------------
     #
@@ -160,10 +162,11 @@ class Cluster:
         5- Join each worker to the master node.
         """
 
-        print('building {0} with x [{1}] nodes'.format(self.name,
-                                                       len(self.vm.Servers)))
+        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
 
         self.status = BUSY
+
+        head_node = self.vms[0]
 
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
@@ -173,17 +176,18 @@ class Cluster:
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
         nodes_map = []
-        for server in self.vm.Servers:
-            # build then nodes map
-            network = server.addresses.values()
-            fixed_ip = next(iter(network))[0]['addr']
-            hostname_ip = server.name + ',' + fixed_ip
-            nodes_map.append(hostname_ip)
+        for vm in self.vms:
+            for server in vm.Servers:
+                # build then nodes map
+                network = server.addresses.values()
+                fixed_ip = next(iter(network))[0]['addr']
+                hostname_ip = server.name + ',' + fixed_ip
+                nodes_map.append(hostname_ip)
 
-            # update the cluster size based on each node
-            self.size['vcpus'] += server.flavor.vcpus
-            self.size['memory'] += server.flavor.ram
-            self.size['storage'] += server.flavor.disk
+                # update the cluster size based on each node
+                self.size['vcpus'] += server.flavor.vcpus
+                self.size['memory'] += server.flavor.ram
+                self.size['storage'] += server.flavor.disk
 
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
@@ -198,9 +202,9 @@ class Cluster:
 
         # bug in fabric: https://github.com/fabric/fabric/issues/323
         remote_ssh_path = '/home/{0}/.ssh'.format(self.remote.user)
-        remote_key_path = remote_ssh_path + '/' + self.vm.KeyPair[0].split('.ssh/')[-1:][0]
+        remote_key_path = remote_ssh_path + '/' + head_node.KeyPair[0].split('.ssh/')[-1:][0]
 
-        for key in self.vm.KeyPair:
+        for key in head_node.KeyPair:
             self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
 
         self.logger.trace('change bootstrap.sh permission')
@@ -391,7 +395,7 @@ class Cluster:
             raise Exception('Batch size can not be 0')
 
         # containers per pod
-        CPP = math.ceil(self.size['vcpus'] / self.vm.MinCount)
+        CPP = math.ceil(self.size['vcpus'] / self.vms.MinCount)
 
         tasks_per_pod = []
 
@@ -757,18 +761,18 @@ class AKS_Cluster(Cluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
-        self.size = self.get_vm_size(self.vm.InstanceID, self.vm.Region) - 1
+        self.size = self.get_vm_size(self.vms.InstanceID, self.vms.Region) - 1
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
         cmd += '-n {0} '.format(self.cluster_name)
         cmd += '--enable-managed-identity '
-        cmd += '--node-vm-size {0} '.format(self.vm.InstanceID)
+        cmd += '--node-vm-size {0} '.format(self.vms.InstanceID)
         cmd += '--node-count {0} '.format(self.nodes)
         cmd += '--generate-ssh-keys'
 
         print('building {0} with x [{1}] nodes'.format(self.name,
-                                                len(self.vm.Servers)))
+                                                len(self.vms.Servers)))
         self.config = sh_callout(cmd, shell=True, munch=True)
 
         self.profiler.prof('configure_start', uid=self.id)
@@ -992,18 +996,17 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('cofigure_start', uid=self.id)
         self.kube_config = self.configure()
 
-        self.size = self.get_vm_size(self.vm.InstanceID) - 1
+        self.size = self.get_vm_size(self.vms.InstanceID) - 1
 
-        print('building {0} with x [{1}] nodes'.format(self.name,
-                                                len(self.vm.Servers)))
+        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
 
         cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
-        cmd += '--region {0} --version {1} '.format(self.vm.Region, kubernetes_v)
+        cmd += '--region {0} --version {1} '.format(self.vms.Region, kubernetes_v)
 
-        if self.vm.Zones and len(self.vm.Zones) == 2:
-            cmd += '--zones {0}{1},{0}{2} '.format(self.vm.Region, self.vm.Zones[0], self.vm.Zones[1])
+        if self.vms.Zones and len(self.vms.Zones) == 2:
+            cmd += '--zones {0}{1},{0}{2} '.format(self.vms.Region, self.vms.Zones[0], self.vms.Zones[1])
         cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-        cmd += '--node-type {0} --nodes {1} '.format(self.vm.InstanceID, self.vm.MinCount)
+        cmd += '--node-type {0} --nodes {1} '.format(self.vms.InstanceID, self.vms.MinCount)
         cmd += '--kubeconfig {0}'.format(self.kube_config)
 
         out, err, ret = sh_callout(cmd, shell=True)
@@ -1062,7 +1065,7 @@ class EKS_Cluster(Cluster):
 
         print(out, err)
 
-        self.vm.AutoScaler = [name]
+        self.vms.AutoScaler = [name]
 
 
     # --------------------------------------------------------------------------
@@ -1108,9 +1111,9 @@ class EKS_Cluster(Cluster):
         """
         add nodes to an existing cluster
         """
-        if self.vm.AutoScaler:
-            if len(self.vm.AutoScaler) > 1:
-                print('Please specify which NodeGroup to add nodes to: {0}'.format(self.vm.AutoScaler))
+        if self.vms.AutoScaler:
+            if len(self.vms.AutoScaler) > 1:
+                print('Please specify which NodeGroup to add nodes to: {0}'.format(self.vms.AutoScaler))
                 return
 
             cmd  = 'eksctl scale nodegroup --name {0} '.format(group_name)
