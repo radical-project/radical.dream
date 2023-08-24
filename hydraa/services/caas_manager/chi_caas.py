@@ -420,7 +420,7 @@ class ChiCaas:
             # if the server has an ip assigned then skip it
             if not server.access_ipv4:
                 self.client.add_auto_ip(server)
-                self.logger.trace('auto assigned ip {0} to vm {1}'.format(server.name, server.access_ipv4))
+                self.logger.trace('auto assigned ip {0} to vm {1}'.format(server.access_ipv4, server.name))
             else:
                 self.logger.trace('vm {0} already has an ip assigned'.format(server.name, server.access_ipv4))
 

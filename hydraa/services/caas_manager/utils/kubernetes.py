@@ -717,10 +717,12 @@ class Cluster:
         # the ssh channels and tunnels
         if self.remote:
             self.remote.close()
-            if self._tunnel:
+            if hasattr(self, '_tunnel'):
                 self._tunnel.stop()
 
 
+# --------------------------------------------------------------------------
+#
 class AKS_Cluster(Cluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that:
@@ -934,7 +936,8 @@ class AKS_Cluster(Cluster):
         # self._delete()
 
 
-
+# --------------------------------------------------------------------------
+#
 class EKS_Cluster(Cluster):
     """Represents a single/multi node Elastic Kubrenetes Service cluster.
        This class asssumes that you did the one time
