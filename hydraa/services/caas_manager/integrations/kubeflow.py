@@ -44,7 +44,7 @@ class Kubeflow:
         kf_cmd = "kubectl create -f "
         kf_cmd += "https://raw.githubusercontent.com/kubeflow/mpi-operator" \
                   "/master/deploy/v2beta1/mpi-operator.yaml"
-        res = self.cluster.remote.run(kf_cmd, hide=True)
+        res = self.cluster.control_plane.run(kf_cmd, hide=True)
 
     # --------------------------------------------------------------------------
     #
@@ -57,7 +57,7 @@ class Kubeflow:
 
         """
         cmd = "kubectl get crd"
-        res = self.cluster.remote.run(cmd, hide=True)
+        res = self.cluster.control_plane.run(cmd, hide=True)
 
         if res.return_code:
             self.cluster.logger.error('checking for Kubeflow CRD failed: {0}\
@@ -284,7 +284,7 @@ class KubeflowMPILauncher(Kubeflow):
             str: None
         """
         cmd = "kubectl delete MPIJob"
-        res = self.manager.cluster.remote.run(cmd)
+        res = self.manager.cluster.control_plane.run(cmd)
 
 # --------------------------------------------------------------------------
 #

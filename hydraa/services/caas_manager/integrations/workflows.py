@@ -122,13 +122,13 @@ class Workflow:
         cmd += "https://github.com/argoproj/argo-workflows/" \
                "releases/download/v3.4.9/install.yaml"
 
-        res = self.cluster.remote.run('kubectl get crd', hide=True)
+        res = self.cluster.control_plane.run('kubectl get crd', hide=True)
         if res.return_code:
             self.cluster.logger.error('checking for Argo CRD failed: {0}\
                                       '.format(res.stderr))
 
         elif not "argo-server" in res.stdout:
-            res = self.cluster.remote.run(cmd, hide=True)
+            res = self.cluster.control_plane.run(cmd, hide=True)
 
 
     # --------------------------------------------------------------------------
