@@ -18,8 +18,8 @@ from hydraa.services.caas_manager.utils import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-JET2      = 'jetstream2'
-ACTIVE    = True
+JET2 = 'jetstream2'
+ACTIVE = True
 WAIT_TIME = 2
 JET2_USER = 'ubuntu'
 
@@ -35,13 +35,10 @@ class Jet2Caas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous,
-                                          log, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
 
         self.manager_id = manager_id
         self.status = False
-        self.DryRun = DryRun
-
         self.servers = None
         self.network = None
         self.cluster = None
@@ -538,28 +535,20 @@ class Jet2Caas():
         self._terminate.set()
 
         if self.keypair:
+            self.logger.trace('deleting ssh keys')
             if self.keypair.id:
                 self.logger.trace('deleting key-name from cloud storage')
                 self.client.delete_keypair(self.keypair.id)
 
-        # delete all subnet
-        if self.network:
-            if not self.network.name == "auto_allocated_network":
-                self.logger.trace('deleting subnets')
-                for subnet in self.network.subnet_ids:
-                    self.client.network.delete_subnet(subnet, ignore_missing=False)
-
         # deleting the server
-        if self.servers:
-            for server in self.servers:
-                self.client.delete_server(server.name)
-                self.logger.trace('server {0} is deleted'.format(server.name))
+        for server in self.servers:
+            self.client.delete_server(server.name)
+            self.logger.trace('server {0} is deleted'.format(server.name))
 
-                self.logger.trace('deleting allocated ip')
-                self.client.delete_floating_ip(server.access_ipv4)
+            self.logger.trace('deleting allocated ip')
+            self.client.delete_floating_ip(server.access_ipv4)
 
-            if self.cluster:
-                self.cluster.shutdown()
+        if self.cluster:
+            self.cluster.shutdown()
 
         self.__cleanup()
-

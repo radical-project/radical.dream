@@ -35,11 +35,10 @@ PFAILED_STATE = ['OutOfCPU','OutOfMemory',
                 'ImagePullBackOff', 'InvalidImageName',
                 'CreateContainerConfigError','RunContainerError',
                 'OOMKilled','ErrImagePull','Evicted']
-
-BUSY            = 'Busy'
-READY           = 'Ready'
-MAX_PODS        = 250
 SLEEP = 2
+BUSY = 'Busy'
+READY = 'Ready'
+MAX_PODS = 250
 
 KUBECTL = shutil.which('kubectl')
 
@@ -90,18 +89,18 @@ class Cluster:
             log          (logging)  : A logger object.
 
         """
-        self.id           = run_id
-        self.vms           = vms
-        self.nodes        = sum([vm.MinCount for vm in self.vms])
-        self.name         = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
-        self.pod_counter  = 0
-        self.sandbox      = sandbox
-        self.logger       = log
-        self.profiler     = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size         = {'vcpus': -1, 'memory': 0, 'storage': 0}
+        self.id = run_id
+        self.vms = vms
+        self.nodes = sum([vm.MinCount for vm in self.vms])
+        self.name  = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
+        self.pod_counter = 0
+        self.sandbox = sandbox
+        self.logger = log
+        self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
+        self.size = {'vcpus': -1, 'memory': 0, 'storage': 0}
  
         self.kube_config  = None
-        self.status       = None
+        self.status = None
 
         self.stop_event = mt.Event()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
@@ -121,11 +120,11 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def set_nodes(self):
+    def add_nodes_properity(self):
         for vm in self.vms:
             for ndx, node_conn in enumerate(vm.Remotes.values()):
                 if ndx == 0:
-                    self.remote = node_conn
+                    self.controll_plane = node_conn
                 else:
                     setattr(self, f'node{ndx}', node_conn)
 
@@ -142,13 +141,13 @@ class Cluster:
             bool: True if passed.
         """
         cmd = 'kubectl delete pod --field-selector=status.phase==Succeeded'
-        self.remote.run(cmd)
+        self.controll_plane.run(cmd)
         return True
 
 
     # --------------------------------------------------------------------------
     #
-    def bootstrap(self):
+    def bootstrap(self, timeout=30):
         """
         The function to build Kuberentes n nodes (1 master) (n-1) workers
         using n virtual or physical machines and wait for them to finish.
@@ -173,6 +172,82 @@ class Cluster:
     
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
+        nodes_map = self.create_nodes_map()
+        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+
+        boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
+        self.controll_plane.put(boostrapper)
+
+        # bug in fabric: https://github.com/fabric/fabric/issues/323
+        remote_ssh_path = '/home/{0}/.ssh'.format(self.controll_plane.user)
+        remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
+        remote_key_path = remote_ssh_path + '/' + remote_ssh_name
+
+        for key in head_node.KeyPair:
+            self.controll_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
+
+        # start the bootstraping as a background process.
+        bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
+        bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
+        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
+                                                                 self.controll_plane.user,
+                                                                 remote_key_path)
+        bootstrap_cmd += '/dev/null < /dev/null &'
+        self.controll_plane.run(bootstrap_cmd, hide=True, warn=True)
+        
+        self.wait_for_cluster(timeout)
+
+        self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
+
+        self.kube_config = self.configure()
+        self._tunnel = self.controll_plane.setup_ssh_tunnel(self.kube_config)
+        
+        self.add_nodes_properity()
+
+        self.status = READY
+        print('{0} is in {1} state'.format(self.name, self.status))
+
+
+    # --------------------------------------------------------------------------
+    #
+    def configure(self):
+
+        self.logger.trace('creating .kube folder')
+        config_file = self.sandbox + "/.kube/config"
+        os.mkdir(self.sandbox + "/.kube")
+        open(config_file, 'x')
+
+        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+
+        self.controll_plane.get('.kube/config', local=config_file, preserve_mode=True)
+
+        return config_file
+
+
+    # --------------------------------------------------------------------------
+    #
+    def wait_for_cluster(self, timeout):
+        start_time = time.time()
+
+        while True:
+            check_cluster = self.controll_plane.run('kubectl get nodes', warn=True, hide=True)
+            if not check_cluster.return_code:
+                self.logger.trace('{0} installation succeeded, logs are under'.format(self.name))
+                break
+            else:
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= timeout * 60:
+                    raise TimeoutError('failed to build {0} within' \
+                                       ' [{1}] min.'.format(self.name, timeout))
+                else:
+                    self.logger.warning('installation of {0} is still in progress. ' \
+                                        'Retrying in 1 minute.'.format(self.name))
+                    time.sleep(60)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_nodes_map(self):
         nodes_map = []
         for vm in self.vms:
             for server in vm.Servers:
@@ -190,79 +265,7 @@ class Cluster:
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
 
-        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
-
-        boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-
-        self.logger.trace('upload bootstrap.sh')
-
-        self.remote.put(boostrapper)
-
-        # bug in fabric: https://github.com/fabric/fabric/issues/323
-        remote_ssh_path = '/home/{0}/.ssh'.format(self.remote.user)
-        remote_key_path = remote_ssh_path + '/' + head_node.KeyPair[0].split('.ssh/')[-1:][0]
-
-        for key in head_node.KeyPair:
-            self.remote.put(key, remote=remote_ssh_path, preserve_mode=True)
-
-        self.logger.trace('change bootstrap.sh permission')
-        self.remote.run("chmod +x bootstrap_kubernetes.sh", warn=True, hide=True)
-        self.logger.trace('invoke bootstrap.sh')
-
-        # start the bootstraping as a background process.
-        bootstrap_cmd = 'nohup ./bootstrap_kubernetes.sh '
-        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                 self.remote.user,
-                                                                 remote_key_path)
-        bootstrap_cmd += '/dev/null < /dev/null &'
-        bootstrap_res = self.remote.run(bootstrap_cmd, hide=True, warn=True)
-
-        timeout_minutes = 30
-        start_time = time.time()
-
-        while True:
-            check_cluster = self.remote.run('kubectl get nodes', warn=True, hide=True)
-            if not check_cluster.return_code:
-                self.logger.trace('{0} installation succeeded, logs are under' \
-                                  '$HOME/kubespray/ansible.*'.format(self.name))
-                break
-            else:
-                elapsed_time = time.time() - start_time
-                if elapsed_time >= timeout_minutes * 60:
-                    raise TimeoutError('failed to build {0} within' \
-                                       ' [{1}] min.'.format(self.name, timeout_minutes))
-                else:
-                    self.logger.warning('installation of {0} is still in progress. ' \
-                                        'Retrying in 1 minute.'.format(self.name))
-                    time.sleep(60)
-
-        self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
-
-        self.kube_config = self.configure()
-
-        self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
-
-        self.set_nodes()
-
-        self.status = READY
-
-        print('{0} is in {1} state'.format(self.name, self.status))
-
-
-    # --------------------------------------------------------------------------
-    #
-    def configure(self):
-
-        self.logger.trace('creating .kube folder')
-        config_file = self.sandbox + "/.kube/config"
-        os.mkdir(self.sandbox + "/.kube")
-        open(config_file, 'x')
-
-        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
-
-        self.remote.get('.kube/config', local=config_file, preserve_mode=True)
-
-        return config_file
+        return nodes_map
 
 
     # --------------------------------------------------------------------------
@@ -395,7 +398,7 @@ class Cluster:
             raise Exception('Batch size can not be 0')
 
         # containers per pod
-        CPP = math.ceil(self.size['vcpus'] / self.vms.MinCount)
+        CPP = math.ceil(self.size['vcpus'] / max(vm.MinCount for vm in self.vms))
 
         tasks_per_pod = []
 
@@ -719,8 +722,8 @@ class Cluster:
     def shutdown(self):
         # nothing to shutdown here besides closing
         # the ssh channels and tunnels
-        if self.remote:
-            self.remote.close()
+        if self.controll_plane:
+            self.controll_plane.close()
             if hasattr(self, '_tunnel'):
                 self._tunnel.stop()
 
@@ -738,15 +741,11 @@ class AKS_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def __init__(self, run_id, vm, sandbox, log):
-        self.id             = run_id
-        self.cluster_name   = 'hydraa-aks-cluster'
+        self.id = run_id
+        self.config = None
+        self.cluster_name = 'hydraa-aks-cluster'
         self.resource_group = vm.ResourceGroup
-        self.nodes          = vm.MinCount
-        self.config         = None
 
-        vm.Remotes = []
-
-        # we set size to 0 and we determine it later
         super().__init__(run_id, vm, sandbox, log)
 
         atexit.register(self.shutdown)
@@ -761,19 +760,30 @@ class AKS_Cluster(Cluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
-        self.size = self.get_vm_size(self.vms.InstanceID, self.vms.Region) - 1
+        # FIXME: remove self.size
+        self.size = self.get_vm_size(self.vms[0].InstanceID, self.vms[0].Region) - 1
+
+        first_vm = self.vms[0]
+        varied_vms = all(vm.InstanceID == first_vm.InstanceID for vm in self.vms)
+
+        np = {'vm_size': self.vms[0].InstanceID,
+              'vm_count': self.vms[0].MinCount}
 
         cmd  = 'az aks create '
         cmd += '-g {0} '.format(self.resource_group.name)
         cmd += '-n {0} '.format(self.cluster_name)
         cmd += '--enable-managed-identity '
-        cmd += '--node-vm-size {0} '.format(self.vms.InstanceID)
-        cmd += '--node-count {0} '.format(self.nodes)
+        cmd += '--node-vm-size {0} '.format(np['vm_size'])
+        cmd += '--node-count {0} '.format(np['vm_count'])
         cmd += '--generate-ssh-keys'
 
-        print('building {0} with x [{1}] nodes'.format(self.name,
-                                                len(self.vms.Servers)))
+        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
         self.config = sh_callout(cmd, shell=True, munch=True)
+
+        # check if we have a single type or multiple types of vms
+        if varied_vms and len(self.vms) > 2:
+            for vm in self.vms[1:]:
+                self.add_node_pool(vm)
 
         self.profiler.prof('configure_start', uid=self.id)
         self.kube_config = self.configure()
@@ -787,9 +797,6 @@ class AKS_Cluster(Cluster):
     # --------------------------------------------------------------------------
     #
     def configure(self):
-        # FIXME: we need to find a way to keep the config
-        #        of existing kubernetes (for multinode cluster)
-        
         # To manage a Kubernetes cluster, we use the Kubernetes CLI and kubectl
         # NOTE: kubectl is already installed if you use Azure Cloud Shell.
 
@@ -815,45 +822,18 @@ class AKS_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def add_nodes(self, nodes_type=None):
+    def add_node_pool(self, vm):
         """
         add nodes to an existing cluster
         """
-        self.nodes_pool = 'hydraa-aks-nodepool'
+        nodes_pool = 'hydraa-aks-nodepool-{0}'.format(vm.InstanceID)
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group)
         cmd += '--cluster-name {0} '.format(self.cluster_name)
-        cmd += '--name  {0} '.format(self.nodes_pool)
-        cmd += '--node-count {0} --no-wait'.format(self.nodes)
-
-        out, err, _ = sh_callout(cmd, shell=True)
-
-        print(out, err)
-
-        return True
-
-
-    # --------------------------------------------------------------------------
-    #
-    def add_auto_scaler(self, nodes, nodes_type, range: list):
-        """
-        Create a node pool. This will not launch any nodes immediately but will
-        scale up and down as needed. If you change the GPU type or the number of
-        GPUs per node, you may need to change the machine-type.
-
-        range: list of 2 index [min_nodes, max_nodes]
-        """
-        self.auto_scaler = 'hydraa-autoscale-aks-nodepool'
-
-        cmd  = 'az aks nodepool add '
-        cmd += '--resource-group {0} '.format(self.resource_group)
-        cmd += '--cluster-name {0} '.format(self.cluster_name)
-        cmd += '--name {0} '.format(self.auto_scaler)
-        cmd += '--node-count {0} '.format(nodes)
-        cmd += '--node-vm-size {0} '.format(nodes_type)
-        cmd += '--enable-cluster-autoscaler '
-        cmd += '--min-count {0} --max-count {1}'.format(range[0], range[1])
+        cmd += '--name  {0} '.format(nodes_pool)
+        cmd += '--node-count {0} '.format(vm.MinCount)
+        cmd += '--node-vm-size {0}'.format(vm.InstanceID)
 
         out, err, _ = sh_callout(cmd, shell=True)
 
@@ -861,32 +841,6 @@ class AKS_Cluster(Cluster):
 
         return True
     
-
-    # --------------------------------------------------------------------------
-    #
-    def update_auto_scaler(self, range: list):
-        """
-        Update an exsiting autoscaler with different number of nodes.
-        
-        range: list of 2 index [min_nodes, max_nodes]
-        """
-
-        if not self.auto_scaler:
-            self.logger.error('No autoscaler in this cluster, you need to create one')
-        
-        cmd = 'az aks nodepool update '
-        cmd += '--update-cluster-autoscaler '
-        cmd += '--min-count {0} --max-count {1} '.format(range[0], range[1])
-        cmd += '--resource-group {0} '.format(self.resource_group)
-        cmd += '--cluster-name {0} '.format(self.cluster_name)
-        cmd += '--name {0}'.format(self.auto_scaler)
-
-        out, err, _ = sh_callout(cmd, shell=True)
-
-        print(out, err)
-
-        return True
-
 
     # --------------------------------------------------------------------------
     #
@@ -957,18 +911,16 @@ class EKS_Cluster(Cluster):
 
     def __init__(self, run_id, sandbox, vm, iam, rclf, clf, ec2, eks, prc, log):
 
-        self.id             = run_id
-        self.cluster_name   = generate_eks_id(prefix='hydraa-eks-cluster')
-        self.config         = None
+        self.id = run_id
+        self.cluster_name = generate_eks_id(prefix='hydraa-eks-cluster')
+        self.config = None
 
-        self.iam            = iam
-        self.clf            = clf
-        self.ec2            = ec2
-        self.eks            = eks
-        self.rclf           = rclf
-        self.prc            = prc
-
-        vm.Remotes          = []
+        self.iam = iam
+        self.clf = clf
+        self.ec2 = ec2
+        self.eks = eks
+        self.rclf = rclf
+        self.prc = prc
 
         super().__init__(run_id, vm, sandbox, log)
 
@@ -983,10 +935,8 @@ class EKS_Cluster(Cluster):
         kubernetes_v  = '1.22'
         NodeGroupName = generate_eks_id(prefix='hydraa-eks-nodegroup')
 
-        # FIXME: Find a way to workaround
-        #        the limited avilability
-        #        zones.
-        # https://github.com/weaveworks/eksctl/issues/817
+        # FIXME: Find a way to workaround the limited avilability
+        #        zones https://github.com/weaveworks/eksctl/issues/817
 
         if not self.EKSCTL or not self.IAM_AUTH or not KUBECTL:
             raise Exception('eksctl/iam-auth/kubectl is required to manage EKS cluster')
@@ -996,26 +946,26 @@ class EKS_Cluster(Cluster):
         self.profiler.prof('cofigure_start', uid=self.id)
         self.kube_config = self.configure()
 
-        self.size = self.get_vm_size(self.vms.InstanceID) - 1
+        first_vm = self.vms[0]
+        varied_vms = all(vm.InstanceID == first_vm.InstanceID for vm in self.vms)
+
+        # FIXME: remove self.size
+        self.size = self.get_vm_size(self.vms[0].InstanceID) - 1
 
         print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
 
-        cmd  = '{0} create cluster --name {1} '.format(self.EKSCTL, self.cluster_name)
-        cmd += '--region {0} --version {1} '.format(self.vms.Region, kubernetes_v)
+        # step-1 Create EKS cluster control plane
+        cmd  = f'{self.EKSCTL} create cluster --name {self.cluster_name} '
+        cmd += f'--region {self.vms.Region} --version {kubernetes_v} '
+        cmd += f'--without-nodegroup --kubeconfig {self.kube_config}'
 
-        if self.vms.Zones and len(self.vms.Zones) == 2:
-            cmd += '--zones {0}{1},{0}{2} '.format(self.vms.Region, self.vms.Zones[0], self.vms.Zones[1])
-        cmd += '--nodegroup-name {0} '.format(NodeGroupName)
-        cmd += '--node-type {0} --nodes {1} '.format(self.vms.InstanceID, self.vms.MinCount)
-        cmd += '--kubeconfig {0}'.format(self.kube_config)
+        sh_callout(cmd, shell=True)
 
-        out, err, ret = sh_callout(cmd, shell=True)
-
-        if ret:
-            print('failed to build EKS cluster: {0}'.format(err))
-            self.logger.trace(err)
-
-        self.logger.trace(out)
+        # step-2 Check if we have a single type or multiple types of vms
+        if varied_vms and len(self.vms) > 2:
+            for vm in self.vms:
+                # step-3 Create EKS cluster node groups for each vm type
+                self.add_node_group(vm)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
@@ -1043,29 +993,17 @@ class EKS_Cluster(Cluster):
 
     # --------------------------------------------------------------------------
     #
-    def add_auto_scaler(self, node_type, range=[2,2], volume_size=0):
-        """
-        range[0] int   minimum nodes in ASG (default 2)
-        range[1] int   maximum nodes in ASG (default 2)
-        """
-        
-        name = 'hydraa-eks-nodegroup-autoscaler{0}'.format(str(uuid.uuid4()))
+    def add_node_group(self, vm):
 
-        cmd  = 'eksctl create nodegroup --name {0} '.format(name)
-        cmd += '--cluster {0} --node-type {1} '.format(self.cluster_name, 
-                                                              node_type)
+        name = 'hydraa-eks-nodegroup-{0}'.format(vm.InstanceID)
 
-        if range:
-            cmd += '--nodes-min {1} --nodes-max {2} '.format(range[0], range[1])
+        cmd  = f'eksctl create nodegroup --name {name} --nodes {vm.MinCount} '
+        cmd += f'--cluster {self.cluster_name} --node-type {vm.InstanceID} '
+        cmd += f'--nodes-min {vm.MinCount} --nodes-max {vm.MaxCount}'
  
-        if volume_size:
-            cmd += '--node-volume-size {1}'.format(volume_size)
-
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)
-
-        self.vms.AutoScaler = [name]
 
 
     # --------------------------------------------------------------------------
@@ -1103,29 +1041,6 @@ class EKS_Cluster(Cluster):
                     if not vcpus:
                         raise Exception('Could not find VM size')
                     return int(vcpus)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def add_nodes(self, group_name, range, nodes=0):
-        """
-        add nodes to an existing cluster
-        """
-        if self.vms.AutoScaler:
-            if len(self.vms.AutoScaler) > 1:
-                print('Please specify which NodeGroup to add nodes to: {0}'.format(self.vms.AutoScaler))
-                return
-
-            cmd  = 'eksctl scale nodegroup --name {0} '.format(group_name)
-            cmd += '--cluster {0} '.format(self.cluster_name)
-            if nodes:
-                cmd += '--nodes={0} '
-            
-            cmd += '--nodes-min={1} --nodes-max={2}'.format(nodes, range[0], range[1])
-
-            out, err, _ = sh_callout(cmd, shell=True)
-
-            print(out, err)
 
 
     # --------------------------------------------------------------------------

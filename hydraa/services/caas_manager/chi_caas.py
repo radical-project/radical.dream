@@ -40,29 +40,26 @@ class ChiCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
-                                          log, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
         
         self.manager_id = manager_id
-
-        self.vm     = None
         self.status = False
-        self.DryRun = DryRun
 
         self.client   = self._create_client(cred)
         self.lease    = None
         self.network  = None
         self.security = None
         self.servers  = None
-        self.ips      = [] 
         self.remote   = None
         self.cluster  = None
         self.keypair  = None
+        self.launch_type = VMS[0].LaunchType
 
         self._task_id = 0
     
-        self.vm     = VM
-        self.run_id = '{0}.{1}'.format(self.vm.LaunchType.lower(), str(uuid.uuid4()))
+        self.vms = VMS
+        self.run_id = '{0}.{1}'.format(self.launch_type.lower(),
+                                       str(uuid.uuid4()))
     
         self._tasks_book  = OrderedDict()
         self._pods_book   = OrderedDict()
@@ -97,20 +94,17 @@ class ChiCaas:
     #
     def start(self):
 
-        if not self.vm.LaunchType:
-            raise Exception('CHI requires to specify KVM or Baremetal')
-
         print("starting run {0}".format(self.run_id))
 
         self.keypair = self.create_or_find_keypair()
 
-        if self.vm.LaunchType == 'KVM':
+        if self.launch_type== 'KVM':
             chi.use_site('KVM@TACC')
             self.profiler.prof('server_create_start', uid=self.run_id)
             self.servers = self.create_servers()
             self.profiler.prof('server_create_stop', uid=self.run_id)
 
-        elif self.vm.LaunchType == 'Baremetal':
+        elif self.launch_type == 'Baremetal':
             chi.use_site('CHI@TACC')
 
             msg = ("would you like to use an existing lease?" \
@@ -118,12 +112,12 @@ class ChiCaas:
 
             user_in = input (msg)
 
-            if user_in ['no', 'No']: self.lease  = self._lease_resources()
+            if user_in ['no', 'No']: self.lease = self._lease_resources()
             else: 
                 self.lease = self._lease_resources(lease_id=str(user_in))
                 self.servers = self.create_servers(user_lease=self.lease)
 
-        self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
+        self.cluster = kubernetes.Cluster(self.run_id, self.vms, self.sandbox,
                                           self.logger)
 
         self.cluster.bootstrap()
@@ -260,12 +254,12 @@ class ChiCaas:
 
             if vm.LaunchType == 'KVM':
                 security = self.client.get_security_group('Allow SSH')
-                self.vm.Rules = [security_group_name, security.name]
+                vm.Rules = [security_group_name, security.name]
                 return security
             
             if vm.LaunchType == 'Baremetal':
                 security = self.client.get_security_group(security_group_name)
-                self.vm.Rules = [security.name]
+                vm.Rules = [security.name]
                 return security
 
 
@@ -312,7 +306,7 @@ class ChiCaas:
                 user_data = """#!/bin/bash
                 sudo apt remove unattended-upgrades -y
                 """
-            if self.vm.LaunchType == 'KVM':
+            if self.launch_type == 'KVM':
                 vm.UserData = user_data
                 self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
                                                                       vm.MinCount,
@@ -325,10 +319,10 @@ class ChiCaas:
                                                      max_count=vm.MaxCount,
                                                      userdata=user_data)
 
-            # Wait for a server to reach ACTIVE status.
-            self.client.wait_for_server(instance)
+                # Wait for a server to reach ACTIVE status.
+                self.client.wait_for_server(instance)
 
-            if self.vm.LaunchType == 'Baremetal':
+            if self.launch_type == 'Baremetal':
                 # Launch your compute node instances
                 if not user_lease or not security:
                     raise Exception('baremetal requires both active lease and security group')
@@ -340,7 +334,6 @@ class ChiCaas:
                                                 key_name=self.keypair.name,
                                                 min_count=vm.MinCount,
                                                 max_count=vm.MaxCount)
-
 
                 # It will take approximately 10 minutes for the bare metal
                 # node to be successfully provisioned.
@@ -412,9 +405,9 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_or_find_image(self):
+    def create_or_find_image(self, vm):
         
-        image = self.client.compute.find_image(self.vm.ImageId)
+        image = self.client.compute.find_image(vm.ImageId)
 
         if not image.id:
             raise NotImplementedError
@@ -482,20 +475,6 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def moniter_cpu_usage(self):
-        if self.remote:
-            cmd = "grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}'"
-            try:
-                while True:
-                    cpu_usage = self.remote.run(cmd, hide=True)
-                    print(cpu_usage)
-                    time.sleep(4)
-            except KeyboardInterrupt:
-                return
-
-
-    # --------------------------------------------------------------------------
-    #
     def submit(self, ctasks):
         """
         submit a single pod per batch of tasks
@@ -506,7 +485,7 @@ class ChiCaas:
             ctask.id          = self._task_id
             ctask.name        = 'ctask-{0}'.format(self._task_id)
             ctask.provider    = CHI
-            ctask.launch_type = self.vm.LaunchType
+            ctask.launch_type = self.launch_type
 
             self._tasks_book[str(ctask.id)] = ctask
             self._task_id +=1
@@ -640,37 +619,28 @@ class ChiCaas:
 
         self._terminate.set()
 
-        if self.vm.KeyPair:
+        if self.keypair:
             self.logger.trace('deleting ssh keys')
             if self.keypair.id:
                 self.logger.trace('deleting key-name from cloud storage')
                 self.client.delete_keypair(self.keypair.id)
 
-        try:
-            if self.servers:
-                for server in self.servers:
-                    self.client.delete_server(server.name)
-                    self.logger.trace('server {0} is deleted'.format(server.name))
+        for server in self.servers:
+            self.client.delete_server(server.name)
+            self.logger.trace('server {0} is deleted'.format(server.name))
 
-                if self.ips:
-                    for ip in self.ips:
-                        self.logger.trace('deleting allocated ip')
-                        self.client.delete_floating_ip(ip)
+            self.logger.trace('deleting allocated ip')
+            self.client.delete_floating_ip(server.access_ipv4)
 
-                if self.lease:
-                    msg = "would you like to delete the lease? yes/no:"
-                    user_in = input(msg)
-                    if user_in == 'Yes' or user_in == 'yes':
-                        lease.delete(self.lease['id'])
-                    else:
-                        pass
+        if self.lease:
+            msg = "would you like to delete the lease? yes/no:"
+            user_in = input(msg)
+            if user_in == 'Yes' or user_in == 'yes':
+                lease.delete(self.lease['id'])
+            else:
+                pass
 
-                if self.cluster:
-                    self.cluster.shutdown()
+        if self.cluster:
+            self.cluster.shutdown()
 
-            self.__cleanup()
-
-        except Exception as e:
-            raise Exception(e)
-
-            
+        self.__cleanup()

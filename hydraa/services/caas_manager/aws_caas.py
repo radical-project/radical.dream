@@ -48,17 +48,11 @@ class AwsCaas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
-                                          log, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VM, asynchronous, log, prof):
 
         self.manager_id = manager_id
 
         self.status = False
-        
-        # TODO: enable DryRun by the user to
-        #       verify permissions before starting
-        #       the actual run.
-        self.DryRun = DryRun
         
         # FIXME: try to ognize these clients into a uniform dict
         #        self.clients['EKS'], self.clients['EC2'], etc.

@@ -50,19 +50,11 @@ CGPRG = 60  # Number of container groups per resource group
 
 
 class AzureCaas():
-    def __init__(self, sandbox, manager_id, cred, VM, asynchronous,
-                                          log, prof, DryRun=False):
+    def __init__(self, sandbox, manager_id, cred, VM, asynchronous, log, prof):
         
 
         self.manager_id = manager_id
-
         self.status = False
-
-        # TODO: enable DryRun by the user to
-        #       verify permissions before starting
-        #       the actual run.
-        self.DryRun = DryRun
-        
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
