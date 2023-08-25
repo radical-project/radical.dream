@@ -175,23 +175,23 @@ class AwsCaas():
 
         if self.vm.LaunchType in FARGATE:
             self.logger.trace('Fargate VM type')
-            self.ECS_cluster = self.create_cluster()
-            self._wait_clusters(self.ECS_cluster)
+            self.ecs = self.create_cluster()
+            self._wait_clusters(self.ecs)
 
         if self.vm.LaunchType in EC2:
             self.logger.trace('EC2 VM type')
-            self.ECS_cluster = self.create_cluster()
-            self._wait_clusters(self.ECS_cluster)
+            self.ecs = self.create_cluster()
+            self._wait_clusters(self.ecs)
             self.create_ec2_instance(self.vm)
 
         
         # check if this is an EKS service
         if self.vm.LaunchType in EKS:
-            self.EKS_cluster = kubernetes.EKS_Cluster(run_id=self.run_id, sandbox=self.sandbox,
+            self.cluster = kubernetes.EKSCluster(run_id=self.run_id, sandbox=self.sandbox,
                                      vm=self.vm, iam=self._iam_client, rclf=self._clf_resource,
                             clf=self._clf_client, ec2=self._ec2_resource, eks=self._eks_client,
                                                          prc=self._prc_client, log=self.logger)
-            self.EKS_cluster.bootstrap()
+            self.cluster.bootstrap()
 
         self.runs_tree[self.run_id] =  self._family_ids
 
@@ -232,7 +232,7 @@ class AwsCaas():
                     self.submit_to_eks(bulk)
 
                 else:
-                    self.submit(bulk, self.ECS_cluster)
+                    self.submit(bulk, self.ecs)
 
                 if not self.asynchronous:
                     if not self.wait_thread.is_alive():
@@ -677,7 +677,7 @@ class AwsCaas():
             self._task_id +=1
 
         # submit to kubernets cluster
-        depolyment_file, pods_names, batches = self.EKS_cluster.submit(ctasks)
+        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
 
         # create entry for the pod in the pods book
         '''
@@ -962,7 +962,7 @@ class AwsCaas():
             statuses = None
 
             if self.vm.LaunchType in EKS:
-                statuses = self.EKS_cluster._get_task_statuses()
+                statuses = self.cluster._get_task_statuses()
             
             else:
                 # some other threads updates the task book so keep this
@@ -1227,7 +1227,7 @@ class AwsCaas():
             self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
         
         if self.vm.LaunchType in EKS:
-            self.EKS_cluster.shutdown()
+            self.cluster.shutdown()
 
         self.cluster_name = None
         self.status = False

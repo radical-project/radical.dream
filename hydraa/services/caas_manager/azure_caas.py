@@ -58,9 +58,9 @@ class AzureCaas():
         self.res_client  = self._create_resource_client(cred)
         self._con_client = self._create_container_client(cred)
 
-        self.AKS_Cluster            = None
-        self._resource_group        = None
-        self._resource_group_name   = None
+        self.cluster = None
+        self._resource_group = None
+        self._resource_group_name = None
         self._container_group_names = OrderedDict()
 
         # tasks_book is a datastructure that keeps most of the 
@@ -112,7 +112,7 @@ class AzureCaas():
     # --------------------------------------------------------------------------
     #
     def start(self):
-        
+
         if self.status:
             print('Manager already started')
             return self.run_id
@@ -122,22 +122,19 @@ class AzureCaas():
         self.profiler.prof('prep_start', uid=self.run_id)
 
         self._resource_group = self.create_resource_group()
-        
-        self.runs_tree[self.run_id] =  self._container_group_names
 
         self.profiler.prof('prep_stop', uid=self.run_id)
 
-        if self.vm.LaunchType  in AKS:
+        if self.vm.LaunchType in AKS:
             self.vm.ResourceGroup = self._resource_group
-            self.AKS_Cluster = kubernetes.AKS_Cluster(self.run_id, self.vm, self.sandbox, 
-                                                                             self.logger)
-            self.AKS_Cluster.bootstrap()
-
-        else:  
-            pass
+            self.cluster = kubernetes.AKSCluster(self.run_id, self.vm, self.sandbox, 
+                                                                    self.logger)
+            self.cluster.bootstrap()
 
         # call get work to pull tasks
         self._get_work()
+
+        self.runs_tree[self.run_id] = self._container_group_names
 
 
     # --------------------------------------------------------------------------
@@ -304,7 +301,7 @@ class AzureCaas():
             self._task_id +=1
 
         # submit to kubernets cluster
-        depolyment_file, pods_names, batches = self.AKS_Cluster.submit(ctasks)
+        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
         
         # create entry for the pod in the pods book
         '''
@@ -445,7 +442,7 @@ class AzureCaas():
         while not self._terminate.is_set():
 
             if self.vm.LaunchType in AKS:
-                statuses = self.AKS_Cluster._get_task_statuses()
+                statuses = self.cluster._get_task_statuses()
             else:
                 statuses = self._get_task_statuses(self._container_group_names)
 
@@ -535,11 +532,11 @@ class AzureCaas():
         
         
         if self.vm.LaunchType  in AKS:
-            pod_stamps  = self.AKS_Cluster.get_pod_status()
-            task_stamps = self.AKS_Cluster.get_pod_events()
+            pod_stamps  = self.cluster.get_pod_status()
+            task_stamps = self.cluster.get_pod_events()
             fname       = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,
                                                  len(self._tasks_book),
-                                                 self.AKS_Cluster.size)
+                                                 self.cluster.size)
             df = (pd.merge(pod_stamps, task_stamps, on='Task_ID'))
         else:
         

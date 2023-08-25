@@ -43,7 +43,7 @@ class Jet2Caas():
         self.network = None
         self.cluster = None
         self.keypair = None
-        self.client = self._create_client(cred)
+        self.client = self.create_op_client(cred)
         self.launch_type = VMS[0].LaunchType.lower()
 
         self._task_id = 0    
@@ -96,8 +96,8 @@ class Jet2Caas():
         self.servers = self.create_servers()
         self.profiler.prof('servers_create_stop', uid=self.run_id)
 
-        self.cluster = kubernetes.Cluster(self.run_id, self.vms, self.sandbox,
-                                          self.logger)
+        self.cluster = kubernetes.K8sCluster(self.run_id, self.vms, self.sandbox,
+                                             self.logger)
 
         self.cluster.bootstrap()
 
@@ -151,7 +151,7 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def _create_client(self, cred):
+    def create_op_client(self, cred):
         jet2_client = openstack.connect(**cred)
         
         return jet2_client
@@ -163,7 +163,7 @@ class Jet2Caas():
         self.cluster.get_pod_status(pod_id)
 
 
-    # --------------------------------------------------------------------------
+   # --------------------------------------------------------------------------
     #
     def assign_servers_vms(self):
         """
@@ -177,16 +177,13 @@ class Jet2Caas():
                 break
 
         for vm in self.vms:
+            vm.Servers = []
             for server in servers:
-                vm.Remotes = {}
-                vm.Servers = []
                 if server.flavor.id == vm.FlavorId:
                     vm.Servers.append(server)
                     public_ip = server.access_ipv4
-                    #FIXME: VM should have a username instead of hard coded ubuntu
-                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, JET2_USER, public_ip,
-                                                         self.logger)
-
+                    server.remote = ssh.Remote(vm.KeyPair, JET2_USER, public_ip,
+                                               self.logger)
 
     # --------------------------------------------------------------------------
     #
@@ -231,29 +228,29 @@ class Jet2Caas():
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
-            ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
-
-            os.mkdir(ssh_dir_path, 0o700)
-
-            # download both private and public keys
-            keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
-            keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
-
-            # save pub/pri keys in .ssh
-            with open(keypair_pri, 'w') as f:
-                f.write("%s" % keypair.private_key)
-
-            with open(keypair_pub, 'w') as f:
-                f.write("%s" % keypair.public_key)
-
-            # modify the permission
-            os.chmod(keypair_pri, 0o600)
-            os.chmod(keypair_pub, 0o644)
-
-            keys = [keypair_pri, keypair_pub]
-
         if not keypair:
             raise Exception('keypair creation failed')
+
+        ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
+
+        os.mkdir(ssh_dir_path, 0o700)
+
+        # download both private and public keys
+        keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
+        keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
+
+        # save pub/pri keys in .ssh
+        with open(keypair_pri, 'w') as f:
+            f.write("%s" % keypair.private_key)
+
+        with open(keypair_pub, 'w') as f:
+            f.write("%s" % keypair.public_key)
+
+        # modify the permission
+        os.chmod(keypair_pri, 0o600)
+        os.chmod(keypair_pub, 0o644)
+
+        keys = [keypair_pri, keypair_pub]
 
         for vm in self.vms:
             vm.KeyPair = keys
@@ -363,9 +360,9 @@ class Jet2Caas():
             user_data = ''
             # bug: https://github.com/ansible/ansible/issues/51663
             if 'ubuntu' or 'Ubuntu' in self.image['name']:
-                user_data = """#!/bin/bash
+                user_data = '''#!/bin/bash
                 sudo apt remove unattended-upgrades -y
-                """
+                '''
             vm.UserData = user_data
             self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
                                                                   vm.MinCount,
@@ -544,9 +541,8 @@ class Jet2Caas():
         for server in self.servers:
             self.client.delete_server(server.name)
             self.logger.trace('server {0} is deleted'.format(server.name))
-
-            self.logger.trace('deleting allocated ip')
             self.client.delete_floating_ip(server.access_ipv4)
+            self.logger.trace('floating ip [{0}] is deleted'.format(server.access_ipv4))
 
         if self.cluster:
             self.cluster.shutdown()

@@ -4,20 +4,19 @@ import sys
 import time
 import uuid
 import queue
-import errno
 import atexit
 import threading
 import openstack
 import chi.lease
 import chi.server
-import keystoneauth1, blazarclient
+import keystoneauth1
+import blazarclient
 
 from chi import lease
 from chi import server
 
 from collections import OrderedDict
 from hydraa.services.caas_manager.utils import ssh
-from hydraa.services.caas_manager.utils import misc
 from hydraa.services.caas_manager.utils import kubernetes
 
 
@@ -45,7 +44,7 @@ class ChiCaas:
         self.manager_id = manager_id
         self.status = False
 
-        self.client   = self._create_client(cred)
+        self.client   = self.create_op_client(cred)
         self.lease    = None
         self.network  = None
         self.security = None
@@ -106,19 +105,19 @@ class ChiCaas:
 
         elif self.launch_type == 'Baremetal':
             chi.use_site('CHI@TACC')
-
             msg = ("would you like to use an existing lease?" \
                    "if so, please provide it:")
 
             user_in = input (msg)
 
-            if user_in ['no', 'No']: self.lease = self._lease_resources()
+            if user_in ['no', 'No']:
+                self.lease = self._lease_resources()
             else: 
                 self.lease = self._lease_resources(lease_id=str(user_in))
                 self.servers = self.create_servers(user_lease=self.lease)
 
-        self.cluster = kubernetes.Cluster(self.run_id, self.vms, self.sandbox,
-                                          self.logger)
+        self.cluster = kubernetes.K8sCluster(self.run_id, self.vms,
+                                             self.sandbox, self.logger)
 
         self.cluster.bootstrap()
 
@@ -139,7 +138,8 @@ class ChiCaas:
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
-        self.wait_thread = threading.Thread(target=self._wait_tasks, name='ChiCaaSWatcher')
+        self.wait_thread = threading.Thread(target=self._wait_tasks,
+                                            name='ChiCaaSWatcher')
         self.wait_thread.daemon = True
 
 
@@ -149,7 +149,8 @@ class ChiCaas:
             # NOTE: total collect time could actually be max_time + min_time
             while time.time() - now < max_bulk_time:
                 try:
-                    task = self.incoming_q.get(block=True, timeout=min_bulk_time)
+                    task = self.incoming_q.get(block=True,
+                                               timeout=min_bulk_time)
                 except queue.Empty:
                         task = None
                 
@@ -171,7 +172,7 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _create_client(self, cred):
+    def create_op_client(self, cred):
         """
         1-user must create an application credentials for each site here:
         https://auth.chameleoncloud.org/auth/realms/chameleon/account
@@ -231,7 +232,7 @@ class ChiCaas:
             lease.wait_for_active(res_lease['id'])
             self.logger.trace('resource {0} is active'.format(res_lease['id']))
 
-        except keystoneauth1.exceptions.http.Unauthorized as e:
+        except keystoneauth1.exceptions.http.Unauthorized:
             raise Exception("Unauthorized.\nDid set your project name and site?")
 
         except blazarclient.exception.BlazarClientException as e:
@@ -247,7 +248,7 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _create_security_with_rule(self, vm):
+    def create_security_with_rule(self, vm):
 
             # we are using the default security group for now
             security_group_name = 'default'
@@ -277,16 +278,13 @@ class ChiCaas:
                 break
 
         for vm in self.vms:
+            vm.Servers = []
             for server in servers:
-                vm.Remotes = {}
-                vm.Servers = []
                 if server.flavor.id == vm.FlavorId:
                     vm.Servers.append(server)
                     public_ip = server.access_ipv4
-                    #FIXME: VM should have a username instead of hard coded ubuntu
-                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, CHI_USER, public_ip,
-                                                         self.logger)
-
+                    server.remote = ssh.Remote(vm.KeyPair, CHI_USER, public_ip,
+                                               self.logger)
 
     # --------------------------------------------------------------------------
     #
@@ -298,16 +296,9 @@ class ChiCaas:
         for vm in self.vms:
             image = self.create_or_find_image(vm)
             flavor = self.client.compute.find_flavor(vm.FlavorId)
-            security = self.create_security_with_rule()
+            security = self.create_security_with_rule(vm)
 
-            user_data = ''
-            # bug: https://github.com/ansible/ansible/issues/51663
-            if 'ubuntu' or 'Ubuntu' in self.image['name']:
-                user_data = """#!/bin/bash
-                sudo apt remove unattended-upgrades -y
-                """
             if self.launch_type == 'KVM':
-                vm.UserData = user_data
                 self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
                                                                       vm.MinCount,
                                                                       vm.FlavorId))
@@ -316,8 +307,7 @@ class ChiCaas:
                                                      flavor=flavor.id,
                                                      key_name=self.keypair.name,
                                                      min_count=vm.MinCount,
-                                                     max_count=vm.MaxCount,
-                                                     userdata=user_data)
+                                                     max_count=vm.MaxCount)
 
                 # Wait for a server to reach ACTIVE status.
                 self.client.wait_for_server(instance)
@@ -348,7 +338,7 @@ class ChiCaas:
         self.assign_servers_vms()
 
         self.logger.trace('all servers(s) are active x [{0}]'.format(number_of_servers))
-        
+
         return self.list_servers()
 
 
@@ -371,29 +361,29 @@ class ChiCaas:
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
-            ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
-
-            os.mkdir(ssh_dir_path, 0o700)
-
-            # download both private and public keys
-            keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
-            keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
-
-            # save pub/pri keys in .ssh
-            with open(keypair_pri, 'w') as f:
-                f.write("%s" % keypair.private_key)
-
-            with open(keypair_pub, 'w') as f:
-                f.write("%s" % keypair.public_key)
-
-            # modify the permission
-            os.chmod(keypair_pri, 0o600)
-            os.chmod(keypair_pub, 0o644)
-
-            keys = [keypair_pri, keypair_pub]
-
         if not keypair:
             raise Exception('keypair creation failed')
+
+        ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
+
+        os.mkdir(ssh_dir_path, 0o700)
+
+        # download both private and public keys
+        keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
+        keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
+
+        # save pub/pri keys in .ssh
+        with open(keypair_pri, 'w') as f:
+            f.write("%s" % keypair.private_key)
+
+        with open(keypair_pub, 'w') as f:
+            f.write("%s" % keypair.public_key)
+
+        # modify the permission
+        os.chmod(keypair_pri, 0o600)
+        os.chmod(keypair_pub, 0o644)
+
+        keys = [keypair_pri, keypair_pub]
 
         for vm in self.vms:
             vm.KeyPair = keys
@@ -444,7 +434,6 @@ class ChiCaas:
     # --------------------------------------------------------------------------
     #
     def assign_servers_ssh(self):
-
         # we always assume that the SSH group is prepaired by user for us
         ssh_sec_group = None
         for sec in self.client.list_security_groups():
@@ -607,7 +596,6 @@ class ChiCaas:
             self._pods_book.clear()
             self.logger.trace('done')
 
-
     # --------------------------------------------------------------------------
     #
     def _shutdown(self):
@@ -628,9 +616,8 @@ class ChiCaas:
         for server in self.servers:
             self.client.delete_server(server.name)
             self.logger.trace('server {0} is deleted'.format(server.name))
-
-            self.logger.trace('deleting allocated ip')
             self.client.delete_floating_ip(server.access_ipv4)
+            self.logger.trace('floating ip [{0}] is deleted'.format(server.access_ipv4))
 
         if self.lease:
             msg = "would you like to delete the lease? yes/no:"

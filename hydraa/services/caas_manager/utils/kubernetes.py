@@ -48,7 +48,7 @@ TASK_PREFIX = ['hydraa-', 'hydraa-launcher']
 
 # --------------------------------------------------------------------------
 #
-class Cluster:
+class K8sCluster:
     """
     This is a multithreaded Kuberentes base class that 
     is build on the top of k8s or microK8s Kuberentes flavor 
@@ -80,7 +80,7 @@ class Cluster:
 
     def __init__(self, run_id, vms, sandbox, log):
         """
-        The constructor for Cluster class.
+        The constructor for K8sCluster class.
 
         Parameters:
             run_id       (str)      : Unique id deliverd by the controller manager.
@@ -121,12 +121,14 @@ class Cluster:
     # --------------------------------------------------------------------------
     #
     def add_nodes_properity(self):
+        ndx = 0
         for vm in self.vms:
-            for ndx, node_conn in enumerate(vm.Remotes.values()):
+            for server in vm.Servers:
                 if ndx == 0:
-                    self.controll_plane = node_conn
+                    self.control_plane = server.remote
                 else:
-                    setattr(self, f'node{ndx}', node_conn)
+                    setattr(self, f'node{ndx}', server.remote)
+                ndx +=1
 
     # --------------------------------------------------------------------------
     #
@@ -141,7 +143,7 @@ class Cluster:
             bool: True if passed.
         """
         cmd = 'kubectl delete pod --field-selector=status.phase==Succeeded'
-        self.controll_plane.run(cmd)
+        self.control_plane.run(cmd)
         return True
 
 
@@ -165,6 +167,8 @@ class Cluster:
 
         self.status = BUSY
 
+        self.add_nodes_properity()
+
         head_node = self.vms[0]
 
         if not KUBECTL:
@@ -176,33 +180,31 @@ class Cluster:
         loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
 
         boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
-        self.controll_plane.put(boostrapper)
+        self.control_plane.put(boostrapper)
 
         # bug in fabric: https://github.com/fabric/fabric/issues/323
-        remote_ssh_path = '/home/{0}/.ssh'.format(self.controll_plane.user)
+        remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
         remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
         remote_key_path = remote_ssh_path + '/' + remote_ssh_name
 
         for key in head_node.KeyPair:
-            self.controll_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
+            self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
 
         # start the bootstraping as a background process.
         bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
         bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
         bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                 self.controll_plane.user,
+                                                                 self.control_plane.user,
                                                                  remote_key_path)
         bootstrap_cmd += '/dev/null < /dev/null &'
-        self.controll_plane.run(bootstrap_cmd, hide=True, warn=True)
+        self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
         
         self.wait_for_cluster(timeout)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
         self.kube_config = self.configure()
-        self._tunnel = self.controll_plane.setup_ssh_tunnel(self.kube_config)
-        
-        self.add_nodes_properity()
+        self._tunnel = self.control_plane.setup_ssh_tunnel(self.kube_config)
 
         self.status = READY
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -219,7 +221,7 @@ class Cluster:
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
 
-        self.controll_plane.get('.kube/config', local=config_file, preserve_mode=True)
+        self.control_plane.get('.kube/config', local=config_file, preserve_mode=True)
 
         return config_file
 
@@ -230,7 +232,7 @@ class Cluster:
         start_time = time.time()
 
         while True:
-            check_cluster = self.controll_plane.run('kubectl get nodes', warn=True, hide=True)
+            check_cluster = self.control_plane.run('kubectl get nodes', warn=True, hide=True)
             if not check_cluster.return_code:
                 self.logger.trace('{0} installation succeeded, logs are under'.format(self.name))
                 break
@@ -722,15 +724,15 @@ class Cluster:
     def shutdown(self):
         # nothing to shutdown here besides closing
         # the ssh channels and tunnels
-        if self.controll_plane:
-            self.controll_plane.close()
+        if self.control_plane:
+            self.control_plane.close()
             if hasattr(self, '_tunnel'):
                 self._tunnel.stop()
 
 
 # --------------------------------------------------------------------------
 #
-class AKS_Cluster(Cluster):
+class AKSCluster(K8sCluster):
     """Represents a single/multi node Kubrenetes cluster.
        This class asssumes that:
 
@@ -896,7 +898,7 @@ class AKS_Cluster(Cluster):
 
 # --------------------------------------------------------------------------
 #
-class EKS_Cluster(Cluster):
+class EKSCluster(K8sCluster):
     """Represents a single/multi node Elastic Kubrenetes Service cluster.
        This class asssumes that you did the one time
        preparational steps:
