@@ -44,6 +44,7 @@ class Jet2Caas():
         self.servers = None
         self.network = None
         self.cluster = None
+        self.keypair = None
         self.client = self._create_client(cred)
         self.launch_type = VMS[0].LaunchType.lower()
 
@@ -93,14 +94,8 @@ class Jet2Caas():
 
         # we use a single kypair for all servers
         self.keypair = self.create_or_find_keypair()
-
         self.profiler.prof('servers_create_start', uid=self.run_id)
-        self.create_servers()
-        self.servers = self.list_servers()
-        self.assign_servers_ips()
-        self.assign_ssh_security_groups()
-        self.setup_vms_remote_access()
-
+        self.servers = self.create_servers()
         self.profiler.prof('servers_create_stop', uid=self.run_id)
 
         self.cluster = kubernetes.Cluster(self.run_id, self.vms, self.sandbox,
@@ -125,7 +120,8 @@ class Jet2Caas():
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
 
-        self.wait_thread = threading.Thread(target=self._wait_tasks, name='Jet2CaaSWatcher')
+        self.wait_thread = threading.Thread(target=self._wait_tasks,
+                                            name='Jet2CaaSWatcher')
         self.wait_thread.daemon = True
 
 
@@ -171,12 +167,19 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def setup_vms_remote_access(self):
+    def assign_servers_vms(self):
+        """
+        exapnd on each vm.Min and vm.Max to get the actual
+        number of servers and assign the servers to each VM.
+        """
         while True:
             if all(s.access_ipv4 for s in self.list_servers()):
+                # all vms has ips assigned to them
+                servers = self.list_servers()
                 break
-        for server in self.servers:
-            for vm in self.vms:
+
+        for vm in self.vms:
+            for server in servers:
                 vm.Remotes = {}
                 vm.Servers = []
                 if server.flavor.id == vm.FlavorId:
@@ -185,6 +188,7 @@ class Jet2Caas():
                     #FIXME: VM should have a username instead of hard coded ubuntu
                     vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, 'ubuntu', public_ip,
                                                          self.logger)
+
 
     # --------------------------------------------------------------------------
     #
@@ -306,7 +310,7 @@ class Jet2Caas():
     # --------------------------------------------------------------------------
     #
     def assign_servers_ips(self):
-        for server in self.servers:
+        for server in self.list_servers():
             # if the server has an ip assigned then skip it
             if not server.access_ipv4:
                 self.client.add_auto_ip(server)
@@ -317,7 +321,7 @@ class Jet2Caas():
 
     # --------------------------------------------------------------------------
     #
-    def assign_ssh_security_groups(self):
+    def assign_servers_ssh(self):
 
         # we always assume that the SSH group is prepaired by user for us
         ssh_sec_group = None
@@ -326,7 +330,7 @@ class Jet2Caas():
                 ssh_sec_group = sec
 
         if ssh_sec_group:
-            for server in self.servers:
+            for server in self.list_servers():
                 ssh_is_associated = any([('SSH' or 'ssh') in d['name'] for d in server.security_groups])
 
                 # if ssh group already assigned then skip
@@ -361,9 +365,9 @@ class Jet2Caas():
             user_data = ''
             # bug: https://github.com/ansible/ansible/issues/51663
             if 'ubuntu' or 'Ubuntu' in self.image['name']:
-                user_data = '''#!/bin/bash
+                user_data = """#!/bin/bash
                 sudo apt remove unattended-upgrades -y
-                '''
+                """
             vm.UserData = user_data
             self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
                                                                   vm.MinCount,
@@ -382,7 +386,13 @@ class Jet2Caas():
             if not security.name == 'default':
                 self.client.add_server_security_groups(server, [security.name])
 
+        self.assign_servers_ips()
+        self.assign_servers_ssh()
+        self.assign_servers_vms()
+
         self.logger.trace('all servers(s) are active x [{0}]'.format(number_of_servers))
+
+        return self.list_servers()
 
 
     # --------------------------------------------------------------------------
@@ -508,7 +518,8 @@ class Jet2Caas():
         if caller == '_shutdown':
             self.manager_id = None
             self.status = False
-            self.client   = None
+            self.servers = None
+            self.client = None
 
             self._pods_book.clear()
             self.logger.trace('done')
@@ -539,16 +550,15 @@ class Jet2Caas():
 
         # deleting the server
         if self.servers:
-            for vm in self.vms:
-                for server in vm.Servers:
-                    self.client.delete_server(server.name)
-                    self.logger.trace('server {0} is deleted'.format(server.name))
+            for server in self.servers:
+                self.client.delete_server(server.name)
+                self.logger.trace('server {0} is deleted'.format(server.name))
 
-                    self.logger.trace('deleting allocated ip')
-                    self.client.delete_floating_ip(server.access_ipv4)
+                self.logger.trace('deleting allocated ip')
+                self.client.delete_floating_ip(server.access_ipv4)
 
-        if self.cluster:
-            self.cluster.shutdown()
+            if self.cluster:
+                self.cluster.shutdown()
 
         self.__cleanup()
 

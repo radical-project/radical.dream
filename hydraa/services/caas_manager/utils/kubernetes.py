@@ -121,7 +121,7 @@ class Cluster:
 
     # --------------------------------------------------------------------------
     #
-    def assign_nodes_remote_access(self):
+    def set_nodes(self):
         for vm in self.vms:
             for ndx, node_conn in enumerate(vm.Remotes.values()):
                 if ndx == 0:
@@ -170,8 +170,6 @@ class Cluster:
 
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
-
-        self.assign_nodes_remote_access()
     
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
@@ -243,6 +241,8 @@ class Cluster:
         self.kube_config = self.configure()
 
         self._tunnel = self.remote.setup_ssh_tunnel(self.kube_config)
+
+        self.set_nodes()
 
         self.status = READY
 

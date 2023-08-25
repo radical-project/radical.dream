@@ -52,7 +52,7 @@ class ChiCaas:
         self.lease    = None
         self.network  = None
         self.security = None
-        self.server   = None
+        self.servers  = None
         self.ips      = [] 
         self.remote   = None
         self.cluster  = None
@@ -99,54 +99,28 @@ class ChiCaas:
         if not self.vm.LaunchType:
             raise Exception('CHI requires to specify KVM or Baremetal')
 
-        self.status      = ACTIVE
         print("starting run {0}".format(self.run_id))
 
-        self.profiler.prof('prep_start', uid=self.run_id)
+        self.keypair = self.create_or_find_keypair()
 
-        self.image    = self.create_or_find_image()
-        self.flavor   = self.client.compute.find_flavor(self.vm.FlavorId)
-        self.keypair  = self.create_or_find_keypair()
-        self.security = self._create_security_with_rule()
-
-        self.profiler.prof('prep_stop', uid=self.run_id)
-        
         if self.vm.LaunchType == 'KVM':
             chi.use_site('KVM@TACC')
             self.profiler.prof('server_create_start', uid=self.run_id)
-            self.server   = self._create_server(self.image, self.flavor, self.keypair,
-                                    self.security, self.vm.MinCount, self.vm.MaxCount)
+            self.servers = self.create_servers()
             self.profiler.prof('server_create_stop', uid=self.run_id)
 
         elif self.vm.LaunchType == 'Baremetal':
             chi.use_site('CHI@TACC')
 
-            msg = "would you like to use an existing lease? if so, please provide it:"
+            msg = ("would you like to use an existing lease?" \
+                   "if so, please provide it:")
 
             user_in = input (msg)
 
-            if user_in == 'no' or user_in == 'No':
-                self.lease  = self._lease_resources()
-            else:
-                self.lease  = self._lease_resources(lease_id=str(user_in))
-            self.server   = self._create_server(self.image, self.flavor, self.keypair,
-                        self.security, self.vm.MinCount, self.vm.MaxCount, self.lease)
-
-        self.profiler.prof('ip_create_start', uid=self.run_id)
-
-        self.assign_ips()
-
-        self.profiler.prof('ip_create_stop', uid=self.run_id)
-
-        self.assign_ssh_security_groups()
-
-        self.vm.Servers = self.list_servers()
-
-        self.vm.Remotes = {}
-        for server in self.vm.Servers:
-            public_ip = server.access_ipv4
-            self.vm.Remotes[server.name] = ssh.Remote(self.vm.KeyPair, 'cc', public_ip,
-                                                      self.logger)
+            if user_in ['no', 'No']: self.lease  = self._lease_resources()
+            else: 
+                self.lease = self._lease_resources(lease_id=str(user_in))
+                self.servers = self.create_servers(user_lease=self.lease)
 
         self.cluster = kubernetes.Cluster(self.run_id, self.vm, self.sandbox,
                                           self.logger)
@@ -234,7 +208,7 @@ class ChiCaas:
         
         if not duration:
             duration = 1
-        
+
         if not nodes:
             nodes = 1
 
@@ -247,13 +221,15 @@ class ChiCaas:
             lease.add_fip_reservation(reservations, count=1)
 
             # add nodes to the resveration count and type
-            lease.add_node_reservation(reservations, node_type=lease_node_type, count=nodes)
+            lease.add_node_reservation(reservations, node_type=lease_node_type,
+                                       count=nodes)
 
             # specify the duration of the lease default=1
             start_date, end_date = lease.lease_duration(hours=duration)
 
             # create the lease
-            res_lease = lease.create_lease(lease_name, reservations, start_date=start_date, end_date=end_date)
+            res_lease = lease.create_lease(lease_name, reservations,
+                                           start_date=start_date, end_date=end_date)
 
             self.logger.trace('waiting for the resources to become ACTIVE')
             # wait for lease to become active
@@ -276,17 +252,17 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _create_security_with_rule(self):
+    def _create_security_with_rule(self, vm):
 
             # we are using the default security group for now
             security_group_name = 'default'
 
-            if self.vm.LaunchType == 'KVM':
+            if vm.LaunchType == 'KVM':
                 security = self.client.get_security_group('Allow SSH')
                 self.vm.Rules = [security_group_name, security.name]
                 return security
             
-            if self.vm.LaunchType == 'Baremetal':
+            if vm.LaunchType == 'Baremetal':
                 security = self.client.get_security_group(security_group_name)
                 self.vm.Rules = [security.name]
                 return security
@@ -294,75 +270,121 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _create_server(self, image, flavor, keypair, security, min_count, max_count,
-                                                                   user_lease=None):
+    def assign_servers_vms(self):
+        """
+        exapnd on each vm.Min and vm.Max to get the actual
+        number of servers and assign the servers to each VM.
+        """
+        while True:
+            if all(s.access_ipv4 for s in self.list_servers()):
+                # all vms has ips assigned to them
+                servers = self.list_servers()
+                break
 
-        if self.vm.VmId:
-            # we assume that the instance has a keypair
-            self.logger.trace('using user provided instance')
-            instance = server.get_server(self.vm.VmId)
-            return instance
+        for vm in self.vms:
+            for server in servers:
+                vm.Remotes = {}
+                vm.Servers = []
+                if server.flavor.id == vm.FlavorId:
+                    vm.Servers.append(server)
+                    public_ip = server.access_ipv4
+                    #FIXME: VM should have a username instead of hard coded ubuntu
+                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, 'ubuntu', public_ip,
+                                                         self.logger)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_servers(self, user_lease=None):
 
         server_name = 'hydraa-chi-{0}'.format(self.run_id)
-        instance    = None
-        self.logger.trace('creating {0} x [{1}]'.format(server_name, min_count))
-        if self.vm.LaunchType == 'KVM':
-            instance = self.client.create_server(name=server_name, 
-                                                 image=image, 
-                                                 flavor=flavor,
-                                                 key_name=keypair.name,
-                                                 min_count=min_count,
-                                                 max_count=max_count)
+        number_of_servers = sum([vm.MinCount for vm in self.vms])
+
+        for vm in self.vms:
+            image = self.create_or_find_image(vm)
+            flavor = self.client.compute.find_flavor(vm.FlavorId)
+            security = self.create_security_with_rule()
+
+            user_data = ''
+            # bug: https://github.com/ansible/ansible/issues/51663
+            if 'ubuntu' or 'Ubuntu' in self.image['name']:
+                user_data = """#!/bin/bash
+                sudo apt remove unattended-upgrades -y
+                """
+            if self.vm.LaunchType == 'KVM':
+                vm.UserData = user_data
+                self.logger.trace('creating {0} x [{1}] [{2}]'.format(server_name,
+                                                                      vm.MinCount,
+                                                                      vm.FlavorId))
+                instance = self.client.create_server(name=server_name,
+                                                     image=image.id,
+                                                     flavor=flavor.id,
+                                                     key_name=self.keypair.name,
+                                                     min_count=vm.MinCount,
+                                                     max_count=vm.MaxCount,
+                                                     userdata=user_data)
 
             # Wait for a server to reach ACTIVE status.
-            self.client.wait_for_server(instance, timeout=600)
+            self.client.wait_for_server(instance)
 
-        if self.vm.LaunchType == 'Baremetal':
-            # Launch your compute node instances
-            if not user_lease or not security:
-                raise Exception('baremetal requires both active lease and security group')
+            if self.vm.LaunchType == 'Baremetal':
+                # Launch your compute node instances
+                if not user_lease or not security:
+                    raise Exception('baremetal requires both active lease and security group')
 
-            lease_id    = lease.get_node_reservation(user_lease["id"])
-            instance    = server.create_server(server_name, 
-                                               reservation_id=lease_id,
-                                               image_name=image, count=1,
-                                               key_name=keypair.name,
-                                               min_count=min_count,
-                                               max_count=max_count)
+                lease_id = lease.get_node_reservation(user_lease["id"])
+                instance = server.create_server(server_name, 
+                                                reservation_id=lease_id,
+                                                image_name=image, count=1,
+                                                key_name=self.keypair.name,
+                                                min_count=vm.MinCount,
+                                                max_count=vm.MaxCount)
 
 
-            # It will take approximately 10 minutes for the bare metal
-            #  node to be successfully provisioned.
-            self.logger.trace('waiting for the instance to become ACTIVE')
-            server.wait_for_active(instance.id)
+                # It will take approximately 10 minutes for the bare metal
+                # node to be successfully provisioned.
+                self.logger.trace('waiting for the instance to become ACTIVE')
+                server.wait_for_active(instance.id)
 
-        if not security == 'default':
-            self.client.add_server_security_groups(instance, [security.name])
+            if not security == 'default':
+                self.client.add_server_security_groups(instance, [security.name])
 
-        self.logger.trace('all servers(s) are active x [{0}]'.format(min_count))
-        return instance
+        self.assign_servers_ips()
+        self.assign_servers_ssh()
+        self.assign_servers_vms()
+
+        self.logger.trace('all servers(s) are active x [{0}]'.format(number_of_servers))
+        
+        return self.list_servers()
 
 
     # --------------------------------------------------------------------------
     #
     def create_or_find_keypair(self):
+
+        keys = None
         keypair = None
-        if self.vm.KeyPair:
-            self.logger.trace('Checking user provided ssh keypair')
-            keypair = self.client.compute.find_keypair(self.vm.KeyPair)
-        
-        if not keypair: 
+        for vm in self.vms:
+            if vm.KeyPair:
+                if isinstance(vm.KeyPair, list):
+                    if len(vm.KeyPair) == 2:
+                        self.logger.trace('using a user provided ssh keypair')
+                        keys = vm.KeyPair
+                        keypair = self.client.compute.find_keypair(vm.KeyPair[0].split('/')[-1:])
+                        break
+
+        if not keypair:
             key_name = 'id_rsa_{0}'.format(self.run_id.replace('.', '-'))
             keypair  = self.client.create_keypair(name=key_name)
 
-            ssh_dir_path     = '{0}/.ssh'.format(self.sandbox)
+            ssh_dir_path = '{0}/.ssh'.format(self.sandbox)
 
             os.mkdir(ssh_dir_path, 0o700)
 
             # download both private and public keys
             keypair_pri = '{0}/{1}'.format(ssh_dir_path, key_name)
             keypair_pub = '{0}/{1}.pub'.format(ssh_dir_path, key_name)
-            
+
             # save pub/pri keys in .ssh
             with open(keypair_pri, 'w') as f:
                 f.write("%s" % keypair.private_key)
@@ -370,16 +392,19 @@ class ChiCaas:
             with open(keypair_pub, 'w') as f:
                 f.write("%s" % keypair.public_key)
 
-            self.vm.KeyPair = [keypair_pri, keypair_pub]
-
             # modify the permission
             os.chmod(keypair_pri, 0o600)
             os.chmod(keypair_pub, 0o644)
 
-            self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
+            keys = [keypair_pri, keypair_pub]
 
         if not keypair:
             raise Exception('keypair creation failed')
+
+        for vm in self.vms:
+            vm.KeyPair = keys
+
+        self.logger.trace("ssh keypair is created for all servers: [{0}]".format(key_name))
 
         return keypair
 
@@ -412,11 +437,8 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def assign_ips(self):
-
-        servers = self.list_servers()
-        
-        for server in servers:
+    def assign_servers_ips(self):
+        for server in self.list_servers():
             # if the server has an ip assigned then skip it
             if not server.access_ipv4:
                 self.client.add_auto_ip(server)
@@ -427,7 +449,7 @@ class ChiCaas:
 
     # --------------------------------------------------------------------------
     #
-    def assign_ssh_security_groups(self):
+    def assign_servers_ssh(self):
 
         # we always assume that the SSH group is prepaired by user for us
         ssh_sec_group = None
@@ -600,7 +622,7 @@ class ChiCaas:
             self.client   = None
             self.network  = None
             self.security = None
-            self.server   = None
+            self.servers  = None
 
             self._pods_book.clear()
             self.logger.trace('done')
@@ -610,7 +632,7 @@ class ChiCaas:
     #
     def _shutdown(self):
 
-        if not self.server:
+        if not self.servers:
             return
         
         self.logger.trace("termination started")
@@ -619,27 +641,20 @@ class ChiCaas:
 
         if self.vm.KeyPair:
             self.logger.trace('deleting ssh keys')
-            for k in self.vm.KeyPair:
-                try:
-                    os.remove(k)
-                except OSError as e:
-                    if e.errno != errno.ENOENT:
-                        raise e
-
             if self.keypair.id:
                 self.logger.trace('deleting key-name from cloud storage')
                 self.client.delete_keypair(self.keypair.id)
 
         try:
-            if self.server:
-                for server in self.list_servers():
+            if self.servers:
+                for server in self.servers:
                     self.client.delete_server(server.name)
                     self.logger.trace('server {0} is deleted'.format(server.name))
 
                 if self.ips:
                     for ip in self.ips:
                         self.logger.trace('deleting allocated ip')
-                        self.client.delete_floating_ip(self.ip)
+                        self.client.delete_floating_ip(ip)
 
                 if self.lease:
                     msg = "would you like to delete the lease? yes/no:"
@@ -648,8 +663,9 @@ class ChiCaas:
                         lease.delete(self.lease['id'])
                     else:
                         pass
-            
-            self.cluster.shutdown()
+
+                if self.cluster:
+                    self.cluster.shutdown()
 
             self.__cleanup()
 
