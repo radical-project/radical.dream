@@ -21,6 +21,7 @@ __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 JET2      = 'jetstream2'
 ACTIVE    = True
 WAIT_TIME = 2
+JET2_USER = 'ubuntu'
 
 # --------------------------------------------------------------------------
 #
@@ -186,7 +187,7 @@ class Jet2Caas():
                     vm.Servers.append(server)
                     public_ip = server.access_ipv4
                     #FIXME: VM should have a username instead of hard coded ubuntu
-                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, 'ubuntu', public_ip,
+                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, JET2_USER, public_ip,
                                                          self.logger)
 
 

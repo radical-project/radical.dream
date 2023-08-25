@@ -23,8 +23,9 @@ from hydraa.services.caas_manager.utils import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-CHI    = 'chameleon'
+CHI = 'chameleon'
 ACTIVE = True
+CHI_USER = 'cc'
 
 
 # --------------------------------------------------------------------------
@@ -289,7 +290,7 @@ class ChiCaas:
                     vm.Servers.append(server)
                     public_ip = server.access_ipv4
                     #FIXME: VM should have a username instead of hard coded ubuntu
-                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, 'ubuntu', public_ip,
+                    vm.Remotes[server.name] = ssh.Remote(vm.KeyPair, CHI_USER, public_ip,
                                                          self.logger)
 
 
