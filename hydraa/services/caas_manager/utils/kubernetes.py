@@ -872,6 +872,10 @@ class AKSCluster(K8sCluster):
         bool
             True if the node pool was successfully added, False otherwise.
         """
+        # if the user want to add new node pool to the cluster
+        # then update the global vm list.
+        if vm not in self.vms:
+            self.vms.append(vm)
 
         np_name = 'hydraa-aks-nodepool-{0}'.format(vm.InstanceID)
 
@@ -1129,6 +1133,10 @@ class EKSCluster(K8sCluster):
         bool
             True if the node group was successfully added, False otherwise.
         """
+        # if the user want to add new node group to the cluster
+        # then update the global vm list.
+        if vm not in self.vms:
+            self.vms.append(vm)
 
         ng_name = generate_eks_id(prefix='hydraa-eks-nodegroup')
 
