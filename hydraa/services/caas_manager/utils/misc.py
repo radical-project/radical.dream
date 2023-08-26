@@ -1,17 +1,19 @@
 import os
+import time
 import yaml
 import math
-import copy
-import json
 import shlex
 import string
 import random
 import logging
+import datetime
 import subprocess as sp
 
 from pathlib import Path
 from urllib import request
 from kubernetes import client
+
+from hydraa import AWS, AZURE
 
 
 TRUE=true=True
@@ -25,7 +27,13 @@ def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False
     call a shell command, return `[stdout, stderr, retval]`.
     '''
     if kube:
-        cmd = inject_kubeconfig(cmd, kube.kube_config, kube._tunnel.local_bind_port)
+        if AWS in kube.cluster.name or AZURE in kube.cluster.name:
+            cmd = inject_kubeconfig(cmd, kube.kube_config,
+                                    local_bind_port=None)
+        else:
+            cmd = inject_kubeconfig(cmd, kube.kube_config,
+                                    kube._tunnel.local_bind_port)
+
     # convert string into arg list if needed
     if hasattr(str, cmd) and \
        not shell: cmd    = shlex.split(cmd)
@@ -55,7 +63,7 @@ def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False
 
 # --------------------------------------------------------------------------
 #
-def create_sandbox(id):
+def create_sandbox(id, sub=False):
 
     main_sandbox = '{0}/hydraa.sandbox.{1}'.format(HOME, id)
     os.mkdir(main_sandbox, 0o777)
@@ -118,7 +126,7 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
 
 # --------------------------------------------------------------------------
 #
-def inject_kubeconfig(cmd, kube_config, local_bind_port):
+def inject_kubeconfig(cmd, kube_config, local_bind_port=None):
     """
     Injects a custom kubeconfig into a kubectl command and modifies
     the endpoint and TLS settings to connect to a locally running
@@ -138,16 +146,23 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port):
         None
     """
     cmd = cmd.split()
-    kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
-    kube_skip_tls = '--insecure-skip-tls-verify'
 
     for idx, c in enumerate(cmd):
         if c == 'kubectl':
             break
 
-    cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
-                                                        kube_endpoint,
-                                                        kube_config))
+    # insert port and endpoint settings for JET2 and CHI
+    if local_bind_port:
+        kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
+        kube_skip_tls = '--insecure-skip-tls-verify'
+        cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
+                                                            kube_endpoint,
+                                                            kube_config))
+    
+    # insert only kubeconfig for AWS and Azure
+    else:
+        cmd.insert(idx+1, '--kubeconfig {0}'.format(kube_config))
+
     cmd = ' '.join(cmd)
 
     return cmd
@@ -156,7 +171,8 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port):
 # --------------------------------------------------------------------------
 #
 def generate_eks_id(prefix="eks", length=8):
-    random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+    random_string = ''.join(random.choices(string.ascii_lowercase + \
+                                           string.digits, k=length))
     cluster_id = "{0}-{1}".format(prefix, random_string)
     return cluster_id
 
@@ -283,3 +299,12 @@ def download_files(urls, destination):
             raise(e)
 
     return destinations
+
+# --------------------------------------------------------------------------
+#
+def convert_time(self, timestamp):
+
+    t  = datetime.datetime.strptime(timestamp, TFORMAT)
+    ts = time.mktime(t.timetuple())
+
+    return ts

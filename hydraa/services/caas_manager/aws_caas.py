@@ -13,9 +13,7 @@ from datetime import datetime
 from collections import OrderedDict
 
 
-from hydraa.services.caas_manager.utils    import kubernetes
-from hydraa.services.cost_manager.aws_cost import AwsCost
-from hydraa.services.maas_manager.aws_maas import AwsMaas
+from hydraa.services.caas_manager.utils import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -38,7 +36,7 @@ CSPA = 10000 # Number of clusters per account.
 
 # --------------------------------------------------------------------------
 #
-class AwsCaas():
+class AwsCaas:
     """Represents a collection of clusters (resources) with a collection of
        services, tasks and instances.:
        :param cred: AWS credentials (access key, secert key, region)
@@ -48,59 +46,49 @@ class AwsCaas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VM, asynchronous, log, prof):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
 
-        self.manager_id = manager_id
-
+        self.vms = VMS
+        self._task_id = 0
+        self.logger = log
         self.status = False
-        
-        # FIXME: try to ognize these clients into a uniform dict
-        #        self.clients['EKS'], self.clients['EC2'], etc.
-        self._ecs_client    = self._create_ecs_client(cred)
-        self._ec2_client    = self._create_ec2_client(cred)
-        self._iam_client    = self._create_iam_client(cred)
-        self._prc_client    = self._create_prc_client(cred)
-        self._clw_client    = self._create_clw_client(cred)
-        self._clf_client    = self._create_clf_client(cred)
-        self._eks_client    = self._create_eks_client(cred)
-
-        self._clf_resource  = self._create_clf_resource(cred)
-        self._ec2_resource  = self._create_ec2_resource(cred)
-        self._dydb_resource = self._create_dydb_resource(cred)
-
-
+        self.cluster = None
         self.cluster_name = None
         self.service_name = None
+        self.manager_id = manager_id
+        self._tasks_book = OrderedDict()
+        self._family_ids = OrderedDict()
 
-        self.vm        = VM
-        self.vm.Region = cred['region_name']
+        self.launch_type = VMS[0].LaunchType.lower()
 
-        self.run_id   = '{0}.{1}'.format(self.vm.LaunchType, str(uuid.uuid4()))
-        self._task_id = 0
-
-        # tasks_book is a datastructure that keeps most of the 
-        # cloud tasks info during the current run.
-        self._tasks_book   = OrderedDict()
-        self._family_ids   = OrderedDict()
-
-        self._run_cost     = 0
+        for vm in self.vms:
+            vm.Region = cred['region_name']
 
         self.runs_tree = OrderedDict()
-
-        # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
 
-        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, AWS, self.run_id)
+        self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
+        self.sandbox = '{0}/{1}.{2}'.format(sandbox, AWS, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 
-        self.logger   = log
         self.profiler = prof(name=__name__, path=self.sandbox)
-         
 
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
-
         self._terminate = threading.Event()
+
+        # FIXME: try to ognize these clients into a uniform dict
+        #        self.clients['EKS'], self.clients['EC2'], etc.
+        self._ecs_client = self._create_ecs_client(cred)
+        self._ec2_client = self._create_ec2_client(cred)
+        self._iam_client = self._create_iam_client(cred)
+        self._prc_client = self._create_prc_client(cred)
+        self._clw_client = self._create_clw_client(cred)
+        self._clf_client = self._create_clf_client(cred)
+        self._eks_client = self._create_eks_client(cred)
+        self._clf_resource = self._create_clf_resource(cred)
+        self._ec2_resource = self._create_ec2_resource(cred)
+        self._dydb_resource = self._create_dydb_resource(cred)
 
         self.start_thread = threading.Thread(target=self.start, name='AwsCaaS')
         self.start_thread.daemon = True
@@ -113,55 +101,22 @@ class AwsCaas():
 
         atexit.register(self._shutdown)
 
+
     # --------------------------------------------------------------------------
     #
     @property
     def is_active(self):
         return self.status
 
-
-    # --------------------------------------------------------------------------
-    #
-    @property
-    def run_budget(self):
-        return BUDGET
-
-
-    # --------------------------------------------------------------------------
-    #
-    @property
-    def run_cost(self):
-        return self._run_cost
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _budget(self) -> AwsCost:      
-        return AwsCost(self._prc_client, self._dydb_resource, self.region)
-    
-
-    # --------------------------------------------------------------------------
-    #
-    def _moniter(self) -> AwsMaas:
-        return AwsMaas(self._clw_client)
-
         
     # --------------------------------------------------------------------------
     #
-    def start(self, service=False, budget=0, time=0):
+    def start(self, service=False):
         """
         Create a cluster, container, task defination with user requirements.
         and run them via **run_task
 
         :param: tasks:   List of Task class object 
-                         
-        
-        :param: budget: float
-                         expected charging amount by AWS to operate within.
-        
-        :param: time: int
-                         expected execution time on AWS in minutes
-
         """
         if self.status:
             print('Manager already started')
@@ -173,27 +128,30 @@ class AwsCaas():
         if service:
             self.create_ecs_service()
 
-        if self.vm.LaunchType in FARGATE:
+        if self.launch_type in FARGATE:
             self.logger.trace('Fargate VM type')
             self.ecs = self.create_cluster()
             self._wait_clusters(self.ecs)
 
-        if self.vm.LaunchType in EC2:
+        if self.launch_type in EC2:
             self.logger.trace('EC2 VM type')
             self.ecs = self.create_cluster()
             self._wait_clusters(self.ecs)
-            self.create_ec2_instance(self.vm)
+            for vm in self.vms:
+                self.create_ec2_instance(vm)
 
         
         # check if this is an EKS service
-        if self.vm.LaunchType in EKS:
-            self.cluster = kubernetes.EKSCluster(run_id=self.run_id, sandbox=self.sandbox,
-                                     vm=self.vm, iam=self._iam_client, rclf=self._clf_resource,
-                            clf=self._clf_client, ec2=self._ec2_resource, eks=self._eks_client,
-                                                         prc=self._prc_client, log=self.logger)
+        if self.launch_type in EKS:
+            self.cluster = kubernetes.EKSCluster(run_id=self.run_id,
+                                                 sandbox=self.sandbox,
+                                                 vms=self.vms, iam=self._iam_client,
+                                                 rclf=self._clf_resource, clf=self._clf_client,
+                                                 ec2=self._ec2_resource, eks=self._eks_client,
+                                                 prc=self._prc_client, log=self.logger)
             self.cluster.bootstrap()
 
-        self.runs_tree[self.run_id] =  self._family_ids
+        self.runs_tree[self.run_id] = self._family_ids
 
         # call get work to pull tasks
         self._get_work()
@@ -228,7 +186,7 @@ class AwsCaas():
                         break
 
             if bulk:
-                if self.vm.LaunchType in EKS:
+                if self.launch_type in EKS:
                     self.submit_to_eks(bulk)
 
                 else:
@@ -613,7 +571,8 @@ class AwsCaas():
 
         for service in running_services['serviceArns']:
             if self.service_name in service:
-                self.logger.trace('service {0} already exist on cluster {1}'.format(self.service_name, self.cluster_name))
+                self.logger.trace('service {0} already exist on cluster {1}'.format(self.service_name,
+                                                                                    self.cluster_name))
 
                 return service
 
@@ -671,7 +630,7 @@ class AwsCaas():
             ctask.id          = self._task_id
             ctask.name        = 'ctask-{0}'.format(self._task_id)
             ctask.provider    = AWS
-            ctask.launch_type = self.vm.LaunchType
+            ctask.launch_type = self.launch_type
 
             self._tasks_book[str(ctask.name)] = ctask
             self._task_id +=1
@@ -719,7 +678,7 @@ class AwsCaas():
                 ctask.id          = self._task_id
                 ctask.name        = 'ctask-{0}'.format(ctask.id)
                 ctask.provider    = AWS
-                ctask.launch_type = self.vm.LaunchType
+                ctask.launch_type = self.launch_type
                 
                 containers.append(self.create_container_def(ctask))
                 
@@ -731,7 +690,7 @@ class AwsCaas():
 
             try:
                 # FIXME: Pass the memory and cpu via a VM class
-                if self.vm.LaunchType in FARGATE:
+                if self.launch_type in FARGATE:
                     task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
                     kwargs['platformVersion']      = 'LATEST'
                     kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
@@ -740,7 +699,7 @@ class AwsCaas():
                                                     'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
                 # EC2 does not support Network config or platform version
-                if self.vm.LaunchType in EC2:
+                if self.launch_type in EC2:
                     family_id, task_def_arn = self.create_ec2_task_def(containers)
 
                 kwargs = {}
@@ -749,7 +708,7 @@ class AwsCaas():
                 # the number of pods if they are identical
                 kwargs['count']         = 1
                 kwargs['cluster']       = cluster_name
-                kwargs['launchType']    = self.vm.LaunchType
+                kwargs['launchType']    = self.launch_type
                 kwargs['overrides']     = {}
                 kwargs['taskDefinition'] = task_def_arn
 
@@ -826,7 +785,7 @@ class AwsCaas():
 
         df = pd.DataFrame(task_stamps.values(), index =[t for t in task_stamps.keys()])
 
-        fname = '{0}_{1}_ctasks_{2}.csv'.format(self.vm.LaunchType, len(self._tasks_book),
+        fname = '{0}_{1}_ctasks_{2}.csv'.format(self.launch_type, len(self._tasks_book),
                                                                           self.manager_id)
         df.to_csv(fname)
         print('Dataframe saved in {0}'.format(fname))
@@ -961,7 +920,7 @@ class AwsCaas():
 
             statuses = None
 
-            if self.vm.LaunchType in EKS:
+            if self.launch_type in EKS:
                 statuses = self.cluster._get_task_statuses()
             
             else:
@@ -1126,7 +1085,7 @@ class AwsCaas():
         if not batch_size:
             raise Exception('Batch size can not be 0')
 
-        if self.vm.LaunchType in FARGATE:
+        if self.launch_type in FARGATE:
             # NOTE: submitting more than 50 conccurent tasks might fail
             #       due to user ECS/Fargate quota
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
@@ -1187,7 +1146,7 @@ class AwsCaas():
         self._terminate.set()
 
         # Delete all the resource and the associated tasks resouces
-        if self.vm.LaunchType in EC2 or self.vm.LaunchType in FARGATE:
+        if self.launch_type in EC2 or self.launch_type in FARGATE:
             try:
                 if self.service_name:
                     # set desired service count to 0 (obligatory to delete)
@@ -1226,7 +1185,7 @@ class AwsCaas():
             self._ecs_client.delete_cluster(cluster=self.cluster_name)
             self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
         
-        if self.vm.LaunchType in EKS:
+        if self.launch_type in EKS:
             self.cluster.shutdown()
 
         self.cluster_name = None
