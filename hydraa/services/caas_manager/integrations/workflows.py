@@ -3,6 +3,7 @@ import copy
 import threading
 
 from ..utils.misc import build_pod
+from ..utils.misc import sh_callout
 from ..utils.misc import load_multiple_yamls, dump_multiple_yamls
 
 WORKFLOW_TYPE = ['steps', 'containerset']
@@ -122,13 +123,14 @@ class Workflow:
         cmd += "https://github.com/argoproj/argo-workflows/" \
                "releases/download/v3.4.9/install.yaml"
 
-        res = self.cluster.control_plane.run('kubectl get crd', hide=True)
-        if res.return_code:
+        out, err, ret = sh_callout('kubectl get crd', shell=True,
+                                   kube=self.cluster)
+        if ret:
             self.cluster.logger.error('checking for Argo CRD failed: {0}\
-                                      '.format(res.stderr))
+                                      '.format(err))
 
-        elif not "argo-server" in res.stdout:
-            res = self.cluster.control_plane.run(cmd, hide=True)
+        elif out and "argo-server" not in out:
+            out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
 
 
     # --------------------------------------------------------------------------

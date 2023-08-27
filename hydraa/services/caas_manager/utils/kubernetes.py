@@ -14,8 +14,8 @@ import radical.utils as ru
 from .misc import build_pod
 from .misc import unique_id
 from .misc import sh_callout
+from .misc import generate_id
 from .misc import convert_time
-from .misc import generate_eks_id
 from .misc import dump_multiple_yamls
 
 
@@ -26,7 +26,7 @@ CFAILED_STATE = ['Error', 'StartError','OOMKilled',
                 'CrashLoopBackOff', 'ImagePullBackOff',
                 'RunContainerError','ImageInspectError']
 
-CRUNNING_STATE = ['ContainerCreating', 'Started']
+CRUNNING_STATE = ['ContainerCreating', 'Started', 'Running']
 CCOMPLETED_STATE = ['Completed', 'completed']
 
 PFAILED_STATE = ['OutOfCPU','OutOfMemory',
@@ -98,7 +98,7 @@ class K8sCluster:
         self.id = run_id
         self.vms = vms
         self.nodes = sum([vm.MinCount for vm in self.vms])
-        self.name  = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
+        self.name = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
         self.pod_counter = 0
         self.sandbox = sandbox
         self.logger = log
@@ -229,7 +229,7 @@ class K8sCluster:
         while True:
             check_cluster = self.control_plane.run('kubectl get nodes', warn=True, hide=True)
             if not check_cluster.return_code:
-                self.logger.trace('{0} installation succeeded, logs are under'.format(self.name))
+                self.logger.trace('{0} installation succeeded'.format(self.name))
                 break
             else:
                 elapsed_time = time.time() - start_time
@@ -764,7 +764,7 @@ class AKSCluster(K8sCluster):
     def __init__(self, run_id, vms, sandbox, log):
         self.id = run_id
         self.config = None
-        self.cluster_name = 'hydraa-aks-cluster'
+        self.name = generate_id(prefix='hydraa-aks-cluster')
         self.resource_group = vms[0].ResourceGroup
 
         super().__init__(run_id, vms, sandbox, log)
@@ -800,7 +800,7 @@ class AKSCluster(K8sCluster):
 
         cmd  = 'az aks create '
         cmd += f'-g {self.resource_group.name} '
-        cmd += f'-n {self.cluster_name} '
+        cmd += f'-n {self.name} '
         cmd += '--enable-managed-identity '
         cmd += f'--node-vm-size {first_vm.InstanceID} '
         cmd += f'--node-count {first_vm.MinCount} '
@@ -844,9 +844,9 @@ class AKSCluster(K8sCluster):
         self.logger.trace('setting AKS kubeconfig path to: {0}'.format(config_file))
 
         cmd  = 'az aks get-credentials '
-        cmd += '--admin --name {0} '.format(self.cluster_name)
+        cmd += '--admin --name {0} '.format(self.name)
         cmd += '--resource-group {0} '.format(self.resource_group.name)
-        cmd += '--name {0} '.format(self.cluster_name)
+        cmd += '--name {0} '.format(self.name)
         cmd += '--file {0}'.format(config_file)
 
         out, err, _ = sh_callout(cmd, shell=True)
@@ -877,13 +877,13 @@ class AKSCluster(K8sCluster):
         if vm not in self.vms:
             self.vms.append(vm)
 
-        np_name = 'nodepool{0}'.format(unique_id())
+        np_name = 'nodepool{0}'.format(unique_id(starts_from=2))
         self.logger.trace('adding {0} with x [{1}] nodes to {2}' \
-                          .format(np_name, vm.MinCount, self.cluster_name))
+                          .format(np_name, vm.MinCount, self.name))
 
         cmd  = 'az aks nodepool add '
         cmd += '--resource-group {0} '.format(self.resource_group.name)
-        cmd += '--cluster-name {0} '.format(self.cluster_name)
+        cmd += '--cluster-name {0} '.format(self.name)
         cmd += '--name  {0} '.format(np_name)
         cmd += '--node-count {0} '.format(vm.MinCount)
         cmd += '--node-vm-size {0}'.format(vm.InstanceID)
@@ -891,7 +891,7 @@ class AKSCluster(K8sCluster):
         out, err, ret = sh_callout(cmd, shell=True)
         if ret:
             self.logger.error('failed to add {0} to {1}' \
-                              .format(np_name, self.cluster_name))
+                              .format(np_name, self.name))
             print(out, err)
 
         vm.NodesPool = np_name
@@ -954,11 +954,11 @@ class AKSCluster(K8sCluster):
     #
     def _delete(self):
 
-        print('deleteing AKS cluster: {0}'.format(self.cluster_name))
+        print('deleteing AKS cluster: {0}'.format(self.name))
         out, err, _ = sh_callout('az aks list', shell=True)
-        if self.cluster_name in out:
+        if self.name in out:
             cmd = f'az aks delete --resource-group {self.resource_group.name} '
-            cmd += f'--name {self.cluster_name} --no-wait --yes'
+            cmd += f'--name {self.name} --no-wait --yes'
             out, err, _ = sh_callout(cmd, shell=True)
 
             print(out, err)
@@ -1022,7 +1022,7 @@ class EKSCluster(K8sCluster):
     def __init__(self, run_id, sandbox, vms, iam, rclf, clf, ec2, eks, prc, log):
 
         self.id = run_id
-        self.cluster_name = generate_eks_id(prefix='hydraa-eks-cluster')
+        self.name = generate_id(prefix='hydraa-eks-cluster')
         self.config = None
 
         self.iam = iam
@@ -1053,7 +1053,7 @@ class EKSCluster(K8sCluster):
         None
         """
 
-        ng_name = generate_eks_id(prefix='hydraa-eks-nodegroup')
+        ng_name = generate_id(prefix='hydraa-eks-nodegroup')
 
         # FIXME: Find a way to workaround the limited avilability
         #        zones https://github.com/weaveworks/eksctl/issues/817
@@ -1076,7 +1076,7 @@ class EKSCluster(K8sCluster):
         print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
 
         # step-1 Create EKS cluster control plane
-        cmd  = f'{self.EKSCTL} create cluster --name {self.cluster_name} '
+        cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
         cmd += f'--region {first_vm.Region} --version {kubernetes_v} '
         cmd += f'--nodegroup-name {ng_name} --nodes {first_vm.MinCount} '
         cmd += f'--node-type {first_vm.InstanceID} '
@@ -1143,18 +1143,18 @@ class EKSCluster(K8sCluster):
         if vm not in self.vms:
             self.vms.append(vm)
 
-        ng_name = generate_eks_id(prefix='hydraa-eks-nodegroup')
+        ng_name = generate_id(prefix='hydraa-eks-nodegroup')
         self.logger.trace('adding node group {0} with x [{1}] nodes to {2}' \
-                          .format(ng_name, vm.MinCount, self.cluster_name))
+                          .format(ng_name, vm.MinCount, self.name))
 
         cmd  = f'eksctl create nodegroup --name {ng_name} --nodes {vm.MinCount} '
-        cmd += f'--cluster {self.cluster_name} --node-type {vm.InstanceID} '
+        cmd += f'--cluster {self.name} --node-type {vm.InstanceID} '
         cmd += f'--nodes-min {vm.MinCount} --nodes-max {vm.MaxCount}'
  
         out, err, ret = sh_callout(cmd, shell=True)
         if ret:
             self.logger.error('failed to add {0} to {1}' \
-                              .format(ng_name, self.cluster_name))
+                              .format(ng_name, self.name))
             print(out, err)
 
         vm.NodeGroupName = ng_name
@@ -1226,8 +1226,8 @@ class EKSCluster(K8sCluster):
     #
     def _delete(self):
 
-        print('deleteing EKS cluster: {0}'.format(self.cluster_name))
-        cmd = f'eksctl delete cluster --name {self.cluster_name}'
+        print('deleteing EKS cluster: {0}'.format(self.name))
+        cmd = f'eksctl delete cluster --name {self.name}'
         out, err, _ = sh_callout(cmd, shell=True)
 
         print(out, err)

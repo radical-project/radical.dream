@@ -8,30 +8,28 @@ import boto3
 import queue
 import atexit
 import threading
-import itertools  as iter
+import itertools as iter
 from datetime import datetime
 from collections import OrderedDict
-
 
 from hydraa.services.caas_manager.utils import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
-AWS       = 'aws'
-BUDGET    = 0
-EKS       = ['EKS', 'eks']         # Elastic kubernetes Service
-EC2       = ['EC2', 'ec2']         # Elastic Cloud 
-ECS       = ['ECS', 'ecs']         # Elastic Container Service
-FARGATE   = ['FARGATE', 'fargate'] # Fargate container service
-
-WAIT_TIME = 2
+AWS = 'aws'
+EKS = ['EKS', 'eks'] # Elastic kubernetes Service
+EC2 = ['EC2', 'ec2'] # Elastic Cloud 
+ECS = ['ECS', 'ecs'] # Elastic Container Service
+FARGATE = ['FARGATE', 'fargate'] # Fargate container service
 
 CPTD = 10    # The max number of containers defs within a task def.
 TDPC = 500   # The max number of task defs per cluster.
 TPFC = 1000  # The max number of tasks per FARGATE cluster.
 CIPC = 5000  # Number of container instances per cluster.
 CSPA = 10000 # Number of clusters per account.
+
+WAIT_TIME = 2 # seconds
 
 
 # --------------------------------------------------------------------------

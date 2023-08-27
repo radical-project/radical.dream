@@ -44,7 +44,13 @@ class Kubeflow:
         kf_cmd = "kubectl create -f "
         kf_cmd += "https://raw.githubusercontent.com/kubeflow/mpi-operator" \
                   "/master/deploy/v2beta1/mpi-operator.yaml"
-        res = self.cluster.control_plane.run(kf_cmd, hide=True)
+        out, err, ret = sh_callout(kf_cmd, shell=True, kube=self.cluster)
+        if ret:
+            self.cluster.logger.error('Kubeflow MPI operator installation failed: {0}\
+                                      '.format(err))
+        else:
+            self.cluster.logger.trace('Kubeflow MPI operator installed'
+                                      'succfully on {0}'.format(self.cluster.name))
 
     # --------------------------------------------------------------------------
     #
@@ -57,15 +63,15 @@ class Kubeflow:
 
         """
         cmd = "kubectl get crd"
-        res = self.cluster.control_plane.run(cmd, hide=True)
+        out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
 
-        if res.return_code:
+        if ret:
             self.cluster.logger.error('checking for Kubeflow CRD failed: {0}\
-                                      '.format(res.stderr))
+                                      '.format(err))
             return False
 
-        if res.stdout:
-            return "mpijobs.kubeflow" in res.stdout
+        else:
+            return "mpijobs.kubeflow" in out
 
     # --------------------------------------------------------------------------
     #
@@ -93,7 +99,6 @@ class Kubeflow:
     def _start_kueue(self):
         """
         Starts the Kueue job controller in Kubeflow.
-
         """
 
         url1 = "https://github.com/kubernetes-sigs/kueue/releases" \
@@ -154,8 +159,8 @@ class Kubeflow:
         Starts the Kubeflow deployment with the specified MPI scheduler.
 
         Args:
-            scheduler (str, optional): Name of the MPI scheduler to deploy. Defaults to None.
-
+            scheduler (str, optional): Name of the MPI scheduler to deploy.
+            Defaults to None.
         """
 
         while True:
@@ -284,7 +289,7 @@ class KubeflowMPILauncher(Kubeflow):
             str: None
         """
         cmd = "kubectl delete MPIJob"
-        res = self.manager.cluster.control_plane.run(cmd)
+        out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
 
 # --------------------------------------------------------------------------
 #

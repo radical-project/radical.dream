@@ -142,7 +142,7 @@ class AzureCaas:
         min_bulk_time = 0.1 # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
-                                            name='AzureCaaSWatcher')	
+                                            name='AzureCaaSWatcher')
         self.wait_thread.daemon = True
 
         while not self._terminate.is_set():
@@ -366,10 +366,10 @@ class AzureCaas:
             try:
                 # create container groups and submit
                 contaier_group_name = self.create_container_group(self.resource_group, containers)
-                self._container_group_names[contaier_group_name]['manager_id']    = self.manager_id
+                self._container_group_names[contaier_group_name]['task_list'] = batch
+                self._container_group_names[contaier_group_name]['batch_size'] = len(batch)
+                self._container_group_names[contaier_group_name]['manager_id'] = self.manager_id
                 self._container_group_names[contaier_group_name]['resource_name'] = self.resource_group_name
-                self._container_group_names[contaier_group_name]['task_list']     = batch
-                self._container_group_names[contaier_group_name]['batch_size']    = len(batch)
     
             except Exception as e:
                 # upon failure mark the tasks
