@@ -16,18 +16,19 @@ from kubernetes import client
 from hydraa import AWS, AZURE
 
 
-TRUE=true=True
-NONE=null=None
-FALSE=false=False
+TRUE = true=True
+NONE = null=None
+FALSE = false=False
 
-HOME  = str(Path.home())
+HOME = str(Path.home())
+TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False, kube=None):
     '''
     call a shell command, return `[stdout, stderr, retval]`.
     '''
     if kube:
-        if AWS in kube.cluster.name or AZURE in kube.cluster.name:
+        if AWS in kube.cluster_name or AZURE in kube.cluster_name:
             cmd = inject_kubeconfig(cmd, kube.kube_config,
                                     local_bind_port=None)
         else:
@@ -308,3 +309,13 @@ def convert_time(self, timestamp):
     ts = time.mktime(t.timetuple())
 
     return ts
+
+
+# --------------------------------------------------------------------------
+#
+def unique_id(starts_from=1):
+    if not hasattr(unique_id, "counter"):
+        unique_id.counter = starts_from
+    else:
+        unique_id.counter += 1
+    return unique_id.counter

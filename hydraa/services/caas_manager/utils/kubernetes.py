@@ -12,6 +12,7 @@ import threading as mt
 import radical.utils as ru
 
 from .misc import build_pod
+from .misc import unique_id
 from .misc import sh_callout
 from .misc import convert_time
 from .misc import generate_eks_id
@@ -19,8 +20,6 @@ from .misc import dump_multiple_yamls
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
-
-TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
 
 CFAILED_STATE = ['Error', 'StartError','OOMKilled',
                 'ContainerCannotRun','DeadlineExceeded',
@@ -793,7 +792,8 @@ class AKSCluster(K8sCluster):
             raise Exception('Kubectl is required to manage AKS cluster')
 
         first_vm = self.vms[0]
-        varied_vms = all(vm.InstanceID == first_vm.InstanceID for vm in self.vms)
+        varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
+                         self.vms[1:])
 
         # FIXME: remove self.size
         self.size = self.get_vm_size(first_vm) - 1
@@ -877,18 +877,22 @@ class AKSCluster(K8sCluster):
         if vm not in self.vms:
             self.vms.append(vm)
 
-        np_name = 'hydraa-aks-nodepool-{0}'.format(vm.InstanceID)
+        np_name = 'nodepool{0}'.format(unique_id())
+        self.logger.trace('adding {0} with x [{1}] nodes to {2}' \
+                          .format(np_name, vm.MinCount, self.cluster_name))
 
         cmd  = 'az aks nodepool add '
-        cmd += '--resource-group {0} '.format(self.resource_group)
+        cmd += '--resource-group {0} '.format(self.resource_group.name)
         cmd += '--cluster-name {0} '.format(self.cluster_name)
         cmd += '--name  {0} '.format(np_name)
         cmd += '--node-count {0} '.format(vm.MinCount)
         cmd += '--node-vm-size {0}'.format(vm.InstanceID)
 
         out, err, ret = sh_callout(cmd, shell=True)
-
-        print(out, err)
+        if ret:
+            self.logger.error('failed to add {0} to {1}' \
+                              .format(np_name, self.cluster_name))
+            print(out, err)
 
         vm.NodesPool = np_name
 
@@ -953,8 +957,8 @@ class AKSCluster(K8sCluster):
         print('deleteing AKS cluster: {0}'.format(self.cluster_name))
         out, err, _ = sh_callout('az aks list', shell=True)
         if self.cluster_name in out:
-            cmd = f'az aks delete --resource-group {self.resource_group} '
-            cmd += f'--name {self.cluster_name}'
+            cmd = f'az aks delete --resource-group {self.resource_group.name} '
+            cmd += f'--name {self.cluster_name} --no-wait --yes'
             out, err, _ = sh_callout(cmd, shell=True)
 
             print(out, err)
@@ -1063,7 +1067,8 @@ class EKSCluster(K8sCluster):
         self.kube_config = self.configure()
 
         first_vm = self.vms[0]
-        varied_vms = all(vm.InstanceID == first_vm.InstanceID for vm in self.vms)
+        varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
+                         self.vms[1:])
 
         # FIXME: remove self.size
         self.size = self.get_vm_size(first_vm) - 1
@@ -1139,14 +1144,18 @@ class EKSCluster(K8sCluster):
             self.vms.append(vm)
 
         ng_name = generate_eks_id(prefix='hydraa-eks-nodegroup')
+        self.logger.trace('adding node group {0} with x [{1}] nodes to {2}' \
+                          .format(ng_name, vm.MinCount, self.cluster_name))
 
         cmd  = f'eksctl create nodegroup --name {ng_name} --nodes {vm.MinCount} '
         cmd += f'--cluster {self.cluster_name} --node-type {vm.InstanceID} '
         cmd += f'--nodes-min {vm.MinCount} --nodes-max {vm.MaxCount}'
  
         out, err, ret = sh_callout(cmd, shell=True)
-
-        print(out, err)
+        if ret:
+            self.logger.error('failed to add {0} to {1}' \
+                              .format(ng_name, self.cluster_name))
+            print(out, err)
 
         vm.NodeGroupName = ng_name
 
