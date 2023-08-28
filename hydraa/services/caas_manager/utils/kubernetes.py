@@ -286,7 +286,8 @@ class K8sCluster:
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
 
-        deployment_file = '{0}/hydraa_pods.yaml'.format(self.sandbox, self.id)
+        deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
+                                                            unique_id())
 
         for ctask in ctasks:
             pod_id = str(self.pod_counter).zfill(6)
