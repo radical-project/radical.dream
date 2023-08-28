@@ -38,8 +38,9 @@ SLEEP = 2
 BUSY = 'Busy'
 READY = 'Ready'
 MAX_PODS = 250
-
 KUBECTL = shutil.which('kubectl')
+KUBE_VERSION = os.getenv('KUBE_VERSION')
+KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
@@ -95,23 +96,22 @@ class K8sCluster:
         log : logging
             A logger object.
         """
-        self.id = run_id
         self.vms = vms
-        self.nodes = sum([vm.MinCount for vm in self.vms])
-        self.name = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
+        self.id = run_id
+        self.logger = log
+        self.status = None
         self.pod_counter = 0
         self.sandbox = sandbox
-        self.logger = log
-        self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
-        self.size = {'vcpus': -1, 'memory': 0, 'storage': 0}
- 
         self.kube_config  = None
-        self.status = None
+        self.nodes = sum([vm.MinCount for vm in self.vms])
+        self.size = {'vcpus': -1, 'memory': 0, 'storage': 0}
+        self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
+        self.name = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
 
         self.stop_event = mt.Event()
-        self.watch_profiles = mt.Thread(target=self._profiles_collector)
         self.updater_lock = mt.Lock()
-
+        self.watch_profiles = mt.Thread(target=self._profiles_collector)
+        
 
     # --------------------------------------------------------------------------
     #
@@ -168,7 +168,10 @@ class K8sCluster:
 
         if not KUBECTL:
             raise Exception('Kubectl is required to manage Kuberentes cluster')
-    
+
+        if KUBE_TIMEOUT:
+            timeout = int(KUBE_TIMEOUT)
+
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
         nodes_map = self.create_nodes_map()
@@ -791,6 +794,9 @@ class AKSCluster(K8sCluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
+        if KUBE_VERSION:
+            version = KUBE_VERSION
+
         first_vm = self.vms[0]
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
@@ -1039,7 +1045,7 @@ class EKSCluster(K8sCluster):
 
     # --------------------------------------------------------------------------
     #
-    def bootstrap(self, kubernetes_v='1.22'):
+    def bootstrap(self, version='1.22'):
         """
         Bootstrap the EKS cluster.
 
@@ -1061,6 +1067,9 @@ class EKSCluster(K8sCluster):
         if not self.EKSCTL or not self.IAM_AUTH or not KUBECTL:
             raise Exception('eksctl/iam-auth/kubectl is required to manage EKS cluster')
 
+        if KUBE_VERSION:
+            version = KUBE_VERSION
+
         self.profiler.prof('bootstrap_start', uid=self.id)
 
         self.profiler.prof('cofigure_start', uid=self.id)
@@ -1077,7 +1086,7 @@ class EKSCluster(K8sCluster):
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
-        cmd += f'--region {first_vm.Region} --version {kubernetes_v} '
+        cmd += f'--region {first_vm.Region} --version {version} '
         cmd += f'--nodegroup-name {ng_name} --nodes {first_vm.MinCount} '
         cmd += f'--node-type {first_vm.InstanceID} '
         cmd += f'--nodes-min {first_vm.MinCount} '
