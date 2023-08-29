@@ -773,6 +773,7 @@ class AKSCluster(K8sCluster):
 
         super().__init__(run_id, vms, sandbox, log)
 
+        # shutdown resources on exit if something goes wrong
         atexit.register(self.shutdown)
 
 
@@ -961,9 +962,9 @@ class AKSCluster(K8sCluster):
     #
     def _delete(self):
 
-        print('deleteing AKS cluster: {0}'.format(self.name))
         out, err, _ = sh_callout('az aks list', shell=True)
         if self.name in out:
+            print('deleting AKS cluster: {0}'.format(self.name))
             cmd = f'az aks delete --resource-group {self.resource_group.name} '
             cmd += f'--name {self.name} --no-wait --yes'
             out, err, _ = sh_callout(cmd, shell=True)

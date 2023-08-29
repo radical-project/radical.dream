@@ -652,6 +652,9 @@ class AzureCaas:
         
         self.logger.trace(("terminating resource group {0}".format(self.resource_group_name)))
         self.res_client.resource_groups.begin_delete(self.resource_group_name)
-        
+
+        if hasattr(self, 'cluster'):
+            self.cluster.shutdown()
+
         self.resource_group_name = None
         self.status = False

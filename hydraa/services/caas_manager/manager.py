@@ -3,9 +3,7 @@ import queue
 import threading as mt
 import radical.utils as ru
 
-from hydraa.cloud_vm import vm
 from hydraa.providers.proxy import proxy
-
 from hydraa.services.caas_manager.utils import misc
 from hydraa.services.caas_manager.chi_caas import ChiCaas
 from hydraa.services.caas_manager.aws_caas import AwsCaas
@@ -18,91 +16,98 @@ JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
 
+PROVIDER_TO_CLASS = {
+    AWS: AwsCaas,
+    CHI: ChiCaas,
+    JET2: Jet2Caas,
+    AZURE: AzureCaas}
+
 # --------------------------------------------------------------------------
 #
 class CaasManager:
     """
-    ctask: container task
+    The `CaasManager` class is responsible for managing different providers'
+    instances for the Cloud-as-a-Service (CaaS) application. It initializes
+    instances of provider-specific classes and starts threads to handle results.
+
+    Parameters
+    ----------
+    proxy_mgr : ProxyManager
+        An instance of the proxy manager to load credentials and providers.
+
+    vms : list
+        A list of virtual machine instances.
+
+    asynchronous : bool
+        Indicates whether the processing should be asynchronous.
+
+    Attributes
+    ----------
+    _registered_managers : dict
+        A dictionary to store registered manager instances by provider name.
+
+    prof : ru.Profiler
+        A profiler instance for profiling.
+
+    _terminate : mt.Event
+        An event to signal termination.
+
+    log : Logger
+        A logger instance for logging.
+
+    _proxy : ProxyManager
+        An instance of the proxy manager (optional).
     """
+
 
     # --------------------------------------------------------------------------
     #
     def __init__(self, proxy_mgr, vms, asynchronous):
-        
-        _id = str(uuid.uuid4())
-        sandbox = misc.create_sandbox(_id)
+        """
+        Initialize the CaasManager.
 
-        self._registered_managers = {}
+        Parameters
+        ----------
+        proxy_mgr : ProxyManager
+            An instance of the proxy manager to load credentials and providers.
+
+        vms : list
+            A list of virtual machine instances.
+
+        asynchronous : bool
+            Indicates whether the processing should be asynchronous.
+        """
+
+        _id = str(uuid.uuid4())
         self.prof = ru.Profiler
-        self.log = misc.logger(path='{0}/{1}.log'.format(sandbox, 'caas_manager'))
         self._terminate  = mt.Event()
+        self._registered_managers = {}
+        sandbox = misc.create_sandbox(_id)
+        self.log = misc.logger(path='{0}/{1}.log'.format(sandbox,
+                                                        'caas_manager'))
 
         if proxy:
             self._proxy = proxy_mgr
 
-        # TODO: add the created classes based on the loaded
-        #       providers instead of only provider name. This
-        #       will help for less code and easier shutdown.
-
         for provider in self._proxy._loaded_providers:
-            if provider == AZURE:
-                cred = self._proxy._load_credentials(AZURE)
-                vmx  = list((v for v in vms if isinstance(v, vm.AzureVM)))
-                self.AzureCaas = AzureCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
-                self._registered_managers[AZURE] = {'class' : self.AzureCaas,
-                                                    'run_id': self.AzureCaas.run_id,
-                                                    'in_q'  : self.AzureCaas.incoming_q,
-                                                    'out_q' : self.AzureCaas.outgoing_q}
-            if provider == AWS:
-                cred = self._proxy._load_credentials(AWS)
-                vmx  = list((v for v in vms if isinstance(v, vm.AwsVM)))
-                self.AwsCaas = AwsCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
-                self._registered_managers[AWS] = {'class' : self.AwsCaas,
-                                                  'run_id': self.AwsCaas.run_id,
-                                                  'in_q'  : self.AwsCaas.incoming_q,
-                                                  'out_q' : self.AwsCaas.outgoing_q}
+            if provider in PROVIDER_TO_CLASS:
+                cred = self._proxy._load_credentials(provider)
+                vmx = [v for v in vms if v.Provider == provider]
+                caas_class = PROVIDER_TO_CLASS[provider]
+                caas_instance = caas_class(sandbox, _id, cred, vmx,
+                                           asynchronous, self.log, self.prof)
 
-            # TODO: merge Jet2cass and ChiCaas in one class 
-            if provider == JET2:
-                cred = self._proxy._load_credentials(JET2)
-                vmx  = list((v for v in vms if v.Provider == JET2))
-                self.Jet2Caas = Jet2Caas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
-                self._registered_managers[JET2] = {'class' : self.Jet2Caas,
-                                                   'run_id': self.Jet2Caas.run_id,
-                                                   'in_q'  : self.Jet2Caas.incoming_q,
-                                                   'out_q' : self.Jet2Caas.outgoing_q}
+                self._registered_managers[provider] = {'class' : caas_instance,
+                                                       'run_id': caas_instance.run_id,
+                                                       'in_q'  : caas_instance.incoming_q,
+                                                       'out_q' : caas_instance.outgoing_q}
+                setattr(self, caas_class.__name__, caas_instance) 
 
-            if provider == CHI:
-                cred = self._proxy._load_credentials(CHI)
-                vmx  = list((v for v in vms if v.Provider == CHI))
-                self.ChiCaas = ChiCaas(sandbox, _id, cred, vmx, asynchronous, self.log, self.prof)
-                self._registered_managers[CHI] = {'class' : self.ChiCaas,
-                                                  'run_id': self.ChiCaas.run_id,
-                                                  'in_q'  : self.ChiCaas.incoming_q,
-                                                  'out_q' : self.ChiCaas.outgoing_q}
-
-            
-            
-            self._get_result = mt.Thread(target=self._get_results, args=(self._registered_managers[provider],),
-                                                                                     name="CaaSManagerResult")
+            self._get_result = mt.Thread(target=self._get_results,
+                                         name="CaaSManagerResult",
+                                         args=(self._registered_managers[provider],))
             self._get_result.daemon = True
-
             self._get_result.start()
-
-   
-    # --------------------------------------------------------------------------
-    #
-    def get_ctask_cost(self, provider):
-        """
-        calculate the cost of executing a 
-        container on a provider
-        """
-        if provider == AWS:
-            pass
-        if provider == AZURE:
-            pass
-        if provider == GCLOUD:
-            raise NotImplementedError
 
 
     # --------------------------------------------------------------------------
