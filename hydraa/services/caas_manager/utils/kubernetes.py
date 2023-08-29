@@ -106,7 +106,7 @@ class K8sCluster:
         self.nodes = sum([vm.MinCount for vm in self.vms])
         self.size = {'vcpus': -1, 'memory': 0, 'storage': 0}
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
-        self.name = 'cluster-{0}.{1}'.format(self.vms[0].Provider, run_id)
+        self.name = 'cluster-{0}-{1}'.format(self.vms[0].Provider, run_id)
 
         self.stop_event = mt.Event()
         self.updater_lock = mt.Lock()
@@ -514,7 +514,7 @@ class K8sCluster:
         cmd = "kubectl get pods -A -o json"
         response = None
 
-        response = sh_callout(cmd, shell=True, munch=True, kube=self)
+        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         statuses   = {}
         stopped    = []
@@ -593,7 +593,7 @@ class K8sCluster:
         cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
         response = None
 
-        response = sh_callout(cmd, shell=True, munch=True, kube=self)
+        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         if response:
             df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
@@ -627,7 +627,7 @@ class K8sCluster:
         
         cmd = 'kubectl get events -A -o json' 
 
-        response = sh_callout(cmd, shell=True, munch=True, kube=self)
+        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
 
         df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
         if response:
@@ -768,10 +768,11 @@ class AKSCluster(K8sCluster):
     def __init__(self, run_id, vms, sandbox, log):
         self.id = run_id
         self.config = None
-        self.name = generate_id(prefix='hydraa-aks-cluster')
         self.resource_group = vms[0].ResourceGroup
 
         super().__init__(run_id, vms, sandbox, log)
+
+        self.name = generate_id(prefix='h-azure-aks-cluster')
 
         # shutdown resources on exit if something goes wrong
         atexit.register(self.shutdown)
@@ -779,7 +780,7 @@ class AKSCluster(K8sCluster):
 
     # --------------------------------------------------------------------------
     #
-    def bootstrap(self, version='1.26.6'):
+    def bootstrap(self):
         """
         Bootstrap the EKS cluster with N group nodes (HYDRAA.VM).
     
@@ -796,9 +797,6 @@ class AKSCluster(K8sCluster):
         if not KUBECTL:
             raise Exception('Kubectl is required to manage AKS cluster')
 
-        if KUBE_VERSION:
-            version = KUBE_VERSION
-
         first_vm = self.vms[0]
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
@@ -812,10 +810,18 @@ class AKSCluster(K8sCluster):
         cmd += '--enable-managed-identity '
         cmd += f'--node-vm-size {first_vm.InstanceID} '
         cmd += f'--node-count {first_vm.MinCount} '
-        cmd += f'--generate-ssh-keys --kubernetes-version {version}'
+        cmd += f'--generate-ssh-keys --location {first_vm.Region}'
+
+        if KUBE_VERSION:
+            version = KUBE_VERSION
+            cmd += f' --kubernetes-version {version}'
 
         print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
-        self.config = sh_callout(cmd, shell=True, munch=True)
+        self.config, err, ret = sh_callout(cmd, shell=True, munch=True)
+
+        if ret:
+            raise Exception('failed to build {0}: {1}'.format(self.name,
+                                                              err))
 
         # check if we have a single type or multiple types of vms
         if varied_vms and len(self.vms) > 1:
@@ -898,14 +904,11 @@ class AKSCluster(K8sCluster):
 
         out, err, ret = sh_callout(cmd, shell=True)
         if ret:
-            self.logger.error('failed to add {0} to {1}' \
-                              .format(np_name, self.name))
-            print(out, err)
+            raise Exception('failed to add {0} to {1}: {2}' \
+                            .format(np_name, self.name, err))
 
         vm.NodesPool = np_name
 
-        return True if ret == 0 else False
-    
 
     # --------------------------------------------------------------------------
     #
@@ -932,7 +935,7 @@ class AKSCluster(K8sCluster):
 
         # obtain all of the vms in this region
         cmd = 'az vm list-sizes --location {0}'.format(region)
-        vms = sh_callout(cmd, shell=True, munch=True)
+        vms, _, _ = sh_callout(cmd, shell=True, munch=True)
 
         vcpus = 0
         # get the coresponding info of the targeted vm
@@ -964,12 +967,12 @@ class AKSCluster(K8sCluster):
 
         out, err, _ = sh_callout('az aks list', shell=True)
         if self.name in out:
-            print('deleting AKS cluster: {0}'.format(self.name))
-            cmd = f'az aks delete --resource-group {self.resource_group.name} '
-            cmd += f'--name {self.name} --no-wait --yes'
-            out, err, _ = sh_callout(cmd, shell=True)
-
-            print(out, err)
+            if not '"provisioningState": "Deleting"' in out:
+                print('deleting AKS cluster: {0}'.format(self.name))
+                cmd = f'az aks delete --resource-group {self.resource_group.name} '
+                cmd += f'--name {self.name} --no-wait --yes'
+                out, err, _ = sh_callout(cmd, shell=True)
+                print(out, err)
 
     # --------------------------------------------------------------------------
     #
@@ -1027,27 +1030,28 @@ class EKSCluster(K8sCluster):
     EKSCTL = shutil.which('eksctl')
     IAM_AUTH = shutil.which('aws-iam-authenticator')
 
-    def __init__(self, run_id, sandbox, vms, iam, rclf, clf, ec2, eks, prc, log):
+    def __init__(self, run_id, sandbox, vms,
+                 iam, rclf, clf, ec2, eks, prc, log):
 
         self.id = run_id
-        self.name = generate_id(prefix='hydraa-eks-cluster')
         self.config = None
 
         self.iam = iam
         self.clf = clf
         self.ec2 = ec2
         self.eks = eks
-        self.rclf = rclf
         self.prc = prc
+        self.rclf = rclf
 
         super().__init__(run_id, vms, sandbox, log)
+        self.name = generate_id(prefix='h-aws-eks-cluster')
 
         atexit.register(self.shutdown)
 
 
-    # --------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     #
-    def bootstrap(self, version='1.22'):
+    def bootstrap(self):
         """
         Bootstrap the EKS cluster.
 
@@ -1061,16 +1065,13 @@ class EKSCluster(K8sCluster):
         None
         """
 
-        ng_name = generate_id(prefix='hydraa-eks-nodegroup')
+        ng_name = generate_id(prefix='h-eks-nodegroup')
 
         # FIXME: Find a way to workaround the limited avilability
         #        zones https://github.com/weaveworks/eksctl/issues/817
 
         if not self.EKSCTL or not self.IAM_AUTH or not KUBECTL:
             raise Exception('eksctl/iam-auth/kubectl is required to manage EKS cluster')
-
-        if KUBE_VERSION:
-            version = KUBE_VERSION
 
         self.profiler.prof('bootstrap_start', uid=self.id)
 
@@ -1088,14 +1089,22 @@ class EKSCluster(K8sCluster):
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
-        cmd += f'--region {first_vm.Region} --version {version} '
+        cmd += f'--region {first_vm.Region}'
         cmd += f'--nodegroup-name {ng_name} --nodes {first_vm.MinCount} '
         cmd += f'--node-type {first_vm.InstanceID} '
         cmd += f'--nodes-min {first_vm.MinCount} '
         cmd += f'--nodes-max {first_vm.MaxCount} '
         cmd += f'--kubeconfig {self.kube_config}'
 
-        sh_callout(cmd, shell=True)
+        if KUBE_VERSION:
+            version = KUBE_VERSION
+            cmd += f' --version {version}'
+
+        out, err, ret = sh_callout(cmd, shell=True)
+
+        if ret:
+            raise Exception('failed to build {0}: {1}'.format(self.name,
+                                                              err))
 
         # step-2 Check if we have a single type or multiple types of vms
         if varied_vms and len(self.vms) > 1:
@@ -1154,7 +1163,7 @@ class EKSCluster(K8sCluster):
         if vm not in self.vms:
             self.vms.append(vm)
 
-        ng_name = generate_id(prefix='hydraa-eks-nodegroup')
+        ng_name = generate_id(prefix='h-eks-nodegroup')
         self.logger.trace('adding node group {0} with x [{1}] nodes to {2}' \
                           .format(ng_name, vm.MinCount, self.name))
 

@@ -27,7 +27,8 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
                                                  ResourceRequirements,
                                                  OperatingSystemTypes)
 
-from hydraa.services.caas_manager.utils      import kubernetes
+from hydraa.services.caas_manager.utils import kubernetes
+from hydraa.services.caas_manager.utils.misc import generate_id
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -230,15 +231,21 @@ class AzureCaas:
 
         # Create (and then get) a resource group into which the container groups
         # are to be created
-        self.resource_group_name = 'hydraa-rg-{0}'.format(self.manager_id)
+        self.resource_group_name = generate_id(prefix='hydraa-rg', length=4)
 
-        self.logger.trace("creating resource group {0}".format(self.resource_group_name))
-        self.res_client.resource_groups.create_or_update(self.resource_group_name,
-                                                     {'location': self.vms[0].Region})
+        self.logger.trace("creating resource group {0}".format(
+            self.resource_group_name))
+        
+        # Create the resource group
+        self.res_client.resource_groups.create_or_update(
+            self.resource_group_name, {'location': self.vms[0].Region})
 
-        resource_group = self.res_client.resource_groups.get(self.resource_group_name)
+        # Get the resource group object
+        resource_group = self.res_client.resource_groups.get(
+            self.resource_group_name)
 
-        self.logger.trace("resource group {0} is created".format(self.resource_group_name))
+        self.logger.trace("resource group {0} is created".format(
+            self.resource_group_name))
 
         return resource_group
 
@@ -247,7 +254,7 @@ class AzureCaas:
     #
     def create_container_group(self, resource_group, contianers):
         """Creates a container group with a single.multiple container(s).
-        https://docs.microsoft.com/en-us/azure/container-instances/container-instances-container-groups
+
         Arguments:
 
             resource_group {azure.mgmt.resource.resources.models.ResourceGroup}
@@ -259,7 +266,7 @@ class AzureCaas:
                         mcr.microsoft\aci-helloworld:latest
             command = ['/bin/sh', '-c', 'echo FOO BAR && tail -f /dev/null']
         """
-        self._container_group_name = 'hydraa-contianer-group-{0}'.format(str(uuid.uuid4()))
+        self._container_group_name = generate_id('hydraa-cgr', length=4)
 
         group = ContainerGroup(location=resource_group.location,
                                containers=contianers,
@@ -653,7 +660,7 @@ class AzureCaas:
         self.logger.trace(("terminating resource group {0}".format(self.resource_group_name)))
         self.res_client.resource_groups.begin_delete(self.resource_group_name)
 
-        if hasattr(self, 'cluster'):
+        if self.cluster:
             self.cluster.shutdown()
 
         self.resource_group_name = None

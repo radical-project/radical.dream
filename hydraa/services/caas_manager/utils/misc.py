@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import yaml
 import math
@@ -22,6 +23,10 @@ FALSE = false=False
 
 HOME = str(Path.home())
 TFORMAT = '%Y-%m-%dT%H:%M:%fZ'
+
+AWS_CHAR_LIMIT = 100
+AZURE_CHAR_LIMIT = 80
+
 
 def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False, kube=None):
     '''
@@ -56,8 +61,9 @@ def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False
     if munch:
         if not ret:
             out = eval(stdout.decode("utf-8"))
-            # FIXME: return out, stderr, ret
-            return out
+            return out, stderr.decode("utf-8"), ret
+        else:
+            return stdout.decode("utf-8"), stderr.decode("utf-8"), ret
     else:
         return stdout.decode("utf-8"), stderr.decode("utf-8"), ret
 
