@@ -2,14 +2,14 @@ import os
 import time
 import math
 import copy
-import json
-import uuid
 import atexit
 import shutil
 
 import pandas as pd
 import threading as mt
 import radical.utils as ru
+
+from typing import List, Dict
 
 from .misc import build_pod
 from .misc import unique_id
@@ -18,7 +18,11 @@ from .misc import generate_id
 from .misc import convert_time
 from .misc import dump_multiple_yamls
 
-from ....cloud_vm.vm import AwsVM, AzureVM, OpenStackVM
+
+from ....cloud_vm.vm import AwsVM
+from ....cloud_vm.vm import AzureVM
+from ....cloud_task.task import Task
+from ....cloud_vm.vm import OpenStackVM
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
@@ -722,7 +726,59 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def get_worker_nodes(self):
+    def get_pod_logs(self, pod: Task, save: bool = False) -> str:
+        """Get the logs of a Kubernetes pod and return as a string.
+
+        Parameters
+        ----------
+        pod : Task
+            The Task object or name of the pod to get logs for
+        save : bool, optional
+            Whether to save the pod logs to a file, by default False
+        
+        Returns
+        -------
+        str
+            The pod logs as a string, or path to saved log file if save=True
+
+        Raises
+        ------
+        RuntimeError
+            If there is an error getting the pod logs
+
+        """
+        if isinstance(pod, Task):
+            pod = pod.name
+
+        out, err, ret = sh_callout(f'kubectl logs {pod}',
+                                   shell=True, kube=self)
+        if ret:
+            self.logger.error(f'failed to get pod {pod} logs: {err}')
+            return None
+
+        if out:
+            out = out.split('\n')
+            if save:
+                path = f'{self.sandbox}/{pod}.log'
+                with open(path, 'w') as f:
+                    f.write('\n'.join(out))
+
+                return path
+
+            return out
+
+    # --------------------------------------------------------------------------
+    #
+    def get_worker_nodes(self) -> List[str]:
+        """
+        Get a list of worker node server names.
+
+        Returns
+        -------
+        List[str]
+            A list containing the server names of each worker node VM
+
+        """
         first_vm = self.vms[0]
         server_names = [server.name for server in first_vm.Servers[1:]] + \
         [server.name for vm in self.vms[1:] for server in vm.Servers]
@@ -732,7 +788,20 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def add_node(self):
+    def add_node(self, vm):
+        if not isinstance(vm, OpenStackVM):
+            raise Exception('K8s cluster vm must be of type OpenStackVM')
+
+        """
+        1-Provision the new node and ensure it meets the Kubespray
+          prerequisites (e.g. SSH access, Python, etc).
+        2-Add the new node's IP/hostname to the [all] inventory group
+          in inventory/mycluster/hosts.yml.
+        3- ansible-playbook -i inventory/mycluster/hosts.yml scale.yml
+        4- kubectl uncordon <node-name>
+        5- self.vms.append(vm)
+        6- self.get_cluster_allocatable_size()
+        """
         raise NotImplementedError('adding node to a running K8s cluster'
                                    'is not implemented yet')
 
@@ -745,18 +814,29 @@ class K8sCluster:
         if not isinstance(vm, OpenStackVM):
             raise TypeError(f'vm must be an instance of {OpenStackVM}')
 
-        vcpus = vm.Server[0].flavor.vcpus
-        memory = vm.Server[0].flavor.ram
-        storage = vm.Server[0].flavor.disk
+        vcpus = vm.Servers[0].flavor.vcpus
+        memory = vm.Servers[0].flavor.ram
+        storage = vm.Servers[0].flavor.disk
 
         return vcpus, memory, storage
 
 
     # --------------------------------------------------------------------------
     #
-    def get_cluster_allocatable_size(self):
-        # get the actual allocatalbe size of the cluster
-        # from kubectl get nodes -o json
+    def get_cluster_allocatable_size(self) -> Dict[str, int]:
+        """
+        Get the total allocatable vCPUs, memory, and storage for a cluster.
+
+        This sums the allocatable resources reported by each node in the
+        cluster.
+
+        Returns
+        -------
+        Dict[str, int]
+            A dict with keys 'vcpus', 'memory', 'storage' indicating the 
+            total allocatable amount of each resource in the cluster.
+
+        """
         size = {'vcpus': -1, 'memory': 0, 'storage': 0}
         for vm in self.vms:
             vm_size = self.get_instance_resources(vm)

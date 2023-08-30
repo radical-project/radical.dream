@@ -431,6 +431,10 @@ class Jet2Caas():
 
             statuses = self.cluster._get_task_statuses()
 
+            if not statuses:
+                time.sleep(5)
+                continue
+
             msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
                                                                 len(statuses['stopped']),
                                                                 len(statuses['running']))
