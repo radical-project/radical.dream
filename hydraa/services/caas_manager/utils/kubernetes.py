@@ -967,10 +967,9 @@ class AKSCluster(K8sCluster):
         """
         Retrieve the compute resources of Azure virtual machine instance.
 
-        This function uses the Azure CLI to list available VM sizes
-        in a specified region and then searches for the VM size that
-        matches the given virtual machine's instance ID. It extracts
-        the number of virtual CPUs, memory, and storage of the VM size.
+        This function uses the Azure CLI to get VM size in a specified
+        region based on instance ID. It extracts the number of virtual CPUs,
+        memory, and storage of the VM.
 
         Parameters:
         -----------

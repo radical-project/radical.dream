@@ -35,7 +35,7 @@ def sh_callout(cmd, stdout=True, stderr=True,
 
     This function executes a shell command and captures its standard output,
     standard error, and return code. It can also process the command output
-    to convert it into a Python dictionary (munch).
+    to convert it into a Python object (munch).
 
     Parameters:
     -----------
