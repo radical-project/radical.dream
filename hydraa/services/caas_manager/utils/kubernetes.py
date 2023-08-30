@@ -18,6 +18,8 @@ from .misc import generate_id
 from .misc import convert_time
 from .misc import dump_multiple_yamls
 
+from ....cloud_vm.vm import AwsVM, AzureVM, OpenStackVM
+
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -103,10 +105,11 @@ class K8sCluster:
         self.pod_counter = 0
         self.sandbox = sandbox
         self.kube_config  = None
+        self.provider = self.vms[0].Provider
+        self.size = self.get_cluster_allocatable_size()
         self.nodes = sum([vm.MinCount for vm in self.vms])
-        self.size = {'vcpus': -1, 'memory': 0, 'storage': 0}
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
-        self.name = 'cluster-{0}-{1}'.format(self.vms[0].Provider, run_id)
+        self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
 
         self.stop_event = mt.Event()
         self.updater_lock = mt.Lock()
@@ -257,11 +260,6 @@ class K8sCluster:
                 hostname_ip = server.name + ',' + fixed_ip
                 nodes_map.append(hostname_ip)
 
-                # update the cluster size based on each node
-                self.size['vcpus'] += server.flavor.vcpus
-                self.size['memory'] += server.flavor.ram
-                self.size['storage'] += server.flavor.disk
-
         # node1,10.0.0.1,192.168.10.1 node2,10.0.0.2 node3,10.0.0.3
         nodes_map = " ".join(str(x) for x in  tuple(nodes_map))
 
@@ -375,6 +373,8 @@ class K8sCluster:
             else:
                 self.logger.error(err)
                 print('failed to submit pods, please check the logs for more info.')
+        
+        self.collect_profiles()
   
 
     # --------------------------------------------------------------------------
@@ -583,7 +583,7 @@ class K8sCluster:
             self.watch_profiles.daemon = True
             self.watch_profiles.start()
 
-            self.logger.trace('profilies collecting thread started')
+            self.logger.trace(f'profilies collection started on {self.name}')
 
 
     # --------------------------------------------------------------------------
@@ -649,42 +649,66 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def _profiles_collector(self):
+    def _profiles_collector(self, collect_every=3300):
         """
-        **This method should start as a background thread.
+        Background Thread for Profiles Collection
 
-        AKS/EKS does not allow to modify the ttl-events
-        of the cluster meaning if we have an exeution
-        for > 1 hour the profiles will be deleted
-        from the cluster to be replaced by new ones, unless
-        we enable Azure or AWS monitoring which == $$.
+        This method should be started as a background thread.
 
-        This function will save a checkopint of the profiles
-        as a dataframe every 55 minutes and merge them at the
-        end of the execution.
+        AKS/EKS clusters do not permit modifying ttl-events, causing profiles
+        to be deleted from the cluster after > 1 hour, potentially replaced
+        by new ones (unless Azure/AWS monitoring is enabled, which incurs cost).
+
+        This function saves profile checkpoints as dataframes approximately
+        every 55 minutes, merging them at execution end.
         https://github.com/Azure/AKS/issues/2140
+
+        Parameters:
+        ----------
+        None
+
+        Returns:
+        -------
+        None
+
+        Notes:
+        ------
+        - Operates within an internal loop for periodic collection.
+        - Intended for use as a background thread.
+        - Utilizes a stop_event to exit the loop and cease collection.
+
+        Example:
+        --------
+        # Assuming `self` is an instance of the class
+        collector_thread = threading.Thread(target=self._profiles_collector)
+        collector_thread.start()
+
+        # ...execute other tasks...
+
+        # When done, signal the thread to stop and wait for it to finish
+        self.stop_event.set()
+        collector_thread.join()
         """
         ids = 0
 
         def collect(ids):
-            self.logger.trace('collecting a profiles checkpoint')
             fname = self.sandbox + '/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
+            
             df1 = self.get_pod_status()
             df2 = self.get_pod_events()
             df = (pd.merge(df1, df2, on='Task_ID'))
-
             df.to_csv(fname)
+    
             self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
 
-
-        # iterate until the stop_event is triggered
+        # Iterate until the stop_event is triggered
         while not self.stop_event.is_set():
-            for t in range(3300, 0, -1):
+            for t in range(collect_every, 0, -1):
                 if t == 1:
-                    # save a checkpoint every ~ 55 minutes
+                    # Save a checkpoint every ~ 55 minutes
                     collect(ids)
 
-                # exit the loop if stop_event is true
+                # Exit the loop if stop_event is true
                 if self.stop_event.is_set():
                     break
 
@@ -692,14 +716,13 @@ class K8sCluster:
                     time.sleep(SLEEP)
 
             ids +=1
-        # if we exist, then save a checkpoint as well
+        # Save a checkpoint if the thread exits
         collect(ids)
 
 
     # --------------------------------------------------------------------------
     #
     def get_worker_nodes(self):
-
         first_vm = self.vms[0]
         server_names = [server.name for server in first_vm.Servers[1:]] + \
         [server.name for vm in self.vms[1:] for server in vm.Servers]
@@ -713,6 +736,37 @@ class K8sCluster:
         raise NotImplementedError('adding node to a running K8s cluster'
                                    'is not implemented yet')
 
+
+    # --------------------------------------------------------------------------
+    #
+    def get_instance_resources(self, vm):
+
+        vcpus, memory, storage = 0, 0, 0
+        if not isinstance(vm, OpenStackVM):
+            raise TypeError(f'vm must be an instance of {OpenStackVM}')
+
+        for server in vm.Servers:
+            # update the cluster size based on each node
+            vcpus += server.flavor.vcpus
+            memory += server.flavor.ram
+            storage += server.flavor.disk
+        
+        return vcpus, memory, storage
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_cluster_allocatable_size(self):
+        # get the actual allocatalbe size of the cluster
+        # from kubectl get nodes -o json
+        size = {'vcpus': -1, 'memory': 0, 'storage': 0}
+        for vm in self.vms:
+            vm_size = self.get_instance_resources(vm)
+            size['vcpus'] += vm_size[0] * vm.MinCount
+            size['memory'] += vm_size[1] * vm.MinCount
+            size['storage'] += vm_size[2] * vm.MinCount
+
+        return size
 
     # --------------------------------------------------------------------------
     #
@@ -800,9 +854,6 @@ class AKSCluster(K8sCluster):
         first_vm = self.vms[0]
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
-
-        # FIXME: remove self.size
-        self.size = self.get_vm_size(first_vm) - 1
 
         cmd  = 'az aks create '
         cmd += f'-g {self.resource_group.name} '
@@ -912,54 +963,48 @@ class AKSCluster(K8sCluster):
 
     # --------------------------------------------------------------------------
     #
-    def get_vm_size(self, vm):
+    def get_instance_resources(self, vm):
         """
-        Get the number of vCPUs of a specified virtual machine
-        in a given region.
+        Retrieve the compute resources of Azure virtual machine instance.
 
-        Parameters
+        This function uses the Azure CLI to list available VM sizes
+        in a specified region and then searches for the VM size that
+        matches the given virtual machine's instance ID. It extracts
+        the number of virtual CPUs, memory, and storage of the VM size.
+
+        Parameters:
+        -----------
+            vm (VirtualMachine): An instance of the VirtualMachine class
+                                 containing information about the VM.
+
+        Returns:
         ----------
-        vm_id : str
-            The identifier of the virtual machine size.
+            tuple: A tuple containing the number of virtual CPUs, memory
+                   in MB, and storage size in MB.
 
-        region : str
-            The Azure region in which to look for the virtual machine size.
-
-        Returns
-        -------
-        int
-            The number of vCPUs for the specified virtual machine size.
+        Raises:
+        ----------
+            Exception: If the function fails to calculate the resources
+                       for the specified VM instance.
         """
-        vm_id = vm.InstanceID
-        region = vm.Region
+        if not isinstance(vm, AzureVM):
+            raise TypeError(f'vm must be an instance of {AzureVM}')
 
-        # obtain all of the vms in this region
-        cmd = 'az vm list-sizes --location {0}'.format(region)
-        vms, _, _ = sh_callout(cmd, shell=True, munch=True)
+        cmd = f"az vm list-sizes -l {vm.Region} -o json "
+        cmd += f"--query \"[?name=='{vm.InstanceID}']\""
 
-        vcpus = 0
-        # get the coresponding info of the targeted vm
-        for vm in vms:
-            name = vm.get('name', None)
-            if name == vm_id:
-                vcpus = vm['numberOfCores']
-                break
-        if not vcpus:
-            raise Exception('Can not find VM size')
-        return vcpus
+        out, _, _ = sh_callout(cmd, shell=True, munch=True)
 
+        vm_size = out[0]
+        vcpus = vm_size.get('numberOfCores', 0)
+        memory = vm_size.get('memoryInMb', 0) / 1024 # MB to Gi
+        storage = vm_size.get('osDiskSizeInMb', 0)
 
-    # --------------------------------------------------------------------------
-    #
-    def submit(self, ctasks):
+        if not vcpus and not memory and not storage:
+            raise Exception(f'failed to  calaulte {vm.InstanceID} size')
 
-        deployment_file, pods_names, batches = super().submit(ctasks)
+        return vcpus, memory, storage
 
-        # start the profiles thread
-        super().collect_profiles()
-
-        return deployment_file, pods_names, batches
-    
 
     # --------------------------------------------------------------------------
     #
@@ -1082,9 +1127,6 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        # FIXME: remove self.size
-        self.size = self.get_vm_size(first_vm) - 1
-
         print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
 
         # step-1 Create EKS cluster control plane
@@ -1179,12 +1221,10 @@ class EKSCluster(K8sCluster):
 
         vm.NodeGroupName = ng_name
 
-        return True if ret == 0 else False
-
 
     # --------------------------------------------------------------------------
     #
-    def get_vm_size(self, vm):
+    def get_instance_resources(self, vm):
         """
         Get the number of vCPUs for a specified virtual machine.
 
@@ -1198,48 +1238,20 @@ class EKSCluster(K8sCluster):
         int
             The number of vCPUs for the specified virtual machine.
         """
+        if not isinstance(vm, AwsVM):
+            raise TypeError(f'vm must be an instance of {AwsVM}')
 
-        vm_id = vm.InstanceID
+        response = self.ec2.describe_instance_types(
+            InstanceTypes=[vm.InstanceID])
+        if response:
+            vm_size = response['InstanceTypes'][0]
+            vcpus = vm_size['VCpuInfo']['DefaultVCpus']
 
-        product_pager = self.prc.get_paginator('get_products')
+            # Mib to Gi
+            memory = vm_size['MemoryInfo']['SizeInMiB'] / 1000
+            storage = vm_size['InstanceStorageInfo']['TotalSizeInGB']
 
-        product_iterator = product_pager.paginate(
-            ServiceCode='AmazonEC2', Filters=[
-                # We're gonna assume N. Virginia has all the available types
-                {'Type': 'TERM_MATCH', 'Field': 'location',
-                 'Value': 'US East (N. Virginia)'},])
-
-        vcpus = 0
-        for product_item in product_iterator:
-            for offer_string in product_item.get('PriceList'):
-                offer = json.loads(offer_string)
-                product = offer.get('product')
-
-                # Check if it's an instance
-                if product.get('productFamily') not in ['Dedicated Host',
-                                                        'Compute Instance',
-                                                        'Compute Instance (bare metal)']:
-                    continue
-
-                product_attributes = product.get('attributes')
-                instance_type = product_attributes.get('instanceType')
-                if instance_type == vm_id:
-                    vcpus = product_attributes.get('vcpu')
-                    if not vcpus:
-                        raise Exception('could not find VM size')
-                    return int(vcpus)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def submit(self, ctasks):
-
-        deployment_file, pods_names, batches = super().submit(ctasks)
-
-        # start the profiles thread
-        super().collect_profiles()
-
-        return deployment_file, pods_names, batches
+        return vcpus, memory, storage
 
 
     # --------------------------------------------------------------------------

@@ -88,7 +88,8 @@ class AwsCaas:
         self._ec2_resource = self._create_ec2_resource(cred)
         self._dydb_resource = self._create_dydb_resource(cred)
 
-        self.start_thread = threading.Thread(target=self.start, name='AwsCaaS')
+        self.start_thread = threading.Thread(target=self.start,
+                                             name='AwsCaaS')
         self.start_thread.daemon = True
 
         if not self.start_thread.is_alive():
@@ -164,8 +165,11 @@ class AwsCaas:
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
         
-        self.wait_thread = threading.Thread(target=self._wait_tasks, name='AwSCaaSWatcher')	
+        self.wait_thread = threading.Thread(target=self._wait_tasks,
+                                            name='AwSCaaSWatcher')	
         self.wait_thread.daemon = True
+        if not self.asynchronous and not self.wait_thread.is_alive():
+            self.wait_thread.start()
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -190,9 +194,6 @@ class AwsCaas:
                 else:
                     self.submit(bulk, self.ecs)
 
-                if not self.asynchronous:
-                    if not self.wait_thread.is_alive():
-                        self.wait_thread.start()
                 bulk = list()
 
 

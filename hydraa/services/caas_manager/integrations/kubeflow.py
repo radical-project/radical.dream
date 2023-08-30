@@ -49,7 +49,7 @@ class Kubeflow:
             self.cluster.logger.error('Kubeflow MPI operator installation failed: {0}\
                                       '.format(err))
         else:
-            self.cluster.logger.trace('Kubeflow MPI operator installed'
+            self.cluster.logger.trace('Kubeflow MPI operator installed '
                                       'succfully on {0}'.format(self.cluster.name))
 
     # --------------------------------------------------------------------------

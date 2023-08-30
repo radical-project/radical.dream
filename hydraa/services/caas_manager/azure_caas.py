@@ -84,12 +84,13 @@ class AzureCaas:
         self.outgoing_q = queue.Queue()
         self._terminate = threading.Event()
 
-        self.start_thread = threading.Thread(target=self.start, name='AzureCaaS')
+        self.start_thread = threading.Thread(target=self.start,
+                                             name='AzureCaaS')
         self.start_thread.daemon = True
 
         if not self.start_thread.is_alive():
             self.start_thread.start()
-        
+
         # now set the manager as active
         self.status = True
 
@@ -145,6 +146,8 @@ class AzureCaas:
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='AzureCaaSWatcher')
         self.wait_thread.daemon = True
+        if not self.asynchronous and not self.wait_thread.is_alive():
+            self.wait_thread.start()
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -168,10 +171,6 @@ class AzureCaas:
                     self.submit_to_aks(bulk)
                 else:
                     self.submit(bulk)
-
-                if not self.asynchronous:
-                    if not self.wait_thread.is_alive():
-                        self.wait_thread.start()
                 bulk = list()
 
 
@@ -438,9 +437,6 @@ class AzureCaas:
     #
     def _wait_tasks(self):
 
-        if self.asynchronous:
-            raise Exception('Task wait is not supported in asynchronous mode')
-
         marked_tasks = set()
 
         while not self._terminate.is_set():
@@ -452,8 +448,8 @@ class AzureCaas:
 
             if statuses:
                 msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
-                                                                   len(statuses['stopped']),
-                                                                   len(statuses['running']))
+                                                                    len(statuses['stopped']),
+                                                                    len(statuses['running']))
 
                 for task in self._tasks_book.values():
                     if task in marked_tasks:

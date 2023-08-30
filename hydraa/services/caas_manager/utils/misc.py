@@ -28,12 +28,36 @@ AWS_CHAR_LIMIT = 100
 AZURE_CHAR_LIMIT = 80
 
 
-def sh_callout(cmd, stdout=True, stderr=True, shell=False, env=None, munch=False, kube=None):
-    '''
-    call a shell command, return `[stdout, stderr, retval]`.
-    '''
+def sh_callout(cmd, stdout=True, stderr=True,
+               shell=False, env=None, munch=False, kube=None):
+    """
+    Execute a shell command and return its output, error, and return code.
+
+    This function executes a shell command and captures its standard output,
+    standard error, and return code. It can also process the command output
+    to convert it into a Python dictionary (munch).
+
+    Parameters:
+    -----------
+        cmd (str or list): The command to execute as a string or list of arguments.
+        stdout (bool): Capture standard output if True (default: True).
+        stderr (bool): Capture standard error if True (default: True).
+        shell (bool): Run the command in a shell if True (default: False).
+        env (dict): Environment variables to pass to the command (default: None).
+        munch (bool): Process output into a dictionary (default: False).
+        kube (KubeConfig): An instance of the KubeConfig class (default: None).
+
+    Returns:
+    ----------
+        tuple: A tuple containing the standard output, standard error, and return
+               code of the executed command.
+
+    Raises:
+    ----------
+        CalledProcessError: If the command exits with a non-zero status code.
+    """
     if kube:
-        if AWS in kube.name or AZURE in kube.name:
+        if AWS in kube.provider or AZURE in kube.provider:
             cmd = inject_kubeconfig(cmd, kube.kube_config,
                                     local_bind_port=None)
         else:
@@ -309,7 +333,7 @@ def download_files(urls, destination):
 
 # --------------------------------------------------------------------------
 #
-def convert_time(self, timestamp):
+def convert_time(timestamp):
 
     t  = datetime.datetime.strptime(timestamp, TFORMAT)
     ts = time.mktime(t.timetuple())

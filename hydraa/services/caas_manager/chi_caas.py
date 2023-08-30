@@ -80,7 +80,8 @@ class ChiCaas:
 
         self._terminate = threading.Event()
 
-        self.start_thread = threading.Thread(target=self.start, name='ChiCaaS')
+        self.start_thread = threading.Thread(target=self.start,
+                                             name='ChiCaaS')
         self.start_thread.daemon = True
 
         if not self.start_thread.is_alive():
@@ -141,7 +142,8 @@ class ChiCaas:
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='ChiCaaSWatcher')
         self.wait_thread.daemon = True
-
+        if not self.asynchronous and not self.wait_thread.is_alive():
+            self.wait_thread.start()
 
         while not self._terminate.is_set():
             now = time.time()  # time of last submission
@@ -162,10 +164,6 @@ class ChiCaas:
 
             if bulk:
                 self.submit(bulk)
-
-            if not self.asynchronous:
-                if not self.wait_thread.is_alive():
-                    self.wait_thread.start()
 
             bulk = list()
 
