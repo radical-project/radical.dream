@@ -745,12 +745,10 @@ class K8sCluster:
         if not isinstance(vm, OpenStackVM):
             raise TypeError(f'vm must be an instance of {OpenStackVM}')
 
-        for server in vm.Servers:
-            # update the cluster size based on each node
-            vcpus += server.flavor.vcpus
-            memory += server.flavor.ram
-            storage += server.flavor.disk
-        
+        vcpus = vm.Server[0].flavor.vcpus
+        memory = vm.Server[0].flavor.ram
+        storage = vm.Server[0].flavor.disk
+
         return vcpus, memory, storage
 
 
