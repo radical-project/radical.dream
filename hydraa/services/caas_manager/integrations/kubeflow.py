@@ -181,31 +181,31 @@ class Kubeflow:
     # --------------------------------------------------------------------------
     #
     def build_mpi_deployment(self, mpi_tasks):
-    
+
         combined_deployments = []
         loc = os.path.join(os.path.dirname(__file__))
         loc += "/kubeflow_template.yaml"
-    
+
         kf_template = load_yaml(loc)
-    
+
         for mpi_task in mpi_tasks:
-    
+
             kf_task = copy.deepcopy(kf_template)
-            kf_task["metadata"]["name"] += "-" + mpi_task.name
-    
+            kf_task["metadata"]["name"] = mpi_task.name
+
             slots = mpi_task.mpi_setup['slots']
             workers = mpi_task.mpi_setup['workers']
-           
+
             # FIXME: this function should be part of class: Kubeflow
             if not mpi_task.mpi_setup["scheduler"]:
                 kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
             else:
                 raise NotImplementedError("scheduler specfication not implmented yet")
-    
+
             kf_task['spec']['slotsPerWorker'] = slots
             worker = kf_task['spec']['mpiReplicaSpecs']['Worker']
             launcher = kf_task['spec']['mpiReplicaSpecs']['Launcher']
-    
+
             worker['replicas'] = workers
             worker['template']['spec']['containers'][0]['image'] = mpi_task.image
 
@@ -216,17 +216,17 @@ class Kubeflow:
             # mpi task memory request
             worker['template']['spec']['containers'][0]['resources']['limits']['memory'] = str(mpi_task.memory)+'Mi'
             worker['template']['spec']['containers'][0]['resources']['requests']['memory'] = str(mpi_task.memory)+'Mi'
-    
+
             user_cmd_list = mpi_task.cmd.split(" ")
             temp_cmd = launcher['template']['spec']['containers'][0]['command']
             temp_cmd.insert(3, str(mpi_task.vcpus))
             temp_cmd.extend(user_cmd_list)
-    
+
             launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
             launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
-    
+
             combined_deployments.append(kf_task)
-    
+
         return combined_deployments
 
 # --------------------------------------------------------------------------

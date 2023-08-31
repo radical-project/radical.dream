@@ -1,9 +1,9 @@
 apiVersion: kubeflow.org/v2beta1
 kind: MPIJob
 metadata:
-  name: hydraa-mpi
+  name: task-name
 spec:
-  slotsPerWorker: 7 # node size in terms of CPUs - 1
+  slotsPerWorker: 7 # $(OMP_NUM_THREADS) node size in terms of CPUs - 1
   runPolicy:
     cleanPodPolicy: Running
   sshAuthMountPath: /home/mpiuser/.ssh
