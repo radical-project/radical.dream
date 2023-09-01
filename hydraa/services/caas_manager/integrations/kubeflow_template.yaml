@@ -12,6 +12,9 @@ spec:
       replicas: 1
       restartPolicy: OnFailure
       template:
+        metadata:
+          labels: # we use lables to obtain the launcher pod logs
+             task_label: task-name
         spec:
           containers:
           - image: test

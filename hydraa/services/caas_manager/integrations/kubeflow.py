@@ -224,6 +224,9 @@ class Kubeflow:
 
             launcher['template']['spec']['containers'][0]['name'] = mpi_task.name
             launcher['template']['spec']['containers'][0]['image'] = mpi_task.image
+            
+            # label the launcher pod with the task name since this pod holds all the logs
+            launcher['template']['metadata']['labels']['task_label'] = mpi_task.name
 
             combined_deployments.append(kf_task)
 

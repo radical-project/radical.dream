@@ -213,7 +213,8 @@ def generate_id(prefix, length=8):
 def build_pod(batch: list, pod_id):
 
     pod_name = "hydraa-pod-{0}".format(pod_id)
-    pod_metadata = client.V1ObjectMeta(name = pod_name)
+    pod_metadata = client.V1ObjectMeta(name = pod_name,
+                                       labels={"task_label": pod_name})
 
     # build n container(s)
     containers = []
