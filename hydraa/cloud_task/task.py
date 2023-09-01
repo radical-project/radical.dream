@@ -1,15 +1,13 @@
 import copy
 
 from typing import List
-from typing import Union
 from typing import Optional
 from typing import OrderedDict
-
 from concurrent.futures import Future
-from ..services.data.volumes import PersistentVolume
-from ..services.data.volumes import PersistentVolumeClaim
 
 
+# --------------------------------------------------------------------------
+#
 class Task(Future):
     """Base class for a cloud Task instance.
     Task class representing a computational task in a workload/workflow.
@@ -106,8 +104,7 @@ class Task(Future):
         self.restart: Optional[bool] = None
         self.inputs: Optional[List[str]] = []
         self.outputs: Optional[List[str]] = []
-        self.volume   : Optional[Union[PersistentVolume,
-                                       PersistentVolumeClaim]] = None
+        self.volume   : Optional[List] = None
 
 
     # --------------------------------------------------------------------------

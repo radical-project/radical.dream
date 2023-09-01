@@ -45,15 +45,17 @@ PFAILED_STATE = ['OutOfCPU','OutOfMemory',
 SLEEP = 2
 BUSY = 'Busy'
 READY = 'Ready'
-MAX_PODS = 250
+MAX_PODS = 110
+MAX_POD_LOGS_LENGTH = 1000000
+
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
 KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-TASK_PREFIX = ['hydraa-', 'hydraa-launcher']
-MAX_POD_LOGS_LENGTH = 1000000
+TASK_PREFIX = ['hydraa', 'ctask']
+
 
 # --------------------------------------------------------------------------
 #
@@ -518,6 +520,7 @@ class K8sCluster:
             statuses (list): a list of list for all of the task statuses.
         """
 
+        # FIXME: use batch labels to get the status of the tasks
         cmd = "kubectl get pods -A -o json"
         response = None
 
