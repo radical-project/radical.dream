@@ -163,17 +163,20 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port=None):
     the endpoint and TLS settings to connect to a locally running
     Kubernetes API server.
 
-    Args:
+    Parameters:
+    -----------
         cmd (str): The original kubectl command to be modified.
         kube_config (str): The path to the custom kubeconfig file.
         local_bind_port (int): The local port to which the Kubernetes
         API server is bound.
 
     Returns:
+    ----------
         str: The modified kubectl command with the custom kubeconfig and
         endpoint settings.
 
     Raises:
+    ----------
         None
     """
     cmd = cmd.split()
@@ -213,17 +216,15 @@ def generate_id(prefix, length=8):
 def build_pod(batch: list, pod_id):
 
     pod_name = "hydraa-pod-{0}".format(pod_id)
-    pod_metadata = client.V1ObjectMeta(name = pod_name,
+    pod_metadata = client.V1ObjectMeta(name=pod_name,
                                        labels={"task_label": pod_name})
 
-    # build n container(s)
     containers = []
-    
     for ctask in batch:
         envs = []
         if ctask.env_var:
             for env in ctask.env_vars:
-                pod_env  = client.V1EnvVar(name = env[0], value = env[1])
+                pod_env  = client.V1EnvVar(name=env[0], value=env[1])
                 envs.append(pod_env)
 
         pod_cpu = "{0}m".format(ctask.vcpus * 1000)
@@ -234,8 +235,10 @@ def build_pod(batch: list, pod_id):
             volume = client.V1VolumeMount(name=ctask.volume.name+'-workdir',
                                           mount_path=ctask.volume.host_path)
 
-        resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu, "memory": pod_mem},
-                                                limits={"cpu": pod_cpu, "memory": pod_mem})
+        resources=client.V1ResourceRequirements(requests={"cpu": pod_cpu,
+                                                          "memory": pod_mem},
+                                                limits={"cpu": pod_cpu,
+                                                        "memory": pod_mem})
 
         container = client.V1Container(name=ctask.name, image=ctask.image,
                                        args=ctask.args, resources=resources,
@@ -250,11 +253,10 @@ def build_pod(batch: list, pod_id):
     else:
         restart_policy = 'Never'
 
-    pod_spec  = client.V1PodSpec(containers=containers, 
+    pod_spec = client.V1PodSpec(containers=containers, 
                                  restart_policy=restart_policy)
-
-    pod_obj   = client.V1Pod(api_version="v1", kind="Pod",
-                    metadata=pod_metadata, spec=pod_spec)
+    pod_obj = client.V1Pod(api_version="v1", kind="Pod",
+                           metadata=pod_metadata, spec=pod_spec)
 
     # sanitize the json object
     sn_pod = client.ApiClient().sanitize_for_serialization(pod_obj)

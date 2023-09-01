@@ -763,7 +763,7 @@ class K8sCluster:
         # as an internal label of the pod/container (task) to get the logs.
 
         cmd = f'kubectl logs -l task_label={pod.name}'
-        cmd += f' --tail=1000000 {MAX_POD_LOGS_LENGTH}'
+        cmd += f' --tail={MAX_POD_LOGS_LENGTH}'
         out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
         if ret:
