@@ -142,12 +142,9 @@ class AwsCaas:
         
         # check if this is an EKS service
         if self.launch_type in EKS:
-            self.cluster = kubernetes.EKSCluster(run_id=self.run_id,
-                                                 sandbox=self.sandbox,
-                                                 vms=self.vms, iam=self._iam_client,
-                                                 rclf=self._clf_resource, clf=self._clf_client,
-                                                 ec2=self._ec2_resource, eks=self._eks_client,
-                                                 prc=self._prc_client, log=self.logger)
+            self.cluster = kubernetes.EKSCluster(self.run_id, self.sandbox,
+                                                 self.vms, self._ec2_client,
+                                                 self.logger)
             self.cluster.bootstrap()
 
         self.runs_tree[self.run_id] = self._family_ids
@@ -164,7 +161,7 @@ class AwsCaas:
         max_bulk_size = 1000000
         max_bulk_time = 2        # seconds
         min_bulk_time = 0.1      # seconds
-        
+
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='AwSCaaSWatcher')	
         self.wait_thread.daemon = True
@@ -224,7 +221,7 @@ class AwsCaas:
                                                                  len(stopped)))
         if running or pending:
             print('run: {0} is running'.format(run_id))
-        
+
         if all([status == 'STOPPED' for status in run_stat]):
             print('run: {0} is finished'.format(run_id))
 

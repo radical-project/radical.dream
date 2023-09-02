@@ -1166,18 +1166,11 @@ class EKSCluster(K8sCluster):
     EKSCTL = shutil.which('eksctl')
     IAM_AUTH = shutil.which('aws-iam-authenticator')
 
-    def __init__(self, run_id, sandbox, vms,
-                 iam, rclf, clf, ec2, eks, prc, log):
+    def __init__(self, run_id, sandbox, vms, ec2, log):
 
         self.id = run_id
         self.config = None
-
-        self.iam = iam
-        self.clf = clf
-        self.ec2 = ec2
-        self.eks = eks
-        self.prc = prc
-        self.rclf = rclf
+        self.ec2_client = ec2
 
         super().__init__(run_id, vms, sandbox, log)
         self.name = generate_id(prefix='h-aws-eks-cluster')
@@ -1222,7 +1215,7 @@ class EKSCluster(K8sCluster):
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
-        cmd += f'--region {first_vm.Region}'
+        cmd += f'--region {first_vm.Region} '
         cmd += f'--nodegroup-name {ng_name} --nodes {first_vm.MinCount} '
         cmd += f'--node-type {first_vm.InstanceID} '
         cmd += f'--nodes-min {first_vm.MinCount} '
@@ -1332,15 +1325,19 @@ class EKSCluster(K8sCluster):
         if not isinstance(vm, AwsVM):
             raise TypeError(f'vm must be an instance of {AwsVM}')
 
-        response = self.ec2.describe_instance_types(
+        response = self.ec2_client.describe_instance_types(
             InstanceTypes=[vm.InstanceID])
         if response:
             vm_size = response['InstanceTypes'][0]
             vcpus = vm_size['VCpuInfo']['DefaultVCpus']
+            memory = vm_size['MemoryInfo']['SizeInMiB'] / 1000 # Mib to Gi
 
-            # Mib to Gi
-            memory = vm_size['MemoryInfo']['SizeInMiB'] / 1000
-            storage = vm_size['InstanceStorageInfo']['TotalSizeInGB']
+            # some instance types with EBS only do not have storage
+            storage = vm_size.get('InstanceStorageInfo', {})
+            if storage:
+                storage = storage.get('TotalSizeInGB', 0)
+            else:
+                storage = 0
 
         return vcpus, memory, storage
 
