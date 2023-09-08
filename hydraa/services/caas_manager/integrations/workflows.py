@@ -128,15 +128,21 @@ class Workflow:
         if ret:
             self.cluster.logger.error('checking for Argo CRD failed: {0}\
                                       '.format(err))
+            return
 
-        elif out and "argo-server" not in out:
+        elif out and "argo-server" in out:
+            self.cluster.logger.info('workflow backend [Argo] is already '\
+                                     'installed')
+
+        else:
             out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
             if ret:
                 self.cluster.logger.error('installing Argo failed: {0}\
                                           '.format(err))
+                return
             else:
                 self.cluster.logger.info('workflow backend [Argo] '\
-                                         'is installed: {0}'.format(out))
+                                         'installed: {0}'.format(out))
 
 
     # --------------------------------------------------------------------------
