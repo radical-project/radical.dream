@@ -119,11 +119,11 @@ class Workflow:
     def _setup_argo(self) -> None:
 
         cmd = "kubectl create namespace argo ;"
-        cmd += "kubectl apply -n argo -f"
+        cmd += "kubectl apply -n argo -f "
         cmd += "https://github.com/argoproj/argo-workflows/" \
                "releases/download/v3.4.9/install.yaml"
 
-        out, err, ret = sh_callout('kubectl get crd', shell=True,
+        out, err, ret = sh_callout('kubectl get svc -n argo', shell=True,
                                    kube=self.cluster)
         if ret:
             self.cluster.logger.error('checking for Argo CRD failed: {0}\
@@ -131,6 +131,12 @@ class Workflow:
 
         elif out and "argo-server" not in out:
             out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
+            if ret:
+                self.cluster.logger.error('installing Argo failed: {0}\
+                                          '.format(err))
+            else:
+                self.cluster.logger.info('workflow backend [Argo] '\
+                                         'is installed: {0}'.format(out))
 
 
     # --------------------------------------------------------------------------
@@ -177,7 +183,6 @@ class Workflow:
         else:
             raise Exception('exchanging outputs between workflows tasks'
                             'requires an exisiting volume to be specified')
-
 
 
 # --------------------------------------------------------------------------

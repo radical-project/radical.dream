@@ -1132,7 +1132,8 @@ class AwsCaas:
     # --------------------------------------------------------------------------
     #
     def _shutdown(self):
-        """Shut everything down and delete task/service/instance/cluster"""
+        """Shutdown and delete task/service/instance/cluster
+        """
 
         if not (self.cluster_name and self.status):
             return
@@ -1173,18 +1174,16 @@ class AwsCaas:
                     self.logger.trace("terminating instance {0}".format(istance_id))
                     self._ec2_client.terminate_instances(DryRun=False,
                                                          InstanceIds=[istance_id])
-                    
+
                     waiter = self._ec2_client.get_waiter('instance_terminated')
                     waiter.wait(InstanceIds=[istance_id])
 
             # step-3 delete the ECS cluster
             self._ecs_client.delete_cluster(cluster=self.cluster_name)
             self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
-        
+
         if self.launch_type in EKS:
             self.cluster.shutdown()
 
         self.cluster_name = None
         self.status = False
-        
-

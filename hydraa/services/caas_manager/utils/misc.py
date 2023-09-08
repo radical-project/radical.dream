@@ -182,20 +182,18 @@ def inject_kubeconfig(cmd, kube_config, local_bind_port=None):
     cmd = cmd.split()
 
     for idx, c in enumerate(cmd):
-        if c == 'kubectl':
-            break
+        if 'kubectl' in c:
+            # insert port and endpoint settings for JET2 and CHI
+            if local_bind_port:
+                kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
+                kube_skip_tls = '--insecure-skip-tls-verify'
+                cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
+                                                                    kube_endpoint,
+                                                                    kube_config))
 
-    # insert port and endpoint settings for JET2 and CHI
-    if local_bind_port:
-        kube_endpoint = '--server=https://localhost:{0}'.format(local_bind_port)
-        kube_skip_tls = '--insecure-skip-tls-verify'
-        cmd.insert(idx+1, '{0} {1} --kubeconfig {2}'.format(kube_skip_tls,
-                                                            kube_endpoint,
-                                                            kube_config))
-    
-    # insert only kubeconfig for AWS and Azure
-    else:
-        cmd.insert(idx+1, '--kubeconfig {0}'.format(kube_config))
+            # insert kubeconfig only for AWS and Azure
+            else:
+                cmd.insert(idx+1, '--kubeconfig {0}'.format(kube_config))
 
     cmd = ' '.join(cmd)
 
