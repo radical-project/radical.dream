@@ -278,6 +278,10 @@ class ContainerSetWorkflow(Workflow):
 
         for task in (self.tasks):
             c = build_pod([task], task.id)['spec']['containers'][0]
+            if c.get('volumeMounts'):
+                raise Exception('containerSet does not support volumeMounts '\
+                                 'on the invidiual containers')
+
             if task.get_dependency():
                 deps = [dep.name for dep in task.get_dependency()]
                 c['dependencies'] = deps
