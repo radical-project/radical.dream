@@ -77,7 +77,7 @@ class AzureCaas:
         os.mkdir(self.sandbox, 0o777)
         self.profiler = prof(name=__name__, path=self.sandbox)
 
-        self.res_client  = self._create_resource_client(cred)
+        self.res_client = self._create_resource_client(cred)
         self.con_client = self._create_container_client(cred)
 
         self.incoming_q = queue.Queue()
@@ -167,7 +167,7 @@ class AzureCaas:
                         break
 
             if bulk:
-                if self.launch_type  in AKS:
+                if self.launch_type in AKS:
                     self.submit_to_aks(bulk)
                 else:
                     self.submit(bulk)
@@ -531,7 +531,7 @@ class AzureCaas:
             print('pandas module required to obtain profiles')
         
         
-        if self.launch_type  in AKS:
+        if self.launch_type in AKS:
             pod_stamps  = self.cluster.get_pod_status()
             task_stamps = self.cluster.get_pod_events()
             fname = '{0}/{1}_{2}_ctasks.csv'.format(self.sandbox,

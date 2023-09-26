@@ -98,7 +98,7 @@ class ChiCaas:
 
         self.keypair = self.create_or_find_keypair()
 
-        if self.launch_type== 'KVM':
+        if self.launch_type == 'KVM':
             chi.use_site('KVM@TACC')
             self.profiler.prof('server_create_start', uid=self.run_id)
             self.servers = self.create_servers()
