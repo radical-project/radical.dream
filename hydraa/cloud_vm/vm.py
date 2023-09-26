@@ -10,28 +10,27 @@ OPTYPE = ['chameleon', 'jetstream2']
 #
 class AwsVM:
     def __init__(self, launch_type: str, image_id: str, min_count: int,
-                      max_count: int, instance_id: str, user_data: str, 
-                                profile: dict, zones=[],**input_kwargs):
+                 max_count: int, instance_id: str, zones=[], **input_kwargs):
 
-        self.VmName             = 'AWS_VM-{0}'.format(uuid.uuid4())
-        self.Provider           = 'aws'
-        self.ImageId            = image_id
-        self.MinCount           = min_count
-        self.MaxCount           = max_count
-        self.InstanceID         = instance_id
-        self.LaunchType         = launch_type
-        self.UserData           = user_data
-        self.IamInstanceProfile = profile
-        self.Zones              = zones
-        self.KeyPair            = input_kwargs.get('keypair', None)
-        self.TagSpecifications  = [{'ResourceType': 'instance',
-                                    'Tags'        : [{'Key'  :'Name',
-                                                      'Value': self.VmName}]}]
+        self.Zones = zones
+        self.Provider = 'aws'
+        self.VmName = 'AWS_VM-{0}'.format(uuid.uuid4())
+        self.ImageId = image_id
+        self.MinCount = min_count
+        self.MaxCount = max_count
+        self.InstanceID = instance_id
+        self.LaunchType = launch_type
+        self.KeyPair = input_kwargs.get('keypair', None)
+        self.UserData = input_kwargs.get('user_data', '')
+        self.IamInstanceProfile = input_kwargs.get('profile', '')
+        self.TagSpecifications = [{'ResourceType': 'instance',
+                                   'Tags'        : [{'Key':'Name',
+                                                     'Value': self.VmName}]}]
 
         if self.LaunchType not in LTYPE:
             raise Exception('LaunchType must be: {0}'.format(LTYPE))
 
-        self.input_kwargs       = input_kwargs
+        self.input_kwargs = input_kwargs
 
 
     # --------------------------------------------------------------------------
