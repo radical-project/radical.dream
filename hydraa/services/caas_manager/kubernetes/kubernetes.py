@@ -13,12 +13,12 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
-from .misc import build_pod
-from .misc import unique_id
-from .misc import sh_callout
-from .misc import generate_id
-from .misc import convert_time
-from .misc import dump_multiple_yamls
+from ..utils.misc import build_pod
+from ..utils.misc import unique_id
+from ..utils.misc import sh_callout
+from ..utils.misc import generate_id
+from ..utils.misc import convert_time
+from ..utils.misc import dump_multiple_yamls
 
 
 from ....cloud_vm.vm import AwsVM
@@ -187,9 +187,9 @@ class K8sCluster:
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
         nodes_map = self.create_nodes_map()
-        loc = os.path.join(os.path.dirname(__file__)).split('utils')[0]
+        loc = os.path.join(os.path.dirname(__file__))
+        boostrapper = "{0}/bootstrap_kubernetes.sh".format(loc)
 
-        boostrapper = "{0}config/bootstrap_kubernetes.sh".format(loc)
         self.control_plane.put(boostrapper)
 
         # bug in fabric: https://github.com/fabric/fabric/issues/323

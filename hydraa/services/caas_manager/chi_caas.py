@@ -17,7 +17,7 @@ from chi import server
 
 from collections import OrderedDict
 from hydraa.services.caas_manager.utils import ssh
-from hydraa.services.caas_manager.utils import kubernetes
+from hydraa.services.caas_manager.kubernetes import kubernetes
 
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'

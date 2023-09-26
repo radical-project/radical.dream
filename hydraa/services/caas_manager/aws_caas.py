@@ -12,7 +12,7 @@ import itertools as iter
 from datetime import datetime
 from collections import OrderedDict
 
-from hydraa.services.caas_manager.utils import kubernetes
+from hydraa.services.caas_manager.kubernetes import kubernetes
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 

@@ -27,7 +27,7 @@ from azure.mgmt.containerinstance.models import (ContainerGroup,
                                                  ResourceRequirements,
                                                  OperatingSystemTypes)
 
-from hydraa.services.caas_manager.utils import kubernetes
+from hydraa.services.caas_manager.kubernetes import kubernetes
 from hydraa.services.caas_manager.utils.misc import generate_id
 
 
