@@ -28,8 +28,8 @@ class Kubeflow:
     #
     def __init__(self, manager):
         self.manager = manager
-        self.update_lock = threading.Lock()
         self.cluster = self.manager.cluster
+        self.update_lock = threading.Lock()
 
     # --------------------------------------------------------------------------
     #
@@ -244,6 +244,24 @@ class KubeflowMPILauncher(Kubeflow):
         super().__init__(manager)
 
         self.start(scheduler)
+
+    # --------------------------------------------------------------------------
+    #
+    def calculate_kubeflow_workers(nodes, cpn, task):
+        num_workers = 0
+        total_cpus = nodes * cpn
+
+        if task.vcpus > total_cpus:
+            print('requested cpus > available cpus')
+            num_workers = 0
+
+        elif cpn < task.vcpus:
+            num_workers = math.ceil(task.vcpus / cpn)
+
+        elif cpn >= task.vcpus:
+            num_workers = 1
+
+        return {'workers': num_workers, 'slots': cpn}
 
     # --------------------------------------------------------------------------
     #

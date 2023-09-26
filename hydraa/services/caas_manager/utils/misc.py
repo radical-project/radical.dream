@@ -264,26 +264,6 @@ def build_pod(batch: list, pod_id):
 
 # --------------------------------------------------------------------------
 #
-def calculate_kubeflow_workers(nodes, cpn, task):
-    # FIXME: The work down need to be part of a
-    # ``SCHEDULER``.
-    num_workers = 0
-    total_cpus = nodes * cpn
-    
-    if task.vcpus > total_cpus:
-        print('Insufficient cpus to run container of size {0}'.format(task.vcpus))
-        return num_workers
-
-    if cpn < task.vcpus:
-        num_workers = math.ceil(task.vcpus / cpn)
-        return num_workers
-
-    elif cpn >= task.vcpus:
-        num_workers = 1
-
-
-# --------------------------------------------------------------------------
-#
 def load_yaml(fp, safe=True):
     with open(fp, "r") as file:
         if not safe:
@@ -291,6 +271,7 @@ def load_yaml(fp, safe=True):
         else:
             yaml_obj = yaml.safe_load(file)
     return yaml_obj
+
 
 # --------------------------------------------------------------------------
 #
