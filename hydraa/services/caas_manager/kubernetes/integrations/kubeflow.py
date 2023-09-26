@@ -133,14 +133,13 @@ class Kubeflow:
 
         dump_multiple_yamls(kueue_ki, files[1])
 
-        # FIXME (logic issue): we can not invoke 2 Kubectl commands conccurently as our
-        # "inject_kube_config" (invoked by sh_callout) can apply the cluster
-        # config to one cmd at a time
+        # TODO: inject config now accepts multiple kubectl command
+        # we need to change our approach below to use that functionality.
         ret = None
         for idx, file in enumerate(files):
             out, err, ret = sh_callout("kubectl apply -f {0}".format(file),
                                        shell=True, kube=self.cluster)
-            # reprot the error for any command
+            # report the error for any command
             if ret:
                 self.cluster.logger.error(err)
 
@@ -196,7 +195,6 @@ class Kubeflow:
             slots = mpi_task.mpi_setup['slots']
             workers = mpi_task.mpi_setup['workers']
 
-            # FIXME: this function should be part of class: Kubeflow
             if not mpi_task.mpi_setup["scheduler"]:
                 kf_task["metadata"]["labels"] = {"kueue.x-k8s.io/queue-name": "user-queue"}
             else:

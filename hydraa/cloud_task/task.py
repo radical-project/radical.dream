@@ -100,11 +100,11 @@ class Task(Future):
         self.port: Optional[int] = None
         self.state: Optional[str] = None
         self.image: Optional[str] = None
+        self.volume: Optional[List] = None
         self.env_var: Optional[str] = None
         self.restart: Optional[bool] = None
         self.inputs: Optional[List[str]] = []
         self.outputs: Optional[List[str]] = []
-        self.volume   : Optional[List] = None
 
 
     # --------------------------------------------------------------------------
