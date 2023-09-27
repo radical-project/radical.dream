@@ -659,5 +659,5 @@ class AzureCaas:
         if self.cluster:
             self.cluster.shutdown()
 
-        self.resource_group_name = None
         self.status = False
+        self.resource_group_name = None

@@ -1231,8 +1231,7 @@ class EKSCluster(K8sCluster):
         out, err, ret = sh_callout(cmd, shell=True)
 
         if ret:
-            raise Exception('failed to build {0}: {1}'.format(self.name,
-                                                              err))
+            raise Exception('failed to build {0}: {1}'.format(self.name, err))
 
         # step-2 Check if we have a single type or multiple types of vms
         if varied_vms and len(self.vms) > 1:
@@ -1241,7 +1240,6 @@ class EKSCluster(K8sCluster):
                 self.add_node_group(vm)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
-
         self.status = READY
 
         print('{0} is in {1} state'.format(self.name, self.status))
