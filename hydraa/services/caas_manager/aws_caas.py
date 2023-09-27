@@ -1135,7 +1135,7 @@ class AwsCaas:
         """Shutdown and delete task/service/instance/cluster
         """
 
-        if not (self.cluster_name and self.status):
+        if not (self.cluster or self.cluster_name and self.status):
             return
 
         self.logger.trace("termination started")
@@ -1184,6 +1184,7 @@ class AwsCaas:
 
         if self.launch_type in EKS:
             self.cluster.shutdown()
+            self.cluster = None
 
-        self.cluster_name = None
         self.status = False
+        self.cluster_name = None
