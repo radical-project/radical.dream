@@ -363,8 +363,10 @@ class K8sCluster:
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
         if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} > {1}/apply_output.log 2>&1 </dev/null &'.\
-                   format(deployment_file, self.sandbox)
+            cmd = 'nohup kubectl apply -f {0} >> {1}'.format(deployment_file,
+                                                            self.sandbox)
+            cmd += '/apply_output.log 2>&1 </dev/null &'
+                   
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
