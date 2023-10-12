@@ -220,6 +220,7 @@ def build_pod(batch: list, pod_id):
     containers = []
     for ctask in batch:
         envs = []
+        ctask.pod_name = pod_name
         if ctask.env_var:
             for env in ctask.env_vars:
                 pod_env  = client.V1EnvVar(name=env[0], value=env[1])

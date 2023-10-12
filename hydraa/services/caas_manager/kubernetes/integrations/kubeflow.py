@@ -281,6 +281,7 @@ class KubeflowMPILauncher(Kubeflow):
         for task in tasks:
             task.id = str(self.manager._task_id)
             task.name = 'ctask-{0}'.format(self.manager._task_id)
+            task.pod_name = task.name
             task.type = 'pod.mpi'
             task.mpi_setup = {"workers": num_workers,
                               "slots": slots_per_worker,

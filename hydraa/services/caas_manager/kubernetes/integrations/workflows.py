@@ -121,9 +121,6 @@ class Workflow:
             if t['metadata'].get('name') == self.wf_type.lower():
                 self.argo_template = t
 
-        # FIXME: entrypoint must be the same as the wf_name
-        self.argo_template['spec']['entrypoint'] = self.name
-
 
     # --------------------------------------------------------------------------
     #
@@ -168,6 +165,7 @@ class Workflow:
         # set the workflow name
         wf_name = 'hydraa-' + self.name + '-' + str(self._workflows_counter)
         self.argo_object['metadata']['name'] = wf_name
+        self.argo_object['spec']['entrypoint'] = wf_name
 
         # iterate on each task in the tasks list
         for task in self.tasks:

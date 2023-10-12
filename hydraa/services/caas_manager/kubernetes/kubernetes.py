@@ -292,13 +292,10 @@ class K8sCluster:
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
-
         deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
                                                             unique_id())
 
         for ctask in ctasks:
-            pod_id = str(self.pod_counter).zfill(6)
-
             # Single Container Per Pod 
             # (use kubernetes default scheduler here)
             if not ctask.type or ctask.type in POD:
@@ -307,7 +304,6 @@ class K8sCluster:
             # Multiple Containers Per Pod. 
             # TODO: use orhestrator.scheduler
             elif ctask.type in CONTAINER:
-                ctask.pod_name = "hydraa-pod-{0}".format(pod_id)
                 mcpp.append(ctask)
 
         if mcpp:
@@ -318,19 +314,20 @@ class K8sCluster:
             self.profiler.prof('schedule_pods_stop', uid=self.id)
 
             for batch in batches:
-                pod = build_pod(batch, pod_id)
-                _mcpp.append(pod)
                 self.pod_counter +=1
+                pod = build_pod(batch, str(self.pod_counter).zfill(6))
+                _mcpp.append(pod)
             dump_multiple_yamls(_mcpp, deployment_file)
 
         if scpp:
             _scpp = []
             for task in scpp:
-                pod = build_pod([task], pod_id)
-                _scpp.append(pod)
                 self.pod_counter +=1
+                pod = build_pod([task], str(self.pod_counter).zfill(6))
+                _scpp.append(pod)
             dump_multiple_yamls(_scpp, deployment_file)
 
+        # FIXME: why are we returning two empty lists?
         return deployment_file, [], []
 
 
@@ -743,6 +740,9 @@ class K8sCluster:
             The Task object or name of the task to get logs for
         save : bool, optional
             Whether to save the task logs to a file, by default False
+        related_containers: bool, optional
+            Whether to pull the associated containers logs of the
+            parent pod of the task container, by default False
         
         Returns
         -------
@@ -753,6 +753,7 @@ class K8sCluster:
         ------
         RuntimeError
             If there is an error getting the task logs
+            If there is conflict between the task type and the operational mode
 
         """
         if not isinstance(task, Task):
@@ -766,28 +767,30 @@ class K8sCluster:
 
         logs = []
         task_id = task.id
-        task_name = task.name
+        pod_name = task.pod_name
+        cmd = f'kubectl logs -l task_label='
 
-        cmd = f'kubectl logs -l task_label={task_name}'
-        cmd += f' --tail={MAX_POD_LOGS_LENGTH}'
-
-        # MCPP case then we need to get the parent pod name
+        # container task, then we need to get the parent pod name
         if any([c in task.type for c in CONTAINER]):
+            if related_containers:
+                raise Exception('related containers is only supported'
+                                ' for pod tasks')
             if hasattr(task, 'pod_name'):
-                task_name = task.pod_name
-                out, err, ret = sh_callout(cmd + f' -c {task.name}',
-                                           shell=True, kube=self)
+                cmd = cmd + f'{pod_name} -c {task.name}'
+                cmd+=f' --tail={MAX_POD_LOGS_LENGTH}'
+                out, err, ret = sh_callout(cmd, shell=True, kube=self)
                 logs.append(f'{task.name} logs:\n')
                 logs.append(out)
             else:
                 raise Exception(f'{task.name} does not have a pod name')
 
-        # SCPP case then the task name is the pod name
+        # pod task then the task name is the pod name
         elif any([p in task.type for p in POD]) or not task.type:
+            # we pull all of the containers in the pod
             if related_containers:
                 # get pods containers
-                _cmd = f"kubectl get pod {task_name}"
-                _cmd += " -o jsonpath='{.spec.containers[*].name}'"
+                _cmd = f"kubectl get pod {pod_name}"
+                _cmd +=" -o jsonpath='{.spec.containers[*].name}'"
                 out, err, ret = sh_callout(_cmd, shell=True, kube=self)
                 if not ret and out:
                     # iterate on N containers and get logs
@@ -797,33 +800,61 @@ class K8sCluster:
                             # ignore background containers
                             if not container.startswith('ctask'):
                                 continue
+                            _cmd = cmd
+                            _cmd = _cmd + f'{pod_name} -c {container}'
+                            _cmd+= f' --tail={MAX_POD_LOGS_LENGTH}'
                             logs.append(f'{container} logs:\n')
-                            out, err, ret = sh_callout(cmd + f' -c {container}',
-                                                       shell=True, kube=self)
+                            out, err, ret = sh_callout(_cmd, shell=True,
+                                                       kube=self)
                             if not ret and out:
                                 logs.append(out)
                             else:
-                                self.logger.error(f'failed to get {task_name} logs: {err}')
+                                self.logger.error(f'failed to get {pod_name} logs: {err}')
                                 return
                     else:
-                        self.logger.error(f'no related container(s) found for pod {task_name}')
+                        self.logger.error(f'no related container(s) found for pod {pod_name}')
                         return
-            else:        
-                out, err, ret = sh_callout(cmd, shell=True, kube=self)
-                if not ret and out:
-                    logs.append(out)
+                # if no containers found in the pod then just use the pod name
+                elif not ret and not out:
+                    cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
+                    out, err, ret = sh_callout(cmd, shell=True, kube=self)
+                    if not ret and out:
+                        logs.append(f'{task.name} logs:\n')
+                        logs.append(out)
+                    else:
+                        self.logger.error(f'failed to get {pod_name} logs: {err}')
+                        return
+                # we have an error and we failed
                 else:
-                    self.logger.error(f'failed to get {task_name} logs: {err}')
+                    self.logger.error(f'failed to get {pod_name} logs: {err}')
                     return
 
-        if logs:
+            # we default to the first container in the pod
+            else:
+                cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
+                out, err, ret = sh_callout(cmd, shell=True, kube=self)
+                if not ret and out:
+                    logs.append(f'{task.name} logs:\n')
+                    logs.append(out)
+                else:
+                    self.logger.error(f'failed to get {pod_name} logs: {err}')
+                    return
+
+        # we failed for all cases
+        else:
+            raise Exception(f'Unknow task type {task.type}')
+
+        # check if we did get any logs
+        if logs and len(logs) > 1:
             if save:
-                path = f'{self.sandbox}/{task_name}.logs'
+                path = f'{self.sandbox}/{pod_name}.{task.name}.logs'
                 with open(path, 'w') as f:
                     for log in logs:
                         f.write(log)
                 return path
             return '\n'.join(logs)
+        else:
+            return None
 
 
     # --------------------------------------------------------------------------

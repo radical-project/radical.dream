@@ -28,8 +28,7 @@ caas_mgr = service_mgr.CaasManager(provider_mgr, vms, asynchronous=False)
 ```
 
 ```python
-tasks = Task()
-
+tasks = []
 # submit 1024 tasks for each vm
 for task in range(1024):
     task = Task()
