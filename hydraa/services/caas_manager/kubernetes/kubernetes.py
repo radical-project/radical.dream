@@ -770,7 +770,7 @@ class K8sCluster:
         pod_name = task.pod_name
         cmd = f'kubectl logs -l task_label='
 
-        # container task, then we need to get the parent pod name
+        # container task, then pull the logs of the container
         if any([c in task.type for c in CONTAINER]):
             if related_containers:
                 raise Exception('related containers is only supported'
@@ -784,7 +784,7 @@ class K8sCluster:
             else:
                 raise Exception(f'{task.name} does not have a pod name')
 
-        # pod task then the task name is the pod name
+        # pod task, then the task name is the pod name
         elif any([p in task.type for p in POD]) or not task.type:
             # we pull all of the containers in the pod
             if related_containers:
@@ -829,7 +829,8 @@ class K8sCluster:
                     self.logger.error(f'failed to get {pod_name} logs: {err}')
                     return
 
-            # we default to the first container in the pod
+            # if related containers was not specified then we default to
+            # the first container in the pod or whatever logs we get.
             else:
                 cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
                 out, err, ret = sh_callout(cmd, shell=True, kube=self)
