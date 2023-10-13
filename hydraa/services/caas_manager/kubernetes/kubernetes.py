@@ -51,6 +51,7 @@ MAX_POD_LOGS_LENGTH = 1000000
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
 KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
+KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
@@ -170,7 +171,8 @@ class K8sCluster:
         5- Join each worker to the master node.
         """
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane' \
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
 
         self.status = BUSY
 
@@ -250,10 +252,15 @@ class K8sCluster:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= timeout * 60:
                     raise TimeoutError('failed to build {0} within' \
-                                       ' [{1}] min.'.format(self.name, timeout))
+                                       ' [{1}] min. To increse the waiting' \
+                                       ' time set $KUBE_TIMEOUT > 30 minutes'
+                                       ' value'.format(self.name, timeout))
                 else:
+                    remaining_time = timeout * 60 - elapsed_time
                     self.logger.warning('installation of {0} is still'
-                                        ' in progress.'.format(self.name))
+                                        ' in progress. Waiting for ~ [{1}]'
+                                        ' minutes.'.format(self.name,
+                                        round(remaining_time / 60)))
                     time.sleep(60)
 
 
@@ -296,14 +303,12 @@ class K8sCluster:
                                                             unique_id())
 
         for ctask in ctasks:
-            # Single Container Per Pod 
-            # (use kubernetes default scheduler here)
-            if not ctask.type or ctask.type in POD:
+            # Single Container Per Pod (SCPP)
+            if any([p in ctask.type for p in POD]) or not ctask.type:
                 scpp.append(ctask)
 
-            # Multiple Containers Per Pod. 
-            # TODO: use orhestrator.scheduler
-            elif ctask.type in CONTAINER:
+            # Multiple Containers Per Pod (MCPP).
+            elif any([c in ctask.type for c in CONTAINER]):
                 mcpp.append(ctask)
 
         if mcpp:
@@ -338,7 +343,7 @@ class K8sCluster:
         """
         This function to coordiante the submission of list of tasks.
         to the cluster main node.
-        
+
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
         
@@ -366,7 +371,7 @@ class K8sCluster:
             cmd = 'nohup kubectl apply -f {0} >> {1}'.format(deployment_file,
                                                             self.sandbox)
             cmd += '/apply_output.log 2>&1 </dev/null &'
-                   
+
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
@@ -382,9 +387,9 @@ class K8sCluster:
             else:
                 self.logger.error(err)
                 print('failed to submit pods, please check the logs for more info.')
-        
+
         self.collect_profiles()
-  
+
 
     # --------------------------------------------------------------------------
     #
@@ -1038,7 +1043,8 @@ class AKSCluster(K8sCluster):
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane'\
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
         self.config, err, ret = sh_callout(cmd, shell=True, munch=True)
 
         if ret:
@@ -1291,7 +1297,8 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane' \
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '

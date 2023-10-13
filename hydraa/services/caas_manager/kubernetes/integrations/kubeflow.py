@@ -189,6 +189,9 @@ class Kubeflow:
 
         for mpi_task in mpi_tasks:
 
+            self.cluster.profiler.prof('create_kf_task_start',
+                                       uid=mpi_task.name)
+
             kf_task = copy.deepcopy(kf_template)
             kf_task["metadata"]["name"] = mpi_task.name
 
@@ -227,6 +230,9 @@ class Kubeflow:
             launcher['template']['metadata']['labels']['task_label'] = mpi_task.name
 
             combined_deployments.append(kf_task)
+
+            self.cluster.profiler.prof('create_kf_task_stop',
+                                       uid=mpi_task.name)
 
         return combined_deployments
 
@@ -293,10 +299,15 @@ class KubeflowMPILauncher(Kubeflow):
                 self.manager._task_id +=1
 
         kf_jobs = self.build_mpi_deployment(tasks)
+        
         print('submitting MPIJobs x [{0}] to {1}'.format(len(tasks),
                                                          self.cluster.name))
         file_path = self.cluster.sandbox + '/' + 'mpijobs.yaml'
+
+        self.cluster.profiler.prof('create_kf_job_start', uid='kf_mpijob')
         dump_multiple_yamls(kf_jobs, file_path)
+        self.cluster.profiler.prof('create_kf_job_stop', uid='kf_mpijob')
+
         self.cluster.submit(deployment_file=file_path)
 
     # --------------------------------------------------------------------------

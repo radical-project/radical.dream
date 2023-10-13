@@ -407,6 +407,8 @@ class StepsWorkflow(Workflow):
 
         wf_name = super()._create()
 
+        self.cluster.profiler.prof('create_wf_start', uid=wf_name)
+
         self.argo_object['spec']['templates'] = []
         self.argo_object['spec']['templates'].append({'name': wf_name,
                                                       'steps': None})
@@ -421,6 +423,9 @@ class StepsWorkflow(Workflow):
 
         self.workflows.append(self.argo_object)
         self._workflows_counter +=1
+
+        self.cluster.profiler.prof('create_wf_stop', uid=wf_name)
+
         # reset the tasks for a new wf
         self.tasks.clear()
 
@@ -508,7 +513,10 @@ class ContainerSetWorkflow(Workflow):
         configuration. It sets up the necessary specifications for
         running tasks within a container set.
         """
+
         wf_name = super()._create()
+
+        self.cluster.profiler.prof('create_wf_start', uid=wf_name)
     
         spec = self.argo_object['spec']
         # update the pod label with workflow name since
@@ -537,5 +545,8 @@ class ContainerSetWorkflow(Workflow):
 
         self.workflows.append(self.argo_object)
         self._workflows_counter +=1
+
+        self.cluster.profiler.prof('create_wf_stop', uid=wf_name)
+
         # reset the tasks for a new wf
         self.tasks.clear()
