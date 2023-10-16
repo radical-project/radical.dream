@@ -174,6 +174,9 @@ class K8sCluster:
         print('building {0} with x [{1}] nodes and [{2}] control plane' \
               .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
 
+        # Attempt to fix Paramiko issue #75 temporarily
+        time.sleep(5)
+
         self.status = BUSY
 
         self.add_nodes_properity()
@@ -765,6 +768,8 @@ class K8sCluster:
         """
         if not isinstance(task, Task):
             raise Exception(f'pod/container task must be an instance of {Task}')
+        
+        # TODO: add another check if pod/container is PENDING OR RUNNING
 
         # some pods with third party tools like kubeflow or workflows
         # can add suffix to the task name when they create the pod.
