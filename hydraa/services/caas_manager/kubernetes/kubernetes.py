@@ -51,6 +51,7 @@ MAX_POD_LOGS_LENGTH = 1000000
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
 KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
+KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
@@ -170,7 +171,11 @@ class K8sCluster:
         5- Join each worker to the master node.
         """
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane' \
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
+
+        # Attempt to fix Paramiko issue #75 temporarily
+        time.sleep(5)
 
         self.status = BUSY
 
@@ -250,10 +255,15 @@ class K8sCluster:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= timeout * 60:
                     raise TimeoutError('failed to build {0} within' \
-                                       ' [{1}] min.'.format(self.name, timeout))
+                                       ' [{1}] min. To increse the waiting' \
+                                       ' time set $KUBE_TIMEOUT > 30 minutes'
+                                       ' value'.format(self.name, timeout))
                 else:
+                    remaining_time = timeout * 60 - elapsed_time
                     self.logger.warning('installation of {0} is still'
-                                        ' in progress.'.format(self.name))
+                                        ' in progress. Waiting for ~ [{1}]'
+                                        ' minutes.'.format(self.name,
+                                        round(remaining_time / 60)))
                     time.sleep(60)
 
 
@@ -292,21 +302,16 @@ class K8sCluster:
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
-
         deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
                                                             unique_id())
 
         for ctask in ctasks:
-            pod_id = str(self.pod_counter).zfill(6)
-
-            # Single Container Per Pod 
-            # (use kubernetes default scheduler here)
-            if not ctask.type or ctask.type in POD:
+            # Single Container Per Pod (SCPP)
+            if any([p in ctask.type for p in POD]) or not ctask.type:
                 scpp.append(ctask)
 
-            # Multiple Containers Per Pod. 
-            # TODO: use orhestrator.scheduler
-            elif ctask.type in CONTAINER:
+            # Multiple Containers Per Pod (MCPP).
+            elif any([c in ctask.type for c in CONTAINER]):
                 mcpp.append(ctask)
 
         if mcpp:
@@ -317,19 +322,20 @@ class K8sCluster:
             self.profiler.prof('schedule_pods_stop', uid=self.id)
 
             for batch in batches:
-                pod = build_pod(batch, pod_id)
-                _mcpp.append(pod)
                 self.pod_counter +=1
+                pod = build_pod(batch, str(self.pod_counter).zfill(6))
+                _mcpp.append(pod)
             dump_multiple_yamls(_mcpp, deployment_file)
 
         if scpp:
             _scpp = []
             for task in scpp:
-                pod = build_pod([task], pod_id)
-                _scpp.append(pod)
                 self.pod_counter +=1
+                pod = build_pod([task], str(self.pod_counter).zfill(6))
+                _scpp.append(pod)
             dump_multiple_yamls(_scpp, deployment_file)
 
+        # FIXME: why are we returning two empty lists?
         return deployment_file, [], []
 
 
@@ -340,7 +346,7 @@ class K8sCluster:
         """
         This function to coordiante the submission of list of tasks.
         to the cluster main node.
-        
+
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
         
@@ -365,8 +371,10 @@ class K8sCluster:
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
         if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} > {1}/apply_output.log 2>&1 </dev/null &'.\
-                   format(deployment_file, self.sandbox)
+            cmd = 'nohup kubectl apply -f {0} >> {1}'.format(deployment_file,
+                                                            self.sandbox)
+            cmd += '/apply_output.log 2>&1 </dev/null &'
+
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
             msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
@@ -382,9 +390,9 @@ class K8sCluster:
             else:
                 self.logger.error(err)
                 print('failed to submit pods, please check the logs for more info.')
-        
+
         self.collect_profiles()
-  
+
 
     # --------------------------------------------------------------------------
     #
@@ -732,29 +740,36 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def get_pod_logs(self, pod: Task, save: bool = False) -> str:
+    def get_pod_logs(self, task: Task, related_containers: bool = False,
+                     save: bool = False) -> str:
         """Get the logs of a Kubernetes pod/container and return as a string.
 
         Parameters
         ----------
-        pod : Task
+        task : Task
             The Task object or name of the task to get logs for
         save : bool, optional
-            Whether to save the pod logs to a file, by default False
+            Whether to save the task logs to a file, by default False
+        related_containers: bool, optional
+            Whether to pull the associated containers logs of the
+            parent pod of the task container, by default False
         
         Returns
         -------
         str
-            The pod logs as a string, or path to saved log file if save=True
+            The task logs as a string, or path to saved log file if save=True
 
         Raises
         ------
         RuntimeError
-            If there is an error getting the pod logs
+            If there is an error getting the task logs
+            If there is conflict between the task type and the operational mode
 
         """
-        if not isinstance(pod, Task):
-            raise Exception(f'pod/container must be an instance of {Task}')
+        if not isinstance(task, Task):
+            raise Exception(f'pod/container task must be an instance of {Task}')
+        
+        # TODO: add another check if pod/container is PENDING OR RUNNING
 
         # some pods with third party tools like kubeflow or workflows
         # can add suffix to the task name when they create the pod.
@@ -762,26 +777,98 @@ class K8sCluster:
         # pod name that is generated by Hydraa only. We use the task name
         # as an internal label of the pod/container (task) to get the logs.
 
-        # FIXME: This is not working with MCPP mode as we aggregate N tasks
-        # under a single pod.
-        cmd = f'kubectl logs -l task_label={pod.name}'
-        cmd += f' --tail={MAX_POD_LOGS_LENGTH}'
-        out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        logs = []
+        task_id = task.id
+        pod_name = task.pod_name
+        cmd = f'kubectl logs -l task_label='
 
-        if ret:
-            self.logger.error(f'failed to get task {pod.name} logs: {err}')
+        # container task, then pull the logs of the container
+        if any([c in task.type for c in CONTAINER]):
+            if related_containers:
+                raise Exception('related containers is only supported'
+                                ' for pod tasks')
+            if hasattr(task, 'pod_name'):
+                cmd = cmd + f'{pod_name} -c {task.name}'
+                cmd+=f' --tail={MAX_POD_LOGS_LENGTH}'
+                out, err, ret = sh_callout(cmd, shell=True, kube=self)
+                logs.append(f'{task.name} logs:\n')
+                logs.append(out)
+            else:
+                raise Exception(f'{task.name} does not have a pod name')
+
+        # pod task, then the task name is the pod name
+        elif any([p in task.type for p in POD]) or not task.type:
+            # we pull all of the containers in the pod
+            if related_containers:
+                # get pods containers
+                _cmd = f"kubectl get pod {pod_name}"
+                _cmd +=" -o jsonpath='{.spec.containers[*].name}'"
+                out, err, ret = sh_callout(_cmd, shell=True, kube=self)
+                if not ret and out:
+                    # iterate on N containers and get logs
+                    containers = out.split(' ')
+                    if containers:
+                        for container in containers:
+                            # ignore background containers
+                            if not container.startswith('ctask'):
+                                continue
+                            _cmd = cmd
+                            _cmd = _cmd + f'{pod_name} -c {container}'
+                            _cmd+= f' --tail={MAX_POD_LOGS_LENGTH}'
+                            logs.append(f'{container} logs:\n')
+                            out, err, ret = sh_callout(_cmd, shell=True,
+                                                       kube=self)
+                            if not ret and out:
+                                logs.append(out)
+                            else:
+                                self.logger.error(f'failed to get {pod_name} logs: {err}')
+                                return
+                    else:
+                        self.logger.error(f'no related container(s) found for pod {pod_name}')
+                        return
+                # if no containers found in the pod then just use the pod name
+                elif not ret and not out:
+                    cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
+                    out, err, ret = sh_callout(cmd, shell=True, kube=self)
+                    if not ret and out:
+                        logs.append(f'{task.name} logs:\n')
+                        logs.append(out)
+                    else:
+                        self.logger.error(f'failed to get {pod_name} logs: {err}')
+                        return
+                # we have an error and we failed
+                else:
+                    self.logger.error(f'failed to get {pod_name} logs: {err}')
+                    return
+
+            # if related containers was not specified then we default to
+            # the first container in the pod or whatever logs we get.
+            else:
+                cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
+                out, err, ret = sh_callout(cmd, shell=True, kube=self)
+                if not ret and out:
+                    logs.append(f'{task.name} logs:\n')
+                    logs.append(out)
+                else:
+                    self.logger.error(f'failed to get {pod_name} logs: {err}')
+                    return
+
+        # we failed for all cases
+        else:
+            raise Exception(f'Unknow task type {task.type}')
+
+        # check if we did get any logs
+        if logs and len(logs) > 1:
+            if save:
+                path = f'{self.sandbox}/{pod_name}.{task.name}.logs'
+                with open(path, 'w') as f:
+                    for log in logs:
+                        f.write(log)
+                return path
+            return '\n'.join(logs)
+        else:
             return None
 
-        if out:
-            out = out.split('\n')
-            if save:
-                path = f'{self.sandbox}/{pod.id}.log'
-                with open(path, 'w') as f:
-                    f.write('\n'.join(out))
-
-                return path
-
-            return out
 
     # --------------------------------------------------------------------------
     #
@@ -961,7 +1048,8 @@ class AKSCluster(K8sCluster):
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane'\
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
         self.config, err, ret = sh_callout(cmd, shell=True, munch=True)
 
         if ret:
@@ -1124,7 +1212,8 @@ class AKSCluster(K8sCluster):
 #
 class EKSCluster(K8sCluster):
     """
-    Represents a single/multi node Elastic Kubernetes Service (EKS) cluster.
+    Represents a single/multi node AWS Elastic Kubernetes Service (EKS)
+    cluster.
 
     This class assumes that:
     1- eksctl is installed
@@ -1213,7 +1302,8 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        print('building {0} with x [{1}] nodes'.format(self.name, self.nodes))
+        print('building {0} with x [{1}] nodes and [{2}] control plane' \
+              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
@@ -1346,11 +1436,13 @@ class EKSCluster(K8sCluster):
     #
     def _delete(self):
 
-        print('deleteing EKS cluster: {0}'.format(self.name))
-        cmd = f'eksctl delete cluster --name {self.name}'
-        out, err, _ = sh_callout(cmd, shell=True)
-
-        print(out, err)
+        out, err, ret = sh_callout(f"eksctl get cluster {self.name}",
+                                   shell=True)
+        if not ret:
+            print('deleteing EKS cluster: {0}'.format(self.name))
+            cmd = f'eksctl delete cluster --name {self.name}'
+            out, err, _ = sh_callout(cmd, shell=True)
+            print(out, err)
 
 
     # --------------------------------------------------------------------------

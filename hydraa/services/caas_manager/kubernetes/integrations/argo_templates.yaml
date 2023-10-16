@@ -6,7 +6,11 @@ kind: Workflow
 metadata:
   name: steps
 spec:
+  # FIXME: labels are not working with steps
   entrypoint: entrypoint-name
+  podMetadata:
+    labels:
+      task_label: task-name
   volumes:
   - name: workdir
     persistentVolumeClaim:
@@ -25,6 +29,9 @@ metadata:
     workflows.argoproj.io/container-runtime-executor: emissary
 spec:
   entrypoint: main
+  podMetadata:
+    labels:
+      task_label: task-name
   volumes:
   - name: workdir
     persistentVolumeClaim:

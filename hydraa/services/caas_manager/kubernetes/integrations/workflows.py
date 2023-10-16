@@ -25,8 +25,8 @@ class Workflow:
     ----------
     name : str
         The name of the workflow.
-    type : str
-        The type of the workflow, must be one of WORKFLOW_TYPE.
+    wf_type : str
+        The wf_type of the workflow, must be one of WORKFLOW_TYPE.
     manager : str
         The manager for this workflow.
     volume : Volume or None, optional
@@ -36,8 +36,8 @@ class Workflow:
     ----------
     name : str
         The name of the workflow.
-    type : str
-        The type of the workflow.
+    wf_type : str
+        The wf_type of the workflow.
     manager : str
         The manager for this workflow.
     cluster : Cluster
@@ -71,20 +71,11 @@ class Workflow:
 
     move_to_volume(task)
         Move data from local container storage to a shared node PV or PVC storage.
-
-    Examples
-    --------
-    >>> workflow = Workflow(name="my_workflow", type="type1", manager="argo_manager")
-    >>> task1 = Task(name="task1")
-    >>> task2 = Task(name="task2")
-    >>> workflow.add_tasks([task1, task2])
-    >>> workflow.create()
-    >>> workflow.run()
     """
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, name, type, manager, volume=None) -> None:
+    def __init__(self, name, wf_type, manager, volume=None) -> None:
         """
         Initialize a Workflow instance.
 
@@ -92,17 +83,17 @@ class Workflow:
         ----------
         name : str
             The name of the workflow.
-        type : str
-            The type of the workflow, must be one of WORKFLOW_TYPE.
+        wf_type : str
+            The wf_type of the workflow, must be one of WORKFLOW_TYPE.
         manager : str
             The manager for this workflow.
         volume : Volume or None, optional
             An optional volume object to be used for mounting data in the workflow.
         """
-        if not type in WORKFLOW_TYPE:
+        if not wf_type in WORKFLOW_TYPE:
             raise TypeError('Workflow type must be one of {0}'.format(WORKFLOW_TYPE))
 
-        self.type = type        
+        self.wf_type = wf_type     
         self.tasks = []
         self.name = name
         self.workflows = []
@@ -127,10 +118,8 @@ class Workflow:
         templates = load_multiple_yamls(loc)
 
         for t in templates:
-            if t['metadata'].get('name') == self.type.lower():
+            if t['metadata'].get('name') == self.wf_type.lower():
                 self.argo_template = t
-
-        self.argo_template['spec']['entrypoint'] = self.name
 
 
     # --------------------------------------------------------------------------
@@ -167,7 +156,7 @@ class Workflow:
 
     # --------------------------------------------------------------------------
     #
-    def create(self) -> None:
+    def _create(self) -> str:
         """
         Create the workflow based on the provided configuration.
         """
@@ -176,6 +165,7 @@ class Workflow:
         # set the workflow name
         wf_name = 'hydraa-' + self.name + '-' + str(self._workflows_counter)
         self.argo_object['metadata']['name'] = wf_name
+        self.argo_object['spec']['entrypoint'] = wf_name
 
         # iterate on each task in the tasks list
         for task in self.tasks:
@@ -194,6 +184,8 @@ class Workflow:
             # the task_id at a time.
             with self.update_lock:
                 self.manager._task_id +=1
+        
+        return wf_name
 
 
     # --------------------------------------------------------------------------
@@ -202,11 +194,13 @@ class Workflow:
         """
         Submit the generated workflows to the associated cluster.
         """
-        print('submitting workflows x [{0}] to {1}'.format(self._workflows_counter,
+        print('submitting workflows x [{0}] to {1}'.format(len(self.workflows),
                                                            self.cluster.name))
-        file_path = self.cluster.sandbox + '/' + 'workflow.yaml'
+        file_path = self.cluster.sandbox + '/' + self.wf_type.lower() + \
+                    '-workflow.yaml'
         dump_multiple_yamls(self.workflows, file_path, sort_keys=False)
         self.cluster.submit(deployment_file=file_path)
+        self.workflows.clear()
 
 
     # --------------------------------------------------------------------------
@@ -363,8 +357,8 @@ class StepsWorkflow(Workflow):
             An optional volume object to be used for mounting
             data in the workflow.
         """
-        type = WORKFLOW_TYPE[0]
-        super().__init__(name, type, manager, volume)
+        wf_type = WORKFLOW_TYPE[0]
+        super().__init__(name, wf_type, manager, volume)
 
 
     # --------------------------------------------------------------------------
@@ -381,7 +375,9 @@ class StepsWorkflow(Workflow):
         template_name = 'template-{0}'.format(task.name)
         step_name = 'step-{0}'.format(task.name)
         step = [{'name' : step_name, 'template': template_name}]
+        task.type = 'pod'
         task.step = step
+        task.pod_name = step_name
 
         container = build_pod([task], task.id)['spec']['containers'][0]
         task.template = {'name': template_name, 'container': container}
@@ -409,10 +405,12 @@ class StepsWorkflow(Workflow):
         # steps will run as: step1 and step2 will run in paralle
         # https://argoproj.github.io/argo-workflows/walk-through/steps/#steps
 
-        super().create()
+        wf_name = super()._create()
+
+        self.cluster.profiler.prof('create_wf_start', uid=wf_name)
 
         self.argo_object['spec']['templates'] = []
-        self.argo_object['spec']['templates'].append({'name': self.name,
+        self.argo_object['spec']['templates'].append({'name': wf_name,
                                                       'steps': None})
 
         for task in self.tasks:
@@ -425,6 +423,9 @@ class StepsWorkflow(Workflow):
 
         self.workflows.append(self.argo_object)
         self._workflows_counter +=1
+
+        self.cluster.profiler.prof('create_wf_stop', uid=wf_name)
+
         # reset the tasks for a new wf
         self.tasks.clear()
 
@@ -498,8 +499,8 @@ class ContainerSetWorkflow(Workflow):
             An optional volume object to be used for mounting
             data in the workflow.
         """
-        type = WORKFLOW_TYPE[1]
-        super().__init__(name, type, manager, volume)
+        wf_type = WORKFLOW_TYPE[1]
+        super().__init__(name, wf_type, manager, volume)
     
 
     # --------------------------------------------------------------------------
@@ -512,13 +513,21 @@ class ContainerSetWorkflow(Workflow):
         configuration. It sets up the necessary specifications for
         running tasks within a container set.
         """
-        super().create()
 
-        spec = self.argo_object['spec']['templates'][0]
-        spec['name'] = self.name
-        spec['containerSet']['volumeMounts'][0]['name'] = self.volume.name + '-workdir'
-        spec['containerSet']['volumeMounts'][0]['mountPath'] = self.volume.host_path
-        containers_set = spec['containerSet']['containers'] = []
+        wf_name = super()._create()
+
+        self.cluster.profiler.prof('create_wf_start', uid=wf_name)
+    
+        spec = self.argo_object['spec']
+        # update the pod label with workflow name since
+        # the entire workflow is a single pod we only set
+        # the pod (containerset) label to the name of the workflow.
+        spec['podMetadata']['labels']['task_label'] = wf_name
+        template = spec['templates'][0]
+        template['name'] = wf_name
+        template['containerSet']['volumeMounts'][0]['name'] = self.volume.name + '-workdir'
+        template['containerSet']['volumeMounts'][0]['mountPath'] = self.volume.host_path
+        containers_set = template['containerSet']['containers'] = []
 
         for task in (self.tasks):
             c = build_pod([task], task.id)['spec']['containers'][0]
@@ -530,9 +539,14 @@ class ContainerSetWorkflow(Workflow):
                 deps = [dep.name for dep in task.get_dependency()]
                 c['dependencies'] = deps
 
+            task.type = 'container'
+            task.pod_name = wf_name
             containers_set.append(c)
 
         self.workflows.append(self.argo_object)
         self._workflows_counter +=1
+
+        self.cluster.profiler.prof('create_wf_stop', uid=wf_name)
+
         # reset the tasks for a new wf
         self.tasks.clear()
