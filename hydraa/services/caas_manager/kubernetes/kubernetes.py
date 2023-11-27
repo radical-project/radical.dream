@@ -171,8 +171,9 @@ class K8sCluster:
         5- Join each worker to the master node.
         """
 
+        worker_nodes = len(self.get_worker_nodes())
         print('building {0} with x [{1}] nodes and [{2}] control plane' \
-              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
+              .format(self.name, worker_nodes, KUBE_CONTROL_HOSTS))
 
         # Attempt to fix Paramiko issue #75 temporarily
         time.sleep(5)
@@ -872,6 +873,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
+    @lrucache(maxsize=128)
     def get_worker_nodes(self) -> List[str]:
         """
         Get a list of worker node server names.
