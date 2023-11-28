@@ -13,6 +13,8 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
+from functools import lru_cache
+
 from ..utils.misc import build_pod
 from ..utils.misc import unique_id
 from ..utils.misc import sh_callout
@@ -873,7 +875,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    @lrucache(maxsize=128)
+    @lru_cache(maxsize=None)
     def get_worker_nodes(self) -> List[str]:
         """
         Get a list of worker node server names.
