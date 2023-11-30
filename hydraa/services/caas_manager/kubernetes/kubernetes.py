@@ -172,8 +172,9 @@ class K8sCluster:
         """
 
         worker_nodes = len(self.get_worker_nodes())
-        print('building {0} with x [{1}] nodes and [{2}] control plane' \
-              .format(self.name, worker_nodes, KUBE_CONTROL_HOSTS))
+        print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
+              ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
+                                             self.nodes))
 
         # Attempt to fix Paramiko issue #75 temporarily
         time.sleep(5)
@@ -1049,8 +1050,11 @@ class AKSCluster(K8sCluster):
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
 
-        print('building {0} with x [{1}] nodes and [{2}] control plane'\
-              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
+        worker_nodes = len(self.get_worker_nodes())
+        print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
+              ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
+                                             self.nodes))
+
         self.config, err, ret = sh_callout(cmd, shell=True, munch=True)
 
         if ret:
@@ -1303,8 +1307,10 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        print('building {0} with x [{1}] nodes and [{2}] control plane' \
-              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
+        worker_nodes = len(self.get_worker_nodes())
+        print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
+              ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
+                                             self.nodes))
 
         # step-1 Create EKS cluster control plane
         cmd  = f'{self.EKSCTL} create cluster --name {self.name} '
