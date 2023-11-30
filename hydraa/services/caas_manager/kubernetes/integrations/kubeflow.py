@@ -103,8 +103,7 @@ class Kubeflow:
 
         url1 = "https://github.com/kubernetes-sigs/kueue/releases" \
                "/download/v0.4.0/manifests.yaml"
-        url2 = "https://raw.githubusercontent.com/kubernetes-sigs/kueue/main" \
-               "/site/static/examples/single-clusterqueue-setup.yaml"
+        url2 = "https://kueue.sigs.k8s.io/examples/admin/single-clusterqueue-setup.yaml"
 
         # download both files to the cluster sandbox
         files = download_files([url1, url2], self.cluster.sandbox)

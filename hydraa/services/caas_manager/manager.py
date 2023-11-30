@@ -169,21 +169,21 @@ class CaasManager:
         if not isinstance(tasks, list):
             tasks = [tasks]
 
-        # NOTE: soon we will have an orchestrator to distribuite the tasks
-        # based on:
-        # 1- user provider preference (if user set the provider of the task)
-        # 2- or based on user resousource requirement (orchestrator decision)
-        tasks_counter = 0
-        for manager_k, manager_attrs in self._registered_managers.items():
-            for task in tasks:
-                if task.provider == manager_k:
-                    manager_attrs['in_q'].put(task)
-                    print('submitting tasks: ', tasks_counter, end='\r')
-                    tasks_counter +=1
+        if not self._registered_managers:
+            raise RuntimeError('No CaaS managers found to submit to.')
 
-                if not task.provider or task.provider not in self._registered_managers.keys():
-                    self.log.warning('no manager found for this task, submitting to a any manager')
-                    list(self._registered_managers.values())[0]['in_q'].put(task)
+        tasks_counter = 0
+        for task in tasks:
+            task_provider = task.provider.lower()
+            if task_provider in self._registered_managers.keys():
+                manager = self._registered_managers.get(task_provider)
+            else:
+                manager = next(iter(self._registered_managers.values()))
+                self.log.warning('no manager found for this task, submitting to a any manager')
+
+            print('submitting tasks: ', tasks_counter, end='\r')
+            manager['in_q'].put(task)
+            tasks_counter +=1
 
 
     # --------------------------------------------------------------------------

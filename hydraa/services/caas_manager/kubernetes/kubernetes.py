@@ -171,8 +171,9 @@ class K8sCluster:
         5- Join each worker to the master node.
         """
 
+        worker_nodes = len(self.get_worker_nodes())
         print('building {0} with x [{1}] nodes and [{2}] control plane' \
-              .format(self.name, self.nodes, KUBE_CONTROL_HOSTS))
+              .format(self.name, worker_nodes, KUBE_CONTROL_HOSTS))
 
         # Attempt to fix Paramiko issue #75 temporarily
         time.sleep(5)
@@ -940,7 +941,7 @@ class K8sCluster:
             total allocatable amount of each resource in the cluster.
 
         """
-        size = {'vcpus': -1, 'memory': 0, 'storage': 0}
+        size = {'vcpus': 0, 'memory': 0, 'storage': 0}
         for vm in self.vms:
             vm_size = self.get_instance_resources(vm)
             size['vcpus'] += vm_size[0] * vm.MinCount
