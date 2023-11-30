@@ -62,7 +62,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, proxy_mgr, vms, asynchronous):
+    def __init__(self, proxy_mgr, vms, asynchronous, auto_terminate=True):
         """
         Initialize the CaasManager.
 
@@ -95,7 +95,8 @@ class CaasManager:
                 vmx = [v for v in vms if v.Provider == provider]
                 caas_class = PROVIDER_TO_CLASS[provider]
                 caas_instance = caas_class(sandbox, _id, cred, vmx,
-                                           asynchronous, self.log, self.prof)
+                                           asynchronous, auto_terminate,
+                                           self.log, self.prof)
 
                 self._registered_managers[provider] = {'class' : caas_instance,
                                                        'run_id': caas_instance.run_id,

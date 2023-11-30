@@ -291,6 +291,8 @@ class KubeflowMPILauncher(Kubeflow):
             task.mpi_setup = {"workers": num_workers,
                               "slots": slots_per_worker,
                               "scheduler": ""}
+            
+            task.tries = 3
     
             # make sure only one instance is updating 
             # the task_id at a time.
