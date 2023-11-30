@@ -184,7 +184,8 @@ class Workflow:
             # the task_id at a time.
             with self.update_lock:
                 self.manager._task_id +=1
-        
+                self.manager._tasks_book[str(ctask.name)] = task
+
         return wf_name
 
 
