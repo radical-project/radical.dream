@@ -39,7 +39,7 @@ class ChiCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, auto_terminate, log, prof):
         
         self.manager_id = manager_id
         self.status = False
@@ -68,6 +68,7 @@ class ChiCaas:
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
 
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, CHI, self.run_id)
         os.mkdir(self.sandbox, 0o777)
@@ -499,55 +500,55 @@ class ChiCaas:
     #
     def _wait_tasks(self):
 
-        if self.asynchronous:
-            self.logger.error('tasks wait is not supported in asynchronous mode')
-
-        marked_tasks = set()
+        msg = None
+        finshed = []
+        failed, done, running = 0, 0, 0
 
         while not self._terminate.is_set():
-
-            statuses = self.cluster._get_task_statuses()
-
-            if not statuses:
-                time.sleep(5)
-                continue
-
-            msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
-                                                                len(statuses['stopped']),
-                                                                len(statuses['running']))
-
             for task in self._tasks_book.values():
-                if task in marked_tasks:
-                    # NOTE: the MPI task takes sometime to connect to 
-                    # the worker which is reported to be "failed" then running
-                    # this approach should update task state after failer for now.
-                    if task.state == 'FAILED':
-                        # state is changed so reset the task state to 'PENDING'
-                        if task.name not in statuses['failed']:
-                            task.reset_state()
-                            marked_tasks.remove(task)
+                # if task is already marked as done or filed then skip it
+                if task.name in finshed:
+                    continue
+
+                status = self.cluster._get_task_statuses(task)
+                if not status:
+                    continue
+
+                if status == 'Completed':
+                    task.set_result('Finished successfully')
+                    finshed.append(task.name)
+                    done += 1
+
+                elif status == 'Running':
+                    task.set_running_or_notify_cancel()
+                    running += 1
+
+                # sometimes tasks requires sometime to reach running
+                # state like MPI when the worker is reported to be "failed"
+                # then running this approach should update task state after
+                # failer for now.
+                elif status in ['Failed', 'Unknown']:
+                    # default number of tries is 3 * 5s = 15s
+                    # after that declare the task as failed
+                    if task.tries:
+                        task.tries -= 1
+                        task.reset_state()
                     else:
-                        continue
+                        task.set_exception(Exception('Failed: Please check the logs'))
+                        finshed.append(task.name)
+                        failed += 1
 
-                if task.name in statuses['stopped']:
-                    if not task.done():
-                        task.state = 'DONE'
-                        task.set_result('Done')
-                        marked_tasks.add(task)
+                task.state = status
+                msg = f'[failed: {failed}, done {done}, running {running}]'
 
-                elif task.name in statuses['failed']:
-                    if task.state != 'FAILED':
-                        task.state = 'FAILED'
-                        task.set_exception(Exception('Failed'))
-                        marked_tasks.add(task)
+                if len(finshed) == len(self._tasks_book):
+                    msg = 'all tasks are finished'
+                    if not self.auto_terminate:
+                        self.logger.trace(msg)
+                        self._shutdown()
 
-                elif task.name in statuses['running']:
-                    if not task.running():
-                        task.state = 'RUNNING'
-                        task.set_running_or_notify_cancel()
-
-            self.outgoing_q.put(msg)
-
+            if msg:
+                self.outgoing_q.put(msg)
             time.sleep(5)
 
 

@@ -44,7 +44,7 @@ class AwsCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, auto_terminate, log, prof):
 
         self.vms = VMS
         self._task_id = 0
@@ -64,6 +64,7 @@ class AwsCaas:
 
         self.runs_tree = OrderedDict()
         self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
 
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
         self.sandbox = '{0}/{1}.{2}'.format(sandbox, AWS, self.run_id)
@@ -903,65 +904,62 @@ class AwsCaas:
     # --------------------------------------------------------------------------
     #
     def _wait_tasks(self):
-        """
-        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
-        Wait for task status until STOPPED
-        """
-        if self.asynchronous:
-            self.logger.error('tasks wait is not supported in asynchronous mode')
-        
-        marked_tasks = set()
+
+        msg = None
+        finshed = []
+        failed, done, running = 0, 0, 0
+
+        if self.launch_type not in EKS:
+            self.logger.warning('waiting for tasks is not supported in this mode yet')
+            time.sleep(5)
+            pass
 
         while not self._terminate.is_set():
+            for task in self._tasks_book.values():
+                # if task is already marked as done or filed then skip it
+                if task.name in finshed:
+                    continue
 
-            statuses = None
+                status = self.cluster._get_task_statuses(task)
+                if not status:
+                    continue
 
-            if self.launch_type in EKS:
-                statuses = self.cluster._get_task_statuses()
-            
-            else:
-                # some other threads updates the task book so keep this
-                # thread updated as well with the latest task book entries
-                tasks = [t['task_arns'] for t in self._family_ids.values()]
+                if status == 'Completed':
+                    task.set_result('Finished successfully')
+                    finshed.append(task.name)
+                    done += 1
 
-                # request the statuses for all task_arns
-                statuses = self._get_task_statuses(tasks, self.cluster_name)
+                elif status == 'Running':
+                    task.set_running_or_notify_cancel()
+                    running += 1
 
-            if statuses:
-                msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
-                                                                   len(statuses['stopped']),
-                                                                   len(statuses['running']))
+                # sometimes tasks requires sometime to reach running
+                # state like MPI when the worker is reported to be "failed"
+                # then running this approach should update task state after
+                # failer for now.
+                elif status in ['Failed', 'Unknown']:
+                    # default number of tries is 3 * 5s = 15s
+                    # after that declare the task as failed
+                    if task.tries:
+                        task.tries -= 1
+                        task.reset_state()
+                    else:
+                        task.set_exception(Exception('Failed: Please check the logs'))
+                        finshed.append(task.name)
+                        failed += 1
 
-                for task in self._tasks_book.values():
-                    if task in marked_tasks:
-                        if task.state == 'FAILED':
-                            # state is changed so reset the task state to 'PENDING'
-                            if task.name not in statuses['failed']:
-                                task.reset_state()
-                                marked_tasks.remove(task)
-                        else:
-                            continue
-    
-                    if task.name in statuses['stopped']:
-                        if not task.done():
-                            task.state = 'DONE'
-                            task.set_result('Done')
-                            marked_tasks.add(task)
-    
-                    elif task.name in statuses['failed']:
-                        if task.state != 'FAILED':
-                            task.state = 'FAILED'
-                            task.set_exception(Exception('Failed'))
-                            marked_tasks.add(task)
-    
-                    elif task.name in statuses['running']:
-                        if not task.running():
-                            task.state = 'RUNNING'
-                            task.set_running_or_notify_cancel()
-    
+                task.state = status
+                msg = f'[failed: {failed}, done {done}, running {running}]'
+                
+                if len(finshed) == len(self._tasks_book):
+                    msg = 'all tasks are finished'
+                    if not self.auto_terminate:
+                        self.logger.trace(msg)
+                        self._shutdown()
+
+            if msg:
                 self.outgoing_q.put(msg)
-    
-                time.sleep(5)
+            time.sleep(5)
 
 
     # --------------------------------------------------------------------------
