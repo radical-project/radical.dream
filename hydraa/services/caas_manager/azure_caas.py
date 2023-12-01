@@ -366,13 +366,15 @@ class AzureCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, container_group_names):
+    def _get_task_statuses(self, tasks, container_group_names=None):
 
         # Pulling tasks statuses in batches gets slower with the number of tasks
         # and sometimes causes the wait thread to hang, so we only pull status per task
         if len(tasks) < 1:
             raise Exception('Pulling statuses in batches is supported'
                             ' but not permitted')
+        if not container_group_names:
+            container_group_names = self._container_group_names
 
         container_group_obj = self.con_client.container_groups.get(self.resource_group_name,
                                                                    tasks.contaier_group_name)
@@ -426,7 +428,7 @@ class AzureCaas:
                 if task.name in finshed:
                     continue
 
-                status = self.cluster._get_task_statuses(task)
+                status = get_statuses(task)
                 if not status:
                     continue
 
