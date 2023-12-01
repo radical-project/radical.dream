@@ -124,7 +124,7 @@ class K8sCluster:
         self.stop_event = mt.Event()
         self.updater_lock = mt.Lock()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
-        
+
 
     # --------------------------------------------------------------------------
     #

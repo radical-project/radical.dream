@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import uuid
+import copy
 import errno
 import queue
 import atexit
@@ -46,7 +47,7 @@ class Jet2Caas():
         self.client = self.create_op_client(cred)
         self.launch_type = VMS[0].LaunchType.lower()
 
-        self._task_id = 0    
+        self._task_id = 0
 
         self.vms = VMS
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
@@ -70,6 +71,7 @@ class Jet2Caas():
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
 
+        self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
         self.start_thread = threading.Thread(target=self.start,
@@ -110,6 +112,11 @@ class Jet2Caas():
 
         self.runs_tree[self.run_id] =  self._pods_book
 
+
+    # --------------------------------------------------------------------------
+    #
+    def get_tasks(self):
+        return list(self._tasks_book.values())
 
     # --------------------------------------------------------------------------
     #
@@ -431,7 +438,12 @@ class Jet2Caas():
         failed, done, running = 0, 0, 0
 
         while not self._terminate.is_set():
-            for task in self._tasks_book.values():
+
+            with self._task_lock:
+                _tasks = self.get_tasks()
+                tasks = copy.copy(_tasks)
+
+            for task in tasks:
                 # if task is already marked as done or filed then skip it
                 if task.name in finshed:
                     continue
@@ -471,9 +483,8 @@ class Jet2Caas():
                 msg = f'[failed: {failed}, done {done}, running {running}]'
 
                 if len(finshed) == len(self._tasks_book):
-                    msg = 'all tasks are finished'
                     if self.auto_terminate:
-                        msg += '. Terminating the manager'
+                        msg += 'Terminating the manager'
                         self.logger.trace(msg)
                         self._shutdown()
 

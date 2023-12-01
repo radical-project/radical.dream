@@ -83,6 +83,8 @@ class AzureCaas:
 
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
+
+        self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
         self.start_thread = threading.Thread(target=self.start,
@@ -133,6 +135,12 @@ class AzureCaas:
         self._get_work()
 
         self.runs_tree[self.run_id] = self._container_group_names
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_tasks(self):
+        return list(self._tasks_book.values())
 
 
     # --------------------------------------------------------------------------
@@ -423,7 +431,11 @@ class AzureCaas:
             else:
                 get_statuses = self._get_task_statuses
 
-            for task in self._tasks_book.values():
+            with self._task_lock:
+                _tasks = self.get_tasks()
+                tasks = copy.copy(_tasks)
+
+            for task in tasks:
                 # if task is already marked as done or filed then skip it
                 if task.name in finshed:
                     continue
@@ -463,9 +475,8 @@ class AzureCaas:
                 msg = f'[failed: {failed}, done {done}, running {running}]'
 
                 if len(finshed) == len(self._tasks_book):
-                    msg = 'all tasks are finished'
                     if self.auto_terminate:
-                        msg += '. Terminating the manager'
+                        msg += 'Terminating the manager'
                         self.logger.trace(msg)
                         self._shutdown()
 
