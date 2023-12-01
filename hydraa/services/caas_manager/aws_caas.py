@@ -23,6 +23,10 @@ EC2 = ['EC2', 'ec2'] # Elastic Cloud
 ECS = ['ECS', 'ecs'] # Elastic Container Service
 FARGATE = ['FARGATE', 'fargate'] # Fargate container service
 
+ECS_TASKS_OTHER_STATUSES = ['PROVISIONING', 'PENDING', 'ACTIVATING',
+                            'DEACTIVATING', 'STOPPING', 'DEPROVISIONING',
+                            'DELETED']
+
 CPTD = 10    # The max number of containers defs within a task def.
 TDPC = 500   # The max number of task defs per cluster.
 TPFC = 1000  # The max number of tasks per FARGATE cluster.
@@ -199,34 +203,6 @@ class AwsCaas:
     #
     def _get_runs_tree(self, run_id):
         return self.runs_tree[run_id]
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _get_run_status(self, run_id):
-        
-        run_status = [] 
-        for key, val in self._family_ids.items():
-            if val.get('run_id') == run_id:
-                tasks = [t.arn for t in val.get('task_list')]
-                statuses = self._get_task_statuses(tasks, self.cluster_name)
-                run_status.append(statuses)
-
-        run_stat =  [item for sublist in run_status for item in sublist]
-        pending = list(filter(lambda pending: pending == 'PENDING', run_stat))
-        running = list(filter(lambda pending: pending == 'RUNNING', run_stat))
-        stopped = list(filter(lambda pending: pending == 'STOPPED', run_stat))
-
-        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending),
-                                                                 len(running),
-                                                                 len(stopped)))
-        if running or pending:
-            print('run: {0} is running'.format(run_id))
-
-        if all([status == 'STOPPED' for status in run_stat]):
-            print('run: {0} is finished'.format(run_id))
-
-        print(msg)
 
 
     # --------------------------------------------------------------------------
@@ -504,7 +480,7 @@ class AwsCaas:
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
-        self._family_ids[family_id]['ARN'] =  task_def_arn
+        self._family_ids[family_id]['ARN'] = task_def_arn
 
         return family_id, task_def_arn
 
@@ -542,7 +518,7 @@ class AwsCaas:
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
-        self._family_ids[family_id]['ARN'] =  task_def_arn
+        self._family_ids[family_id]['ARN'] = task_def_arn
 
         return family_id, task_def_arn
 
@@ -692,8 +668,8 @@ class AwsCaas:
                     kwargs['platformVersion']      = 'LATEST'
                     kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
                                                                             'subnet-094da8d73899da51c',],
-                                                    'assignPublicIp'     : 'ENABLED',
-                                                    'securityGroups'     : ["sg-0702f37d21c55da64"]}}
+                                                      'assignPublicIp'     : 'ENABLED',
+                                                      'securityGroups'     : ["sg-0702f37d21c55da64"]}}
 
                 # EC2 does not support Network config or platform version
                 if self.launch_type in EC2:
@@ -719,27 +695,31 @@ class AwsCaas:
                 self._family_ids[family_id]['task_arns'] = []
 
                 for i, task in enumerate(response['tasks']):
+                    # FIXME: how can we guarantee that the
+                    # order of the tasks is preserved in this response?
+                    ctasks[i].arn = task['taskArn']
                     self._family_ids[family_id]['task_arns'].append(task['taskArn'])
 
                 self._family_ids[family_id]['manager_id'] = self.manager_id
                 self._family_ids[family_id]['run_id']     = self.run_id
                 self._family_ids[family_id]['task_list']  = batch
                 self._family_ids[family_id]['batch_size'] = len(batch)
-            
+
             except Exception as e:
-                # upon failure mark the tasks
-                # as failed
+                # upon failure mark the tasks as failed
                 for ctask in batch:
-                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
+                    self.logger.error('failed to submit {0}'.format(ctask.name))
                     ctask.set_exception(e)
 
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_stamps(self, tasks, cluster):
+    def _get_task_stamps(self, tasks, cluster=None):
         """Pull the timestamps for every task by its ARN and convert
            them to a human readable.
         """
+        if not cluster:
+            cluster = self.cluster_name
 
         task_stamps  = OrderedDict()
         task_arns    = [arn for arn in tasks.keys()]
@@ -773,7 +753,7 @@ class AwsCaas:
             print('profiles already exist {0}'.format(fname))
             return fname
 
-        task_stamps = self._get_task_stamps(self._tasks_book, self.cluster_name)
+        task_stamps = self._get_task_stamps(self._tasks_book)
 
         try:
             import pandas as pd
@@ -817,7 +797,8 @@ class AwsCaas:
         """
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
-        tasks_arns = list(iter.chain.from_iterable(tasks))
+        tasks_arns = [t.arn for t in tasks]
+
         if len(tasks_arns) <= 100:
             response = self._ecs_client.describe_tasks(tasks=tasks_arns,
                                                         cluster=cluster)
@@ -850,55 +831,47 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, cluster):
+    def _get_task_statuses(self, tasks, cluster=None):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Retrieve task statuses from ECS API
 
         Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
-        """
-        statuses = {}
-        stopped = []
-        failed  = []
-        running = []
-        '''
+
         Lifecycle states: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle.html
-        '''
+        """
+
+        # Pulling tasks statuses in batches gets slower with the number of tasks
+        # and sometimes causes the wait thread to hang, so we only pull status per task
+        if len(tasks) < 1:
+            raise Exception('Pulling statuses in batches is supported'
+                            ' but not permitted')
+
+        if not cluster:
+            cluster = self.cluster_name
 
         tasks_chunks = self._describe_tasks(tasks, cluster)
         for task_chunk in tasks_chunks:
             for task in task_chunk:
-                # the task (i.e. pod) stopped
                 if task['lastStatus'] == 'STOPPED':
                     # if the pod stopped then mark all of 
                     # its container as stopped
                     for container in task['containers']:
-                        if container['exitCode'] == 0:
-                            stopped.append(container['name'])
-                        else:
-                            failed.append(container['name'])
+                        if container.get('name') == task.name:
+                            if container.get('exitCode') == 0:
+                                return 'Completed'
+                            else:
+                                return 'Failed'
 
-                # the task (i.e. pod) running
                 if task['lastStatus'] == 'RUNNING':
                     for container in task['containers']:
-                        if container['lastStatus'] == 'STOPPED':
-                            if container['exitCode'] == 0:
-                                stopped.append(container['name'])
-                            else:
-                                failed.append(container['name'])
-
-                        elif container['lastStatus'] == 'RUNNING':
-                            running.append(container['name'])
+                        return 'Running'
 
                 # else it is transitioning 
-                elif task['lastStatus'] in ['PROVISIONING', 'PENDING', 'ACTIVATING',
-                                            'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'DELETED']:
-                                            for container in task['containers']:
-                                                running.append(container['name'])
-
-            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
-
-        return statuses
+                elif task['lastStatus'] in ECS_TASKS_OTHER_STATUSES:
+                    return 'Running'
+                else:
+                    return 'Unknown'
 
 
     # --------------------------------------------------------------------------
@@ -909,18 +882,20 @@ class AwsCaas:
         finshed = []
         failed, done, running = 0, 0, 0
 
-        if self.launch_type not in EKS:
-            self.logger.warning('waiting for tasks is not supported in this mode yet')
-            time.sleep(5)
-            pass
-
         while not self._terminate.is_set():
+
+            # pull any new upcoming tasks added to the tasks book
+            if self.launch_type in EKS:
+                get_statuses = self.cluster._get_task_statuses
+            else:
+                get_statuses = self._get_task_statuses
+
             for task in self._tasks_book.values():
                 # if task is already marked as done or filed then skip it
                 if task.name in finshed:
                     continue
 
-                status = self.cluster._get_task_statuses(task)
+                status = get_statuses(task)
                 if not status:
                     continue
 

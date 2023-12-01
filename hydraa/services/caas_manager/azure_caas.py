@@ -184,29 +184,6 @@ class AzureCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_run_status(self, run_id):
-
-        run_groups_names = self.runs_tree[run_id]
-        statuses = self._get_task_statuses(run_groups_names)
-
-        pending = list(filter(lambda pending: pending == 'Waiting', statuses))
-        running = list(filter(lambda pending: pending == 'Running', statuses))
-        stopped = list(filter(lambda pending: pending == 'Terminated', statuses))
-
-        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending),
-                                                                 len(running),
-                                                                 len(stopped)))
-        if running or pending:
-            print('run: {0} is running'.format(run_id))
-
-        if all([status == 'Terminated' for status in statuses]):
-            print('run: {0} is finished'.format(run_id))
-
-        print(msg)
-
-
-    # --------------------------------------------------------------------------
-    #
     def _create_container_client(self, cred):
         
         client = ContainerInstanceManagementClient(credential=DefaultAzureCredential(), 
@@ -252,7 +229,7 @@ class AzureCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_container_group(self, resource_group, contianers):
+    def create_and_submit_container_group(self, resource_group, contianers):
         """Creates a container group with a single.multiple container(s).
 
         Arguments:
@@ -326,24 +303,27 @@ class AzureCaas:
     def submit(self, ctasks):
 
         cpcg = self._schedule(ctasks)
+
+        if not self.resource_group:
+            raise TypeError('resource group can not be empty')
+
         for batch in cpcg:
             containers = []
             for ctask in batch:
-                ctask.run_id      = self.run_id
-                ctask.id          = self._task_id
-                ctask.name        = 'ctask-{0}'.format(self._task_id)
-                ctask.provider    = AZURE
+                ctask.provider = AZURE
+                ctask.id = self._task_id
+                ctask.run_id = self.run_id
                 ctask.launch_type = self.launch_type
+                ctask.name = 'ctask-{0}'.format(self._task_id)
 
                 # the minimum memory for a container is 0.1 GB
                 # and it should be an increment of 0.1
-                memory = round(ctask.memory / 1000, 1)
                 if memory < 0.1:
                     memory = 0.1
-                    self.logger.trace('setting task memory to {0} GB'.format(memory))                    
-    
-                container_resource_requests = ResourceRequests(memory_in_gb=memory,
-                                                                   cpu=ctask.vcpus)
+                memory = round(ctask.memory / 1000, 1)                   
+
+                container_resource_requests = ResourceRequests(cpu=ctask.vcpus,
+                                                               memory_in_gb=memory)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
 
@@ -364,74 +344,65 @@ class AzureCaas:
 
                 self._tasks_book[str(ctask.name)] = ctask
                 self.logger.trace('submitting tasks {0}'.format(ctask.id))
-
                 self._task_id +=1
 
-            if not self.resource_group:
-                raise TypeError('resource group can not be empty')
-
             try:
-                # create container groups and submit
-                contaier_group_name = self.create_container_group(self.resource_group, containers)
+                # create container groups (pod) and submit
+                contaier_group_name = self.create_and_submit_container_group(self.resource_group,
+                                                                             containers)
                 self._container_group_names[contaier_group_name]['task_list'] = batch
                 self._container_group_names[contaier_group_name]['batch_size'] = len(batch)
                 self._container_group_names[contaier_group_name]['manager_id'] = self.manager_id
                 self._container_group_names[contaier_group_name]['resource_name'] = self.resource_group_name
-    
-            except Exception as e:
-                # upon failure mark the tasks
-                # as failed
-                for ctask in batch:
-                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
-                    ctask.set_exception(e)
 
+            except Exception as e:
+                # upon failure mark the tasks as failed
+                for ctask in batch:
+                    self.logger.error('failed to submit {0}'.format(ctask.name))
+                    ctask.set_exception(e)
+            finally:
+                for ctask in batch:
+                    ctask.contaier_group_name = contaier_group_name
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, container_group_names):
+    def _get_task_statuses(self, tasks, container_group_names):
 
-        statuses = {}
-        stopped  = []
-        failed   = []
-        running  = []
+        # Pulling tasks statuses in batches gets slower with the number of tasks
+        # and sometimes causes the wait thread to hang, so we only pull status per task
+        if len(tasks) < 1:
+            raise Exception('Pulling statuses in batches is supported'
+                            ' but not permitted')
 
-        groups = [g for g in container_group_names.keys()]
-        for group in groups:
-            container_group = self.con_client.container_groups.get(self.resource_group_name,
-                                                                                        group)
-            
-            for container in container_group.as_dict()['containers']:
-                name = container.get('name', '')
-                container_task = container.get('instance_view', {})
-                if name and container_task:
-                    try:
-                        if container_task['current_state']['state'] == 'Terminated':
-                            if  container_task['current_state']['exit_code'] == 0:
-                                stopped.append(name)
-                            else:
-                                failed.append(name)
-                        
-                        elif container_task['current_state']['state'] == 'Running':
-                            running.append(name)
-                        
-                        elif container_task['current_state']['state'] == 'Waiting':
-                            events = container.get('events', {})
-                            if events:
-                                for e in events:
-                                    if e['name'] == 'Failed':
-                                        failed.append(name)
-                                    else:
-                                        pass
+        container_group_obj = self.con_client.container_groups.get(self.resource_group_name,
+                                                                   tasks.contaier_group_name)
+        for container in container_group_obj.as_dict()['containers']:
+            name = container.get('name')
+            container_task = container.get('instance_view', {})
+            if name and container_task:
+                try:
+                    if container_task['current_state']['state'] == 'Terminated':
+                        if container_task['current_state']['exit_code'] == 0:
+                            return 'Completed'
                         else:
-                            running.append(name)
+                            return 'Failed'
+                    
+                    elif container_task['current_state']['state'] == 'Running':
+                        return 'Running'
+                    
+                    elif container_task['current_state']['state'] == 'Waiting':
+                        events = container.get('events', {})
+                        for e in events:
+                            if e['name'] == 'Failed':
+                                return 'Failed'
+                            else:
+                                return 'Running'
+                    else:
+                        return 'Unknown'
 
-                    except AttributeError:
-                        self.logger.warning('no task statuses avilable yet')
-                        time.sleep(1)
-
-            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
-
-        return statuses
+                except AttributeError:
+                    self.logger.warning('no task statuses avilable yet')
+                    time.sleep(1)
 
 
     # --------------------------------------------------------------------------
@@ -442,12 +413,14 @@ class AzureCaas:
         finshed = []
         failed, done, running = 0, 0, 0
 
-        if self.launch_type not in AKS:
-            self.logger.warning('waiting for tasks is not supported in this mode yet')
-            time.sleep(5)
-            pass
-
         while not self._terminate.is_set():
+
+            # pull any new upcoming tasks added to the tasks book
+            if self.launch_type in AKS:
+                get_statuses = self.cluster._get_task_statuses
+            else:
+                get_statuses = self._get_task_statuses
+
             for task in self._tasks_book.values():
                 # if task is already marked as done or filed then skip it
                 if task.name in finshed:

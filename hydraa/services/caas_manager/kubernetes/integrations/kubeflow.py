@@ -10,6 +10,7 @@ from ...utils.misc import download_files
 from ...utils.misc import load_multiple_yamls
 from ...utils.misc import dump_multiple_yamls
 
+MPIPOD = "pod.mpi"
 
 # --------------------------------------------------------------------------
 #
@@ -276,7 +277,7 @@ class KubeflowMPILauncher(Kubeflow):
 
         Args:
             tasks (list): List of tasks to be launched.
-    
+
             num_workers (int): Number of MPI workers to launch for each task.
 
             slots_per_worker (int): Number of slots (cores) per worker.
@@ -287,13 +288,13 @@ class KubeflowMPILauncher(Kubeflow):
             task.id = str(self.manager._task_id)
             task.name = 'ctask-{0}'.format(self.manager._task_id)
             task.pod_name = task.name
-            task.type = 'pod.mpi'
+            task.type = MPIPOD
             task.mpi_setup = {"workers": num_workers,
                               "slots": slots_per_worker,
                               "scheduler": ""}
-            
+
             task.tries = 3
-    
+
             # make sure only one instance is updating 
             # the task_id at a time.
             with self.update_lock:
@@ -301,7 +302,7 @@ class KubeflowMPILauncher(Kubeflow):
                 self.manager._tasks_book[str(ctask.name)] = task
 
         kf_jobs = self.build_mpi_deployment(tasks)
-        
+
         print('submitting MPIJobs x [{0}] to {1}'.format(len(tasks),
                                                          self.cluster.name))
         file_path = self.cluster.sandbox + '/' + 'mpijobs.yaml'
@@ -314,15 +315,21 @@ class KubeflowMPILauncher(Kubeflow):
 
     # --------------------------------------------------------------------------
     #
-    def kill(self):
+    def kill_mpi_tasks(self, task, all_tasks=False):
         """
         Kills the MPI job.
 
         Returns:
             str: None
         """
-        cmd = "kubectl delete MPIJob"
+        if task and all_tasks:
+            raise ValueError('task and all_tasks cannot be specified together')
+
+        cmd = f"kubectl delete MPIJob {task.name}"
+        if all_tasks:
+            cmd = "kubectl delete MPIJob --all"
         out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
+        print(err if ret else out)
 
 # --------------------------------------------------------------------------
 #
