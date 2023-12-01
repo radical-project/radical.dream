@@ -86,6 +86,7 @@ class Task(Future):
         super().__init__(*args, **kwargs)
 
         self.id: int = None
+        self.tries: int = 0
         self.name : str = None
         self.vcpus: float = 0.1
         self.memory: float = 0.1

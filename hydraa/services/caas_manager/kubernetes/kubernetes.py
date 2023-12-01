@@ -309,11 +309,11 @@ class K8sCluster:
 
         for ctask in ctasks:
             # Single Container Per Pod (SCPP)
-            if any([p in ctask.type for p in POD]) or not ctask.type:
+            if any([p in [ctask.type] for p in POD]) or not ctask.type:
                 scpp.append(ctask)
 
             # Multiple Containers Per Pod (MCPP).
-            elif any([c in ctask.type for c in CONTAINER]):
+            elif any([c in [ctask.type] for c in CONTAINER]):
                 mcpp.append(ctask)
 
         if mcpp:
@@ -532,9 +532,12 @@ class K8sCluster:
 
         cmd1 = f'kubectl get pods -l task_label={task.pod_name} -o custom-columns=:.status.phase'
         cmd2 = f"kubectl get pod -l task_label={task.pod_name} -o jsonpath="'{.items[*].status.containerStatuses}'""
-        pod_status, _, _ = sh_callout(cmd1, shell=True, kube=self)
-        pod_status = pod_status.strip()
-        pod_containers, _, _ = sh_callout(cmd2, shell=True, munch=True, kube=self)
+        try:
+            pod_status, _, _ = sh_callout(cmd1, shell=True, kube=self)
+            pod_status = pod_status.strip()
+            pod_containers, _, _ = sh_callout(cmd2, shell=True, munch=True, kube=self)
+        except SyntaxError:
+            return "Unknown"
 
         if pod_status == 'Succeeded':
             return "Completed"
@@ -748,7 +751,7 @@ class K8sCluster:
         cmd = f'kubectl logs -l task_label='
 
         # container task, then pull the logs of the container
-        if any([c in task.type for c in CONTAINER]):
+        if any([c in [task.type] for c in CONTAINER]):
             if related_containers:
                 raise Exception('related containers is only supported'
                                 ' for pod tasks')
@@ -762,7 +765,7 @@ class K8sCluster:
                 raise Exception(f'{task.name} does not have a pod name')
 
         # pod task, then the task name is the pod name
-        elif any([p in task.type for p in POD]) or not task.type:
+        elif any([p in [task.type] for p in POD]) or not task.type:
             # we pull all of the containers in the pod
             if related_containers:
                 # get pods containers

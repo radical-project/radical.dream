@@ -453,28 +453,32 @@ class Jet2Caas():
                 # state like MPI when the worker is reported to be "failed"
                 # then running this approach should update task state after
                 # failer for now.
-                elif status in ['Failed', 'Unknown']:
+                elif status == 'Failed':
                     # default number of tries is 3 * 5s = 15s
                     # after that declare the task as failed
                     if task.tries:
                         task.tries -= 1
                         task.reset_state()
                     else:
-                        task.set_exception(Exception('Failed: Please check the logs'))
+                        task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
 
+                elif status == 'Unknown':
+                    self.logger.warning('task {0} is in unknown state'.format(task.name))
+
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
-                
+
                 if len(finshed) == len(self._tasks_book):
                     msg = 'all tasks are finished'
-                    if not self.auto_terminate:
+                    if self.auto_terminate:
+                        msg += '. Terminating the manager'
                         self.logger.trace(msg)
                         self._shutdown()
 
-            if msg:
                 self.outgoing_q.put(msg)
+
             time.sleep(5)
 
 
