@@ -453,10 +453,11 @@ class Jet2Caas():
                     continue
 
                 if status == 'Completed':
+                    if task.running():
+                        running -= 1
                     task.set_result('Finished successfully')
                     finshed.append(task.name)
                     done += 1
-                    running -= 1
 
                 elif status == 'Running':
                     if not task.running():
@@ -476,13 +477,14 @@ class Jet2Caas():
                         task.tries -= 1
                         task.reset_state()
                     else:
+                        if task.running():
+                            running -= 1
                         task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
-                        running -= 1
 
                 else:
-                    self.logger.warning(f'task {task.name} is in {status} state')
+                    self.logger.info(f'task {task.name} is in {status} state')
 
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
