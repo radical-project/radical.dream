@@ -321,17 +321,17 @@ class AzureCaas:
                 ctask.provider = AZURE
                 ctask.id = self._task_id
                 ctask.run_id = self.run_id
+                ctask.contaier_group_name = None
                 ctask.launch_type = self.launch_type
                 ctask.name = 'ctask-{0}'.format(self._task_id)
 
                 # the minimum memory for a container is 0.1 GB
                 # and it should be an increment of 0.1
-                if memory < 0.1:
-                    memory = 0.1
-                memory = round(ctask.memory / 1000, 1)                   
+                if ctask.memory < 0.1:
+                    ctask.memory = 0.1                   
 
                 container_resource_requests = ResourceRequests(cpu=ctask.vcpus,
-                                                               memory_in_gb=memory)
+                                                               memory_in_gb=ctask.memory)
                 container_resource_requirements = ResourceRequirements(
                                             requests=container_resource_requests)
 
@@ -358,6 +358,9 @@ class AzureCaas:
                 # create container groups (pod) and submit
                 contaier_group_name = self.create_and_submit_container_group(self.resource_group,
                                                                              containers)
+                for ctask in batch:
+                    ctask.contaier_group_name = contaier_group_name
+
                 self._container_group_names[contaier_group_name]['task_list'] = batch
                 self._container_group_names[contaier_group_name]['batch_size'] = len(batch)
                 self._container_group_names[contaier_group_name]['manager_id'] = self.manager_id
@@ -366,41 +369,54 @@ class AzureCaas:
             except Exception as e:
                 # upon failure mark the tasks as failed
                 for ctask in batch:
-                    self.logger.error('failed to submit {0}'.format(ctask.name))
+                    ctask.state = 'Failed'
                     ctask.set_exception(e)
-            finally:
-                for ctask in batch:
-                    ctask.contaier_group_name = contaier_group_name
+
 
     # --------------------------------------------------------------------------
     #
     def _get_task_statuses(self, tasks, container_group_names=None):
 
         # Pulling tasks statuses in batches gets slower with the number of tasks
-        # and sometimes causes the wait thread to hang, so we only pull status per task
-        if len(tasks) < 1:
+        # and sometimes causes the wait thread to hang, so we only pull status
+        # per task
+        if isinstance(tasks, list) and len(tasks) < 1:
             raise Exception('Pulling statuses in batches is supported'
                             ' but not permitted')
+
+        task = tasks
+        # an ACS task must have contaier_group_name attached to it
+        # otherwise task submission failed for a reason found in the
+        # task.excception
+        if task.done() and not task.contaier_group_name:
+            if task.state == 'Failed':
+                return task.state
+
+            # the task state got altered by external elements
+            else:
+                raise Exception('Incosistent task state')
+
         if not container_group_names:
             container_group_names = self._container_group_names
 
         container_group_obj = self.con_client.container_groups.get(self.resource_group_name,
-                                                                   tasks.contaier_group_name)
+                                                                   task.contaier_group_name)
         for container in container_group_obj.as_dict()['containers']:
             name = container.get('name')
             container_task = container.get('instance_view', {})
             if name and container_task:
                 try:
-                    if container_task['current_state']['state'] == 'Terminated':
+                    status = container_task['current_state']['state']
+                    if status == 'Terminated':
                         if container_task['current_state']['exit_code'] == 0:
                             return 'Completed'
                         else:
                             return 'Failed'
-                    
-                    elif container_task['current_state']['state'] == 'Running':
+
+                    elif status == 'Running':
                         return 'Running'
-                    
-                    elif container_task['current_state']['state'] == 'Waiting':
+
+                    elif status == 'Waiting':
                         events = container.get('events', {})
                         for e in events:
                             if e['name'] == 'Failed':
@@ -408,7 +424,7 @@ class AzureCaas:
                             else:
                                 return 'Running'
                     else:
-                        return 'Unknown'
+                        return status if status else 'Unknown'
 
                 except AttributeError:
                     self.logger.warning('no task statuses avilable yet')
@@ -471,7 +487,11 @@ class AzureCaas:
                     else:
                         if task.running():
                             running -= 1
-                        task.set_exception(Exception('Failed due to container error, check the logs'))
+
+                        # task already failed during submission
+                        if not task._exception:
+                            task.set_exception(Exception('Failed due to container error, check the logs'))
+
                         finshed.append(task.name)
                         failed += 1
 
@@ -481,13 +501,13 @@ class AzureCaas:
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
 
+                self.outgoing_q.put(msg)
+
                 if len(finshed) == len(self._tasks_book):
                     if self.auto_terminate:
-                        msg += 'Terminating the manager'
-                        self.logger.trace(msg)
+                        msg = 'Autoterminate was set. Terminating the manager'
+                        self.outgoing_q.put(msg)
                         self.shutdown()
-
-                self.outgoing_q.put(msg)
 
             time.sleep(5)
 

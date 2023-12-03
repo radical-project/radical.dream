@@ -489,13 +489,13 @@ class Jet2Caas():
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
 
+                self.outgoing_q.put(msg)
+
                 if len(finshed) == len(self._tasks_book):
                     if self.auto_terminate:
-                        msg += 'Terminating the manager'
-                        self.logger.trace(msg)
+                        msg = 'Autoterminate was set. Terminating the manager'
+                        self.outgoing_q.put(msg)
                         self.shutdown()
-
-                self.outgoing_q.put(msg)
 
             time.sleep(5)
 

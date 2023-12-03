@@ -715,7 +715,6 @@ class AwsCaas:
             except Exception as e:
                 # upon failure mark the tasks as failed
                 for ctask in batch:
-                    self.logger.error('failed to submit {0}'.format(ctask.name))
                     ctask.set_exception(e)
 
 
@@ -847,17 +846,28 @@ class AwsCaas:
 
         # Pulling tasks statuses in batches gets slower with the number of tasks
         # and sometimes causes the wait thread to hang, so we only pull status per task
-        if len(tasks) < 1:
+        if isinstance(tasks, list) and len(tasks) < 1:
             raise Exception('Pulling statuses in batches is supported'
                             ' but not permitted')
 
         if not cluster:
             cluster = self.cluster_name
+        
+        task = tasks
 
-        tasks_chunks = self._describe_tasks(tasks, cluster)
+        if task.done() and not task.arn:
+            if task.state == 'Failed':
+                return task.state
+
+            # the task state got altered by external elements
+            else:
+                raise Exception('Incosistent task state')
+
+        tasks_chunks = self._describe_tasks(task, cluster)
         for task_chunk in tasks_chunks:
             for task in task_chunk:
-                if task['lastStatus'] == 'STOPPED':
+                status = task['lastStatus']
+                if status == 'STOPPED':
                     # if the pod stopped then mark all of 
                     # its container as stopped
                     for container in task['containers']:
@@ -867,15 +877,15 @@ class AwsCaas:
                             else:
                                 return 'Failed'
 
-                if task['lastStatus'] == 'RUNNING':
+                if status == 'RUNNING':
                     for container in task['containers']:
                         return 'Running'
 
                 # else it is transitioning 
-                elif task['lastStatus'] in ECS_TASKS_OTHER_STATUSES:
+                elif status in ECS_TASKS_OTHER_STATUSES:
                     return 'Running'
                 else:
-                    return 'Unknown'
+                    return status if status else 'Unknown'
 
 
     # --------------------------------------------------------------------------
@@ -934,7 +944,10 @@ class AwsCaas:
                     else:
                         if task.running():
                             running -= 1
-                        task.set_exception(Exception('Failed due to container error, check the logs'))
+
+                        # task already failed during submission
+                        if not task._exception:
+                            task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
 
@@ -944,13 +957,13 @@ class AwsCaas:
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
 
+                self.outgoing_q.put(msg)
+
                 if len(finshed) == len(self._tasks_book):
                     if self.auto_terminate:
-                        msg += 'Terminating the manager'
-                        self.logger.trace(msg)
+                        msg = 'Autoterminate was set. Terminating the manager'
+                        self.outgoing_q.put(msg)
                         self.shutdown()
-
-                self.outgoing_q.put(msg)
 
             time.sleep(5)
 
