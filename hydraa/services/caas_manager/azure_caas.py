@@ -97,7 +97,7 @@ class AzureCaas:
         # now set the manager as active
         self.status = True
 
-        atexit.register(self._shutdown)
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -436,7 +436,7 @@ class AzureCaas:
                 tasks = copy.copy(_tasks)
 
             for task in tasks:
-                # if task is already marked as done or filed then skip it
+                # if task is already marked as done or failed then skip it
                 if task.name in finshed:
                     continue
 
@@ -448,10 +448,14 @@ class AzureCaas:
                     task.set_result('Finished successfully')
                     finshed.append(task.name)
                     done += 1
+                    running -= 1
 
                 elif status == 'Running':
-                    task.set_running_or_notify_cancel()
-                    running += 1
+                    if not task.running():
+                        task.set_running_or_notify_cancel()
+                        running += 1
+                    else:
+                        continue
 
                 # sometimes tasks requires sometime to reach running
                 # state like MPI when the worker is reported to be "failed"
@@ -467,9 +471,10 @@ class AzureCaas:
                         task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
+                        running -= 1
 
-                elif status == 'Unknown':
-                    self.logger.warning('task {0} is in unknown state'.format(task.name))
+                else:
+                    self.logger.warning(f'task {task.name} is in {status} state')
 
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
@@ -478,7 +483,7 @@ class AzureCaas:
                     if self.auto_terminate:
                         msg += 'Terminating the manager'
                         self.logger.trace(msg)
-                        self._shutdown()
+                        self.shutdown()
 
                 self.outgoing_q.put(msg)
 
@@ -640,7 +645,7 @@ class AzureCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _shutdown(self):
+    def shutdown(self):
 
         if not (self.resource_group_name and self.status):
             return

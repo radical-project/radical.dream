@@ -524,7 +524,7 @@ class K8sCluster:
         to the controller manager.
 
         Parameters:
-            task (str): A name for the pod
+            task (str): A name for a task which represents a pod or a container
         
         Returns:
             statuses (list): a list of list for all of the task statuses.
@@ -544,7 +544,7 @@ class K8sCluster:
 
         elif pod_status == 'Running':
             return "Running"
-        
+
         elif pod_status == 'Pending':
             return "Pending"
 
@@ -559,7 +559,7 @@ class K8sCluster:
                         else:
                             return "Failed"
         else:
-            return "Unknown"
+            return pod_status if pod_status else "Unknown"
 
     # --------------------------------------------------------------------------
     #

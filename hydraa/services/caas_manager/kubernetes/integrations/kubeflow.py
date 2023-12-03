@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import copy
 import threading
@@ -251,7 +252,7 @@ class KubeflowMPILauncher(Kubeflow):
 
     # --------------------------------------------------------------------------
     #
-    def calculate_kubeflow_workers(nodes, cpn, task):
+    def calculate_kubeflow_workers(self, nodes, cpn, task):
         num_workers = 0
         total_cpus = nodes * cpn
 
@@ -299,7 +300,7 @@ class KubeflowMPILauncher(Kubeflow):
             # the task_id at a time.
             with self.update_lock:
                 self.manager._task_id +=1
-                self.manager._tasks_book[str(ctask.name)] = task
+                self.manager._tasks_book[str(task.name)] = task
 
         kf_jobs = self.build_mpi_deployment(tasks)
 

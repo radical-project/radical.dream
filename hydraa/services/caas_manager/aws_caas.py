@@ -81,7 +81,7 @@ class AwsCaas:
         self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
-        # FIXME: try to ognize these clients into a uniform dict
+        # FIXME: try to orgnize these clients into a uniform dict
         #        self.clients['EKS'], self.clients['EC2'], etc.
         self._ecs_client = self._create_ecs_client(cred)
         self._ec2_client = self._create_ec2_client(cred)
@@ -104,7 +104,7 @@ class AwsCaas:
         # now set the manager as active
         self.status = True
 
-        atexit.register(self._shutdown)
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -131,6 +131,8 @@ class AwsCaas:
 
         # check if this launch will be a service
         if service:
+            if self.launch_type in EKS:
+                raise Exception('EKS does not support services yet')
             self.create_ecs_service()
 
         if self.launch_type in FARGATE:
@@ -555,11 +557,11 @@ class AwsCaas:
                 return service
 
         self.logger.trace('no exisitng service found, creating.....')
-        response = self._ecs_client.create_service(cluster        = self.cluster_name,
-                                                   serviceName    = self.service_name,
-                                                   taskDefinition = self._task_name,
-                                                   launchType     = 'FARGATE',
-                                                   desiredCount   = 1,
+        response = self._ecs_client.create_service(desiredCount = 1,
+                                                   launchType = 'FARGATE',
+                                                   cluster = self.cluster_name,
+                                                   serviceName = self.service_name,
+                                                   taskDefinition = 'Hydraa-Task-Def',
                                                    networkConfiguration = {'awsvpcConfiguration': {
                                                                           'subnets': ['subnet-094da8d73899da51c',],
                                                                           'assignPublicIp': 'ENABLED',
@@ -809,21 +811,18 @@ class AwsCaas:
                                                         cluster=cluster)
             return [response['tasks']]
 
-        tasks = iter(tasks)
         tasks_chuncks = []
-
         # break the task_arns into a chunks of 100
         chunks = [tasks_arns[x:x+100] for x in range(0, len(tasks_arns), 100)]
 
         for chunk in chunks:
             response = self._ecs_client.describe_tasks(tasks=chunk,
-                                                   cluster=cluster)
+                                                       cluster=cluster)
 
-            #FIXME: if we have a failure then update the tasks_book 
+            #FIXME: if we have a failure then update the tasks_book
             #       with status/error code and print it.
             if response['failures'] != []:
-                raise Exception('There were some failures:\n{0}'.format(
-                    response['failures']))
+                raise Exception(f"There were some failures:\n{response['failures']}")
             status_code = response['ResponseMetadata']['HTTPStatusCode']
             if status_code != 200:
                 msg = 'Task status request received status code {0}:\n{1}'
@@ -900,7 +899,7 @@ class AwsCaas:
                 tasks = copy.copy(_tasks)
 
             for task in tasks:
-                # if task is already marked as done or filed then skip it
+                # if task is already marked as done or failed then skip it
                 if task.name in finshed:
                     continue
 
@@ -912,10 +911,14 @@ class AwsCaas:
                     task.set_result('Finished successfully')
                     finshed.append(task.name)
                     done += 1
+                    running -= 1
 
                 elif status == 'Running':
-                    task.set_running_or_notify_cancel()
-                    running += 1
+                    if not task.running():
+                        task.set_running_or_notify_cancel()
+                        running += 1
+                    else:
+                        continue
 
                 # sometimes tasks requires sometime to reach running
                 # state like MPI when the worker is reported to be "failed"
@@ -931,9 +934,10 @@ class AwsCaas:
                         task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
+                        running -= 1
                 
-                elif status == 'Unknown':
-                    self.logger.warning('task {0} is in unknown state'.format(task.name))
+                else:
+                    self.logger.warning(f'task {task.name} is in {status} state')
 
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
@@ -942,7 +946,7 @@ class AwsCaas:
                     if self.auto_terminate:
                         msg += 'Terminating the manager'
                         self.logger.trace(msg)
-                        self._shutdown()
+                        self.shutdown()
 
                 self.outgoing_q.put(msg)
 
@@ -959,11 +963,11 @@ class AwsCaas:
         3- COST_CANCELED : Task must be kill due to exceeding cost
                            limit (set by user)
         """
-        task_arn = self.tasks_book[task_id]
+        task_arn = self._tasks_book[task_id]
 
-        response = self._ecs_client.stop_task(cluster = cluster_name,
-                                              task    = task_arn,
-                                              reason  = reason)
+        response = self._ecs_client.stop_task(task = task_arn,
+                                              reason = reason,
+                                              cluster = cluster_name)
 
         return response
 
@@ -1116,7 +1120,7 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _shutdown(self):
+    def shutdown(self):
         """Shutdown and delete task/service/instance/cluster
         """
 

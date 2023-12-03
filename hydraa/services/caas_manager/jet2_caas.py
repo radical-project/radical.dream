@@ -81,7 +81,7 @@ class Jet2Caas():
         if not self.start_thread.is_alive():
             self.start_thread.start()
 
-        atexit.register(self._shutdown)
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -444,7 +444,7 @@ class Jet2Caas():
                 tasks = copy.copy(_tasks)
 
             for task in tasks:
-                # if task is already marked as done or filed then skip it
+                # if task is already marked as done or failed then skip it
                 if task.name in finshed:
                     continue
 
@@ -456,10 +456,14 @@ class Jet2Caas():
                     task.set_result('Finished successfully')
                     finshed.append(task.name)
                     done += 1
+                    running -= 1
 
                 elif status == 'Running':
-                    task.set_running_or_notify_cancel()
-                    running += 1
+                    if not task.running():
+                        task.set_running_or_notify_cancel()
+                        running += 1
+                    else:
+                        continue
 
                 # sometimes tasks requires sometime to reach running
                 # state like MPI when the worker is reported to be "failed"
@@ -475,9 +479,10 @@ class Jet2Caas():
                         task.set_exception(Exception('Failed due to container error, check the logs'))
                         finshed.append(task.name)
                         failed += 1
+                        running -= 1
 
-                elif status == 'Unknown':
-                    self.logger.warning('task {0} is in unknown state'.format(task.name))
+                else:
+                    self.logger.warning(f'task {task.name} is in {status} state')
 
                 task.state = status
                 msg = f'[failed: {failed}, done {done}, running {running}]'
@@ -486,7 +491,7 @@ class Jet2Caas():
                     if self.auto_terminate:
                         msg += 'Terminating the manager'
                         self.logger.trace(msg)
-                        self._shutdown()
+                        self.shutdown()
 
                 self.outgoing_q.put(msg)
 
@@ -528,19 +533,18 @@ class Jet2Caas():
         self._run_cost    = 0
         self._tasks_book.clear()
 
-        if caller == '_shutdown':
-            self.manager_id = None
-            self.status = False
-            self.servers = None
-            self.client = None
+        self.manager_id = None
+        self.status = False
+        self.servers = None
+        self.client = None
 
-            self._pods_book.clear()
-            self.logger.trace('done')
+        self._pods_book.clear()
+        self.logger.trace('done')
 
 
     # --------------------------------------------------------------------------
     #
-    def _shutdown(self):
+    def shutdown(self):
 
         if not self.servers:
             return
