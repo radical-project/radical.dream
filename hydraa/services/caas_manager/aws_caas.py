@@ -505,15 +505,12 @@ class AwsCaas:
 
            :return: task defination name and task ARN (Amazon Resource Names)
         """
-        # represents a pod in kuberentes lingo
+        # represents a pod in kuberentes
         task_def = {}
-        if cpu:
-            task_def['cpu'] = cpu # optional
-        if memory:
-            task_def['memory'] = memory    # optional
+        if cpu: task_def['cpu'] = cpu
+        if memory: task_def['memory'] = memory
 
         family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
-
         reg_task = self._ecs_client.register_task_definition(volumes=[],
                                                              family=family_id,
                                                              requiresCompatibilities=['EC2'],
@@ -685,17 +682,17 @@ class AwsCaas:
                 kwargs = {}
                 # count of tasks is count of pods
                 # FIXME: find a way to let the user make set
-                # the number of pods if they are identical
-                kwargs['count']         = 1
-                kwargs['cluster']       = cluster_name
-                kwargs['launchType']    = self.launch_type
-                kwargs['overrides']     = {}
+                # the number of pods if they are identical (replicas)
+                kwargs['count'] = 1
+                kwargs['overrides'] = {}
+                kwargs['cluster'] = cluster_name
                 kwargs['taskDefinition'] = task_def_arn
+                kwargs['launchType'] = self.launch_type.upper()
 
                 # submit tasks of size "batch_size"
                 response = self._ecs_client.run_task(**kwargs)
                 if response['failures']:
-                    self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
+                    raise Exception(", ".join(["failed to run task {0} reason: {1}".format(failure['arn'],
                                                 failure['reason']) for failure in response['failures']]))
 
                 # attach the unique ARN (i.e. pod id) to batch
@@ -715,6 +712,7 @@ class AwsCaas:
             except Exception as e:
                 # upon failure mark the tasks as failed
                 for ctask in batch:
+                    ctask.state = 'Failed'
                     ctask.set_exception(e)
 
 
@@ -803,6 +801,9 @@ class AwsCaas:
         """
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
+        if not isinstance(tasks, list):
+            tasks = [tasks]
+
         tasks_arns = [t.arn for t in tasks]
 
         if len(tasks_arns) <= 100:
@@ -1019,48 +1020,40 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_instance(self, VM):
+    def create_ec2_instance(self, VM, use_existing=False):
             """
-            ImageId: An AMI ID is required to launch an instance and must be
-                    specified here or in a launch template.
-
-            Instancetype: The instance type. Default m1.small For more information 
-                        (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html).
-            
-            MinCount: The minimum number of instances to launch.
-            MaxCount: The maximum number of instances to launch.
-
-            UserData: accept any linux commnad (acts as a bootstraper for the instance)
+            VM: VM class object of vm.AwsVM
+            use_existing: if True, then we will use the first running instance
             """
             # return dict of VM attributes by invoking the vm class
             vm = VM(self.cluster_name)
+            instances = []
 
-            # FIXME: check for exisitng EC2 hydraa instances specifically.
-            
-            # check if we have an already running instance
-            reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
-                                                                         "Values": ["running"]},]).get("Reservations")
-            
-            # if we have a running instance(s) return the first one 
-            if reservations:
-                for reservation in reservations:
-                    for instance in reservation["Instances"]:
-                        # TODO: maybe we should ask the users if they
-                        # want to use that instance or not.
-                        if instance["InstanceType"] == VM.InstanceID:
-                            self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
+            if use_existing:
+                # check if we have an already running instance
+                filters=[{"Name": "instance-state-name", "Values": ["running"]}]
+                reservations = self._ec2_client.describe_instances(filters).get("Reservations")
 
-                            return instance["InstanceId"]
+                # if we have a running instance(s) return the first one 
+                if reservations:
+                    for reservation in reservations:
+                        for instance in reservation["Instances"]:
+                            # TODO: maybe we should ask the users if they
+                            # want to use that instance or not.
+                            if instance["InstanceType"] == VM.InstanceID:
+                                self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
+                                instances.append(instance)
+                                break
 
-            self.logger.trace("no existing EC2 instance found with the same resource requirements")
-
-            instances = self._ec2_resource.create_instances(**vm)
+            if not instances or not use_existing:
+                self.logger.trace("no existing EC2 instance found or use_existing is disabled. Creating new instance")
+                instances = self._ec2_resource.create_instances(**vm)
 
             for instance in instances:
                 self.logger.trace("waiting for EC2 instance {0} to be launched".format(instance.id))
                 instance.wait_until_running()
                 self.logger.trace("EC2 instance: {0} has been launched".format(instance.id))
-            
+
             VM.InstanceID = instance.id
 
             # wait for the instance to connect to the targeted cluster
@@ -1087,9 +1080,6 @@ class AwsCaas:
             raise Exception('Batch size can not be 0')
 
         if self.launch_type in FARGATE:
-            # NOTE: submitting more than 50 conccurent tasks might fail
-            #       due to user ECS/Fargate quota
-            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
             if batch_size > TPFC:
                 raise Exception('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
 
