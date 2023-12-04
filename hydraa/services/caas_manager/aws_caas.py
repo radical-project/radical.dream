@@ -695,19 +695,16 @@ class AwsCaas:
                     raise Exception(", ".join(["failed to run task {0} reason: {1}".format(failure['arn'],
                                                 failure['reason']) for failure in response['failures']]))
 
+                task_def_arn = response['tasks'][0]['taskArn']
+                for ctask in batch:
+                    ctask.arn = task_def_arn
+
                 # attach the unique ARN (i.e. pod id) to batch
-                self._family_ids[family_id]['task_arns'] = []
-
-                for i, task in enumerate(response['tasks']):
-                    # FIXME: how can we guarantee that the
-                    # order of the tasks is preserved in this response?
-                    ctasks[i].arn = task['taskArn']
-                    self._family_ids[family_id]['task_arns'].append(task['taskArn'])
-
-                self._family_ids[family_id]['manager_id'] = self.manager_id
-                self._family_ids[family_id]['run_id']     = self.run_id
                 self._family_ids[family_id]['task_list']  = batch
+                self._family_ids[family_id]['run_id'] = self.run_id
                 self._family_ids[family_id]['batch_size'] = len(batch)
+                self._family_ids[family_id]['manager_id'] = self.manager_id
+                self._family_ids[family_id]['task_arns'] = response['tasks'][0]['taskArn']
 
             except Exception as e:
                 # upon failure mark the tasks as failed
@@ -865,13 +862,14 @@ class AwsCaas:
                 raise Exception('Incosistent task state')
 
         tasks_chunks = self._describe_tasks(task, cluster)
-        for task_chunk in tasks_chunks:
-            for task in task_chunk:
-                status = task['lastStatus']
+        for chunk in tasks_chunks:
+            # task_def (i.e. Pod)
+            for task_def in chunk:
+                status = task_def['lastStatus']
                 if status == 'STOPPED':
                     # if the pod stopped then mark all of 
-                    # its container as stopped
-                    for container in task['containers']:
+                    # its container as done/failed
+                    for container in task_def['containers']:
                         if container.get('name') == task.name:
                             if container.get('exitCode') == 0:
                                 return 'Completed'
@@ -879,7 +877,7 @@ class AwsCaas:
                                 return 'Failed'
 
                 if status == 'RUNNING':
-                    for container in task['containers']:
+                    for container in task_def['containers']:
                         return 'Running'
 
                 # else it is transitioning 
