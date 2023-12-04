@@ -33,7 +33,7 @@ TPFC = 1000  # The max number of tasks per FARGATE cluster.
 CIPC = 5000  # Number of container instances per cluster.
 CSPA = 10000 # Number of clusters per account.
 
-WAIT_TIME = 2 # seconds
+WAIT_TIME = 5 # seconds
 
 
 # --------------------------------------------------------------------------
@@ -395,7 +395,7 @@ class AwsCaas:
     def _wait_clusters(self, cluster_name):
 
         clsuter = self.get_ecs_cluster_arn(cluster_name=cluster_name)
-        while True:
+        while not self._terminate.is_set():
             statuses = self._get_cluster_statuses(cluster_name)
             if all([status == 'ACTIVE' for status in statuses]):
                 self.logger.trace('cluster {0} is active'.format(cluster_name))
@@ -649,7 +649,7 @@ class AwsCaas:
            :return: submited ctasks ARNs
 
         """
-        tptd       = self._schedule(ctasks)
+        tptd = self._schedule(ctasks)
         containers = []
         for batch in tptd:
             for ctask in batch:
@@ -1032,6 +1032,7 @@ class AwsCaas:
 
             UserData: accept any linux commnad (acts as a bootstraper for the instance)
             """
+            # return dict of VM attributes by invoking the vm class
             vm = VM(self.cluster_name)
 
             # FIXME: check for exisitng EC2 hydraa instances specifically.
@@ -1046,7 +1047,7 @@ class AwsCaas:
                     for instance in reservation["Instances"]:
                         # TODO: maybe we should ask the users if they
                         # want to use that instance or not.
-                        if instance["InstanceType"] == VM.InstanceID :
+                        if instance["InstanceType"] == VM.InstanceID:
                             self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
 
                             return instance["InstanceId"]
@@ -1063,7 +1064,7 @@ class AwsCaas:
             VM.InstanceID = instance.id
 
             # wait for the instance to connect to the targeted cluster
-            while True:
+            while not self._terminate.is_set():
                 res = self._ecs_client.describe_clusters(clusters = [self.cluster_name])
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
                     self.logger.trace("instance {0} has been registered".format(instance.id))

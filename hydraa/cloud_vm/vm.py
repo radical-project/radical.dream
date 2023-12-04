@@ -20,9 +20,9 @@ class AwsVM:
         self.MaxCount = max_count
         self.InstanceID = instance_id
         self.LaunchType = launch_type
-        self.KeyPair = input_kwargs.get('keypair', None)
-        self.UserData = input_kwargs.get('user_data', '')
-        self.IamInstanceProfile = input_kwargs.get('profile', '')
+        self.KeyPair = input_kwargs.get('KeyPair', None)
+        self.UserData = input_kwargs.get('UserData', '')
+        self.IamInstanceProfile = input_kwargs.get('IamInstanceProfile', {})
         self.TagSpecifications = [{'ResourceType': 'instance',
                                    'Tags'        : [{'Key':'Name',
                                                      'Value': self.VmName}]}]
