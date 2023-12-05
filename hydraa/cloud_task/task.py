@@ -106,6 +106,9 @@ class Task(Future):
         self.restart: Optional[bool] = None
         self.inputs: Optional[List[str]] = []
         self.outputs: Optional[List[str]] = []
+        self.contaier_group_name: str = None
+        self.ecs_launch_type: str = None
+        self.ecs_kwargs: dict = {'executionRoleArn': ''}
 
 
     # --------------------------------------------------------------------------

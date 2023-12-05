@@ -321,7 +321,6 @@ class AzureCaas:
                 ctask.provider = AZURE
                 ctask.id = self._task_id
                 ctask.run_id = self.run_id
-                ctask.contaier_group_name = None
                 ctask.launch_type = self.launch_type
                 ctask.name = 'ctask-{0}'.format(self._task_id)
 

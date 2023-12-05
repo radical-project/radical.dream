@@ -443,11 +443,6 @@ class AwsCaas:
                    'environment' : [],
                    'mountPoints' : [],
                    'volumesFrom' : [],
-                   "logConfiguration": {"logDriver": "awslogs",
-                                        "options": { 
-                                                    "awslogs-group" : "/ecs/first-run-task-definition",
-                                                    "awslogs-region": "us-east-1",
-                                                    "awslogs-stream-prefix": "ecs"}},
                    'image'       : ctask.image,
                    "entryPoint"  : [],
                    'command'     : ctask.cmd}
@@ -457,74 +452,81 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_fargate_task_def(self, container_def, cpu, memory):
-        """Build the internal structure of the task defination.
+    def create_ecs_task(self, container_def, batch):
+        """Build the internal structure of the task.
 
            :param: container_def: a dictionary of a container specifications.
 
-           :return: task defination name and task ARN (Amazon Resource Names)
+           :param: batch: list of containers to be added to the task
+
+           :return: ecs task object and the family_id of the task
         """
+        cpus = 0
+        memory = 0
         task_def = {}
-        if not cpu or not memory:
-            raise Exception('Fargate task must have a memory or cpu units specified')
+        ecs_task = {}
+        family_id = f'hydraa_family_{str(uuid.uuid4())}'
 
-        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
+        # cpu and memory specifications are required when using ECS FARGATE
+        # FIXME: find a way to round the sum to a value that FARGATE allows
+        if self.launch_type in FARGATE:
+            cpus = sum(t.vcpus for t in batch)
+            memory = sum(t.memory for t in batch)
 
-        task_def['family']                  = family_id
-        task_def['volumes']                 = []
-        task_def['cpu']                     = str(cpu)    # required
-        task_def['memory']                  = str(memory) # required
-        task_def['containerDefinitions']    = container_def
-        task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
-        task_def['networkMode']             = 'awsvpc'
-        task_def['requiresCompatibilities'] = ['FARGATE']
+            # check min cpus and memory
+            if cpus < 256 or memory < 512:
+                self.logger.warning('setting FARGATE resource requeste to minimum allowed:'
+                                    ' CPU/MEM: 256/512')
+                cpus = 256
+                memory = 512
 
+            task_def['cpu']  = str(cpus)
+            task_def['memory'] = str(memory)
+            task_def['networkMode'] = 'awsvpc'
+
+            if batch[0].ecs_kwargs.get('subnet'):
+                subnet = batch[0].ecs_kwargs.get('subnet')
+
+            # FIXME: this will only work when we invoke the VM()
+            elif hasattr(self.vms[0], 'SubnetID'):
+                subnet = self.vms[0].SubnetID
+
+            else:
+                raise ValueError('FARGATE networkConfiguration requires subnet via VM'
+                                 ' (SubnetID) or task.ecs_kwargs')
+
+            ecs_task['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [subnet],
+                                                                        'assignPublicIp': 'ENABLED'}}
+
+        if not all(t.ecs_kwargs.get('executionRoleArn') for t in batch):
+            raise ValueError('ECS executionRoleArn is required to launch a task_def')
+
+        task_def['volumes'] = []
+        task_def['family'] = family_id
+        task_def['containerDefinitions'] = container_def
+        task_def['requiresCompatibilities'] = [self.launch_type.upper()]
+        task_def['executionRoleArn'] = batch[0].ecs_kwargs['executionRoleArn']
+
+        # FIXME: sperate ecs_kwargs into: ecs_def_kwargs and ecs_kwargs
+        # update the task def with any user specific ECS kwargs
+
+        # register the task defination
         reg_task = self._ecs_client.register_task_definition(**task_def)
 
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
-        self.logger.trace('task {0} is registered'.format(family_id))
+        self.logger.trace(f'task {family_id} is registered')
+
+        ecs_task['count'] = 1
+        ecs_task['cluster'] = self.cluster_name
+        ecs_task['launchType'] = self.launch_type.upper()
+        ecs_task['taskDefinition'] = task_def_arn
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
         self._family_ids[family_id]['ARN'] = task_def_arn
 
-        return family_id, task_def_arn
-
-
-    # --------------------------------------------------------------------------
-    #
-    def create_ec2_task_def(self, container_defs, cpu = 0, memory = 0):
-        """Build the internal structure of the task defination.
-
-           :param: container_def: a dictionary of a container specifications.
-
-           :param: cpu: the number of CPU units used by the task.
-
-           :param: memory: the amount of memory (in MiB) used by the task.
-
-           :return: task defination name and task ARN (Amazon Resource Names)
-        """
-        # represents a pod in kuberentes
-        task_def = {}
-        if cpu: task_def['cpu'] = cpu
-        if memory: task_def['memory'] = memory
-
-        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
-        reg_task = self._ecs_client.register_task_definition(volumes=[],
-                                                             family=family_id,
-                                                             requiresCompatibilities=['EC2'],
-                                                             containerDefinitions=container_defs,
-                                                             executionRoleArn='arn:aws:iam::626113121967:role/ecsTaskExecutionRole')
-
-        task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']      
-        self.logger.trace('task {0} is registered'.format(family_id))
-
-        # save the family id and its ARN
-        self._family_ids[family_id] = OrderedDict()
-        self._family_ids[family_id]['ARN'] = task_def_arn
-
-        return family_id, task_def_arn
+        return family_id, ecs_task
 
 
     # --------------------------------------------------------------------------
@@ -555,7 +557,7 @@ class AwsCaas:
 
         self.logger.trace('no exisitng service found, creating.....')
         response = self._ecs_client.create_service(desiredCount = 1,
-                                                   launchType = 'FARGATE',
+                                                   launchType = self.launch_type.upper(),
                                                    cluster = self.cluster_name,
                                                    serviceName = self.service_name,
                                                    taskDefinition = 'Hydraa-Task-Def',
@@ -651,49 +653,40 @@ class AwsCaas:
         for batch in tptd:
             for ctask in batch:
                 # build an aws container defination from the task object
-                ctask.run_id      = self.run_id
-                ctask.id          = self._task_id
-                ctask.name        = 'ctask-{0}'.format(ctask.id)
-                ctask.provider    = AWS
+                ctask.provider = AWS
+                ctask.id = self._task_id
+                ctask.run_id = self.run_id
                 ctask.launch_type = self.launch_type
-                
-                containers.append(self.create_container_def(ctask))
-                
+                ctask.name = f'ctask-{ctask.id}'
+
                 self._tasks_book[str(ctask.name)] = ctask
 
-                self.logger.trace('submitting tasks {0}'.format(ctask.name))
+                containers.append(self.create_container_def(ctask))
+
+                self.logger.trace(f'submitting tasks {ctask.name}')
 
                 self._task_id +=1
 
             try:
-                # FIXME: Pass the memory and cpu via a VM class
                 if self.launch_type in FARGATE:
-                    task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
-                    kwargs['platformVersion']      = 'LATEST'
-                    kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
-                                                                            'subnet-094da8d73899da51c',],
-                                                      'assignPublicIp'     : 'ENABLED',
-                                                      'securityGroups'     : ["sg-0702f37d21c55da64"]}}
+                    if not all(t.ecs_launch_type in FARGATE for t in batch):
+                        raise ValueError(f'Got wrong ECS task launch type, expected: {FARGATE}')
 
                 # EC2 does not support Network config or platform version
-                if self.launch_type in EC2:
-                    family_id, task_def_arn = self.create_ec2_task_def(containers)
+                elif self.launch_type in EC2:
+                    if not all(t.ecs_launch_type in EC2 for t in batch):
+                        raise ValueError(f'Got wrong ECS tasks launch type, expected: {EC2}')
 
-                kwargs = {}
-                # count of tasks is count of pods
-                # FIXME: find a way to let the user make set
-                # the number of pods if they are identical (replicas)
-                kwargs['count'] = 1
-                kwargs['overrides'] = {}
-                kwargs['cluster'] = cluster_name
-                kwargs['taskDefinition'] = task_def_arn
-                kwargs['launchType'] = self.launch_type.upper()
+                else:
+                    raise RuntimeError(f'launch type {self.launch_type} is not supported')
+
+                family_id, ecs_task = self.create_ecs_task(containers, batch)
 
                 # submit tasks of size "batch_size"
-                response = self._ecs_client.run_task(**kwargs)
+                response = self._ecs_client.run_task(**ecs_task)
                 if response['failures']:
-                    raise Exception(", ".join(["failed to run task {0} reason: {1}".format(failure['arn'],
-                                                failure['reason']) for failure in response['failures']]))
+                    failures = [(failure['arn'], failure['reason']) for failure in response['failures']]
+                    raise Exception(failures)
 
                 task_def_arn = response['tasks'][0]['taskArn']
                 for ctask in batch:

@@ -10,7 +10,7 @@ OPTYPE = ['chameleon', 'jetstream2']
 #
 class AwsVM:
     def __init__(self, launch_type: str, image_id: str, min_count: int,
-                 max_count: int, instance_id: str, zones=[], **input_kwargs):
+                 max_count: int, instance_id: str, zones: list=[], **input_kwargs):
 
         self.Zones = zones
         self.Provider = 'aws'
@@ -28,7 +28,7 @@ class AwsVM:
                                                      'Value': self.VmName}]}]
 
         if self.LaunchType not in LTYPE:
-            raise Exception('LaunchType must be: {0}'.format(LTYPE))
+            raise ValueError('LaunchType must be: {0}'.format(LTYPE))
 
         self.input_kwargs = input_kwargs
 
