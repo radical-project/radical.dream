@@ -493,9 +493,8 @@ class Jet2Caas():
 
                 if len(finshed) == len(self._tasks_book):
                     if self.auto_terminate:
-                        msg = 'Autoterminate was set. Terminating the manager'
+                        msg = (0, JET2)
                         self.outgoing_q.put(msg)
-                        self.shutdown()
 
             time.sleep(5)
 

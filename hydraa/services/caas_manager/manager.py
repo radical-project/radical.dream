@@ -23,6 +23,12 @@ PROVIDER_TO_CLASS = {
     JET2: Jet2Caas,
     AZURE: AzureCaas}
 
+TERM_SIGNALS = {0: "Auto-terminate was set, terminating.",
+                1: "No more tasks to process, terminating.",
+                2: "User terminations requested, terminating."}
+
+TIMEOUT = 0.1
+
 # --------------------------------------------------------------------------
 #
 class CaasManager:
@@ -117,17 +123,58 @@ class CaasManager:
     #
     def _get_results(self, manager_attrs):
         """
-        check if the contianer is still executing or
-        Done/failed
+        Retrieve and process messages from a manager's output queue.
+
+        This method continuously checks the manager's output queue for messages
+        while the termination flag is not set. It handles termination signals
+        and regular task report messages, logging appropriate information.
+
+        Parameters:
+        - manager_attrs (dict): A dictionary containing manager attributes,
+        including the output queue ('out_q') and the manager class name.
+
+        Returns:
+        None
+
+        Raises:
+        - TypeError: If an unexpected message type is encountered.
+
+        Notes:
+        The method uses the provided manager attributes to access the manager's
+        output queue and class name. It handles termination signals, logs task
+        reports, and raises an exception for unexpected message types.
+
+        Example:
+        ```python
+        manager_attributes = {'out_q': output_queue, 'class': MyManager}
+        instance._get_results(manager_attributes)
+        ```
         """
         manager_queue = manager_attrs['out_q']
         manager_name = manager_attrs['class'].__class__.__name__
 
         while not self._terminate.is_set():
             try:
-                msg = manager_queue.get(block=True, timeout=0.1)
+                msg = manager_queue.get(block=True, timeout=TIMEOUT)
+                # check if the provided msg is a termination signal
+                # or a regular tasks report message from the manager
                 if msg:
-                    self.log.trace(f'{manager_name} reported: {msg}')
+                    # Termination message
+                    if isinstance(msg, tuple):
+                        term_sig, prov = msg
+                        term_msg = TERM_SIGNALS.get(term_sig)
+                        print(term_msg)
+                        self.shutdown(provider=prov)
+
+                    # Report message
+                    elif isinstance(msg, str):
+                        self.log.info(f'{manager_name} reported: {msg}')
+
+                    # Unexpected message
+                    else:
+                        self.shutdown()
+                        raise TypeError(f'Unexpected message type: {type(msg)}')
+
             except queue.Empty:
                 continue
 
@@ -136,7 +183,33 @@ class CaasManager:
     #
     def submit(self, tasks):
         """
-        submit contianers and wait for them or not.
+        Submit tasks to Container as a Service (CaaS) managers.
+
+        This method allows the submission of tasks to registered CaaS managers.
+        If a single task is provided, it is converted to a list for consistency.
+        The method iterates through the provided tasks, determines the associated
+        manager based on the task's provider, and submits the task to the manager's
+        input queue.
+
+        Parameters:
+        - tasks (list or object): A list of tasks or a single task to be submitted.
+
+        Returns:
+        None
+
+        Raises:
+        - RuntimeError: If no registered CaaS managers are found.
+
+        Notes:
+        The method checks the type of the 'tasks' parameter, ensuring it is a list.
+        If no specific manager is found for a task, it defaults to submitting the
+        task to any available manager, logging a warning.
+
+        Example:
+        ```python
+        tasks_to_submit = [task1, task2, task3]
+        instance.submit(tasks_to_submit)
+        ```
         """
         if not isinstance(tasks, list):
             tasks = [tasks]
@@ -169,7 +242,7 @@ class CaasManager:
 
         if provider:
             if provider in self._registered_managers:
-                print(f'terminating manager {self._registered_managers[provider]}')
+                print(f'terminating manager {provider}')
                 self._registered_managers[provider]['class'].shutdown()
 
         else:
