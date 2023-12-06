@@ -98,7 +98,10 @@ def post_process_train():
 
 caas_mgr.submit(post_process_train())
 ```
+
+```python
 final_results = post_process_train.result()
+```
 
 ### Hydraa also support Heterogenious tasks execution:
 #### Executing MPI containers: Specify the setup of the MPI workers and Masters (Launchers): 
