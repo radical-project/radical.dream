@@ -170,21 +170,22 @@ class Workflow:
         # iterate on each task in the tasks list
         for task in self.tasks:
             task.id = str(self.manager._task_id)
-            task.name = 'ctask-{0}'.format(self.manager._task_id)
+            task.name = f'ctask-{self.manager._task_id}'
 
             # mv task.ouputs >> /volume/data
             if task.outputs:
                 self.move_to_volume(task)
 
-            # mv /volume/data/outputs >> /image/local 
+            # mv /volume/data/outputs >> /image/local
             if task.get_dependency():
                 self.move_to_local(task)
 
-            # make sure only one instance is updating 
+            # make sure only one instance is updating
             # the task_id at a time.
             with self.update_lock:
                 self.manager._task_id +=1
-        
+                self.manager._tasks_book[str(task.name)] = task
+
         return wf_name
 
 

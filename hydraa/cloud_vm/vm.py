@@ -9,26 +9,34 @@ OPTYPE = ['chameleon', 'jetstream2']
 # --------------------------------------------------------------------
 #
 class AwsVM:
-    def __init__(self, launch_type: str, image_id: str, min_count: int,
-                 max_count: int, instance_id: str, zones=[], **input_kwargs):
+    def __init__(self, launch_type: str,
+                 image_id: str=None, min_count: int=0,
+                 max_count: int=0, instance_id: str=None,
+                 zones: list=[], **input_kwargs):
 
         self.Zones = zones
         self.Provider = 'aws'
+        self.LaunchType = launch_type
         self.VmName = 'AWS_VM-{0}'.format(uuid.uuid4())
+
+        if self.LaunchType not in LTYPE:
+            raise ValueError('LaunchType must be: {0}'.format(LTYPE))
+
+        if self.LaunchType in LTYPE[2:]:
+            ec2_eks_required = ['image_id', 'min_count', 'max_count', 'instance_id']
+            if not any(image_id or min_count or max_count or instance_id):
+                raise ValueError(f'EC2/EKS VM requires {ec2_eks_required} values to be set')
+
         self.ImageId = image_id
         self.MinCount = min_count
         self.MaxCount = max_count
         self.InstanceID = instance_id
-        self.LaunchType = launch_type
-        self.KeyPair = input_kwargs.get('keypair', None)
-        self.UserData = input_kwargs.get('user_data', '')
-        self.IamInstanceProfile = input_kwargs.get('profile', '')
+        self.KeyPair = input_kwargs.get('KeyPair', None)
+        self.UserData = input_kwargs.get('UserData', '')
+        self.IamInstanceProfile = input_kwargs.get('IamInstanceProfile', {})
         self.TagSpecifications = [{'ResourceType': 'instance',
                                    'Tags'        : [{'Key':'Name',
                                                      'Value': self.VmName}]}]
-
-        if self.LaunchType not in LTYPE:
-            raise Exception('LaunchType must be: {0}'.format(LTYPE))
 
         self.input_kwargs = input_kwargs
 
@@ -57,31 +65,31 @@ class AwsVM:
     #
     def __call__(self, cluster):
         self.required_kwargs = {}
-        self.required_kwargs['ImageId']            = self.ImageId           
-        self.required_kwargs['MinCount']           = self.MinCount          
-        self.required_kwargs['MaxCount']           = self.MaxCount          
-        self.required_kwargs['InstanceType']       = self.InstanceID
+        self.required_kwargs['ImageId'] = self.ImageId           
+        self.required_kwargs['MinCount'] = self.MinCount          
+        self.required_kwargs['MaxCount'] = self.MaxCount          
+        self.required_kwargs['InstanceType'] = self.InstanceID
 
         user_data = self._user_data(cluster, self.UserData)
-        self.required_kwargs['UserData']           = user_data
+        self.required_kwargs['UserData'] = user_data
+        self.required_kwargs['TagSpecifications'] = self.TagSpecifications
         self.required_kwargs['IamInstanceProfile'] = self.IamInstanceProfile
-        self.required_kwargs['TagSpecifications']  = self.TagSpecifications
 
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs
 
 
 class AzureVM:
-    def __init__(self, launch_type, instance_id, min_count, max_count,
-                                                      **input_kwargs):
+    def __init__(self, launch_type, instance_id,
+                 min_count, max_count, **input_kwargs):
 
-        self.VmName             = 'AZURE_VM-{0}'.format(uuid.uuid4())
-        self.Provider           = 'azure'
-        self.LaunchType         = launch_type
-        self.InstanceID         = instance_id
-        self.MinCount           = min_count
-        self.MaxCount           = max_count
-        self.input_kwargs       = input_kwargs
+        self.Provider = 'azure'
+        self.VmName = 'AZURE_VM-{0}'.format(uuid.uuid4())
+        self.MinCount = min_count
+        self.MaxCount = max_count
+        self.LaunchType = launch_type
+        self.InstanceID = instance_id
+        self.input_kwargs = input_kwargs
 
     def __call__(self):
 
@@ -91,16 +99,17 @@ class AzureVM:
 
 
 class OpenStackVM:
-    def __init__(self, provider, launch_type, flavor_id: str, image_id: str, min_count=1,
-                                                            max_count=1, **input_kwargs):
+    def __init__(self, provider, launch_type,
+                 flavor_id: str, image_id: str,
+                 min_count=1, max_count=1, **input_kwargs):
 
-        self.VmName         = 'OpenStackVM-{0}'.format(uuid.uuid4())
-        self.VmId           = None
-        self.LaunchType     = launch_type
-        self.FlavorId       = flavor_id
-        self.ImageId        = image_id
-        self.MinCount       = min_count
-        self.MaxCount       = max_count
+        self.VmId = None
+        self.ImageId = image_id
+        self.MinCount = min_count
+        self.MaxCount = max_count
+        self.FlavorId = flavor_id
+        self.LaunchType = launch_type
+        self.VmName = 'OpenStackVM-{0}'.format(uuid.uuid4())
 
         if provider not in OPTYPE:
             raise ValueError('OpenStack VM provider must be one of {0}'.format(OPTYPE))

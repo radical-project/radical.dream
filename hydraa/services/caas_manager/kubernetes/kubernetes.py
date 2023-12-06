@@ -37,7 +37,7 @@ CFAILED_STATE = ['Error', 'StartError','OOMKilled',
 CRUNNING_STATE = ['ContainerCreating', 'Started', 'Running']
 CCOMPLETED_STATE = ['Completed', 'completed']
 
-PFAILED_STATE = ['OutOfCPU','OutOfMemory',
+PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
                 'Error', 'CrashLoopBackOff',
                 'ImagePullBackOff', 'InvalidImageName',
                 'CreateContainerConfigError','RunContainerError',
@@ -124,7 +124,7 @@ class K8sCluster:
         self.stop_event = mt.Event()
         self.updater_lock = mt.Lock()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
-        
+
 
     # --------------------------------------------------------------------------
     #
@@ -309,11 +309,11 @@ class K8sCluster:
 
         for ctask in ctasks:
             # Single Container Per Pod (SCPP)
-            if any([p in ctask.type for p in POD]) or not ctask.type:
+            if any([p in [ctask.type] for p in POD]) or not ctask.type:
                 scpp.append(ctask)
 
             # Multiple Containers Per Pod (MCPP).
-            elif any([c in ctask.type for c in CONTAINER]):
+            elif any([c in [ctask.type] for c in CONTAINER]):
                 mcpp.append(ctask)
 
         if mcpp:
@@ -516,7 +516,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, pod_id=None):
+    def _get_task_statuses(self, task=None):
 
         """
         This function to generate a json with the current containers statuses
@@ -524,76 +524,42 @@ class K8sCluster:
         to the controller manager.
 
         Parameters:
-            pod_id (str): A name for the pod
+            task (str): A name for a task which represents a pod or a container
         
         Returns:
             statuses (list): a list of list for all of the task statuses.
         """
 
-        # FIXME: use batch labels to get the status of the tasks
-        cmd = "kubectl get pods -A -o json"
-        response = None
+        cmd1 = f'kubectl get pods -l task_label={task.pod_name} -o custom-columns=:.status.phase'
+        cmd2 = f"kubectl get pod -l task_label={task.pod_name} -o jsonpath="'{.items[*].status.containerStatuses}'""
+        try:
+            pod_status, _, _ = sh_callout(cmd1, shell=True, kube=self)
+            pod_status = pod_status.strip()
+            pod_containers, _, _ = sh_callout(cmd2, shell=True, munch=True, kube=self)
+        except SyntaxError:
+            return "Unknown"
 
-        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
+        if pod_status == 'Succeeded':
+            return "Completed"
 
-        statuses   = {}
-        stopped    = []
-        failed     = []
-        running    = []
+        elif pod_status == 'Running':
+            return "Running"
 
-        if response:
-            items = response.get('items', [])
-            for item in items:
-                if item['kind'] in POD:
-                    pod_name = item['metadata'].get('name', '')
-                    # in the check, we distinguish hydraa deployed
-                    # tasks from any other pods on the same namespace.
-                    if any(px in pod_name for px in TASK_PREFIX):
-                        already_checked = []
-                        # check if this pod completed successfully
-                        for cond in item['status'].get('conditions', []):
-                            it = item['status']
-                            if cond.get('reason', ''):
-                                for c in it.get('containerStatuses', []):
-                                    if c['name'] in already_checked:
-                                        continue
-                                    # FIXME: container_msg should be injected in the 
-                                    # task object not logger
-                                    container_attr = list(c['state'].values())[0]
-                                    container_msg  = container_attr.get('message', '')
-                                    container_res  = container_attr.get('reason', '')
-                                    # case-1 terminated signal
-                                    if next(iter(c['state'])) == 'terminated':
-                                        if container_res in CCOMPLETED_STATE:
-                                            if list(c['state'].values())[0]['exitCode'] == 0:
-                                                stopped.append(c['name'])
-                                            else:
-                                                failed.append(c['name'])
-                                                self.logger.trace(container_msg)
+        elif pod_status == 'Pending':
+            return "Pending"
 
-                                        if container_res in CFAILED_STATE:
-                                           failed.append(c['name'])
-                                           self.logger.trace(container_msg)
-
-                                    # case-2 running signal
-                                    if next(iter(c['state'])) == 'running':
-                                            if container_res in CRUNNING_STATE:
-                                                running.append(c['name'])
-
-                                    # case-3 waiting signal
-                                    if next(iter(c['state'])) == 'waiting':
-                                        if container_res in CRUNNING_STATE:
-                                             running.append(c['name'])
-                                        elif container_res in CFAILED_STATE:
-                                            failed.append(c['name'])
-                                            self.logger.trace(container_msg)
-
-                                    already_checked.append(c['name'])
-
-            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
-
-            return statuses
-
+        elif pod_status in PFAILED_STATE:
+            # mostly MCPP mode
+            for container in pod_containers:
+                if container.get('name') == task.name:
+                    status = next(iter(container.get('state').keys()))
+                    if status == 'terminated':
+                        if container['state'][status]['exitCode'] == 0:
+                            return "Completed"
+                        else:
+                            return "Failed"
+        else:
+            return pod_status if pod_status else "Unknown"
 
     # --------------------------------------------------------------------------
     #
@@ -785,7 +751,7 @@ class K8sCluster:
         cmd = f'kubectl logs -l task_label='
 
         # container task, then pull the logs of the container
-        if any([c in task.type for c in CONTAINER]):
+        if any([c in [task.type] for c in CONTAINER]):
             if related_containers:
                 raise Exception('related containers is only supported'
                                 ' for pod tasks')
@@ -799,7 +765,7 @@ class K8sCluster:
                 raise Exception(f'{task.name} does not have a pod name')
 
         # pod task, then the task name is the pod name
-        elif any([p in task.type for p in POD]) or not task.type:
+        elif any([p in [task.type] for p in POD]) or not task.type:
             # we pull all of the containers in the pod
             if related_containers:
                 # get pods containers

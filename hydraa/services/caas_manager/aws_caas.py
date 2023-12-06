@@ -23,13 +23,17 @@ EC2 = ['EC2', 'ec2'] # Elastic Cloud
 ECS = ['ECS', 'ecs'] # Elastic Container Service
 FARGATE = ['FARGATE', 'fargate'] # Fargate container service
 
+ECS_TASKS_OTHER_STATUSES = ['PROVISIONING', 'PENDING', 'ACTIVATING',
+                            'DEACTIVATING', 'STOPPING', 'DEPROVISIONING',
+                            'DELETED']
+
 CPTD = 10    # The max number of containers defs within a task def.
 TDPC = 500   # The max number of task defs per cluster.
 TPFC = 1000  # The max number of tasks per FARGATE cluster.
 CIPC = 5000  # Number of container instances per cluster.
 CSPA = 10000 # Number of clusters per account.
 
-WAIT_TIME = 2 # seconds
+WAIT_TIME = 5 # seconds
 
 
 # --------------------------------------------------------------------------
@@ -44,7 +48,7 @@ class AwsCaas:
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, auto_terminate, log, prof):
 
         self.vms = VMS
         self._task_id = 0
@@ -64,6 +68,7 @@ class AwsCaas:
 
         self.runs_tree = OrderedDict()
         self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
 
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
         self.sandbox = '{0}/{1}.{2}'.format(sandbox, AWS, self.run_id)
@@ -73,9 +78,10 @@ class AwsCaas:
 
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
+        self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
-        # FIXME: try to ognize these clients into a uniform dict
+        # FIXME: try to orgnize these clients into a uniform dict
         #        self.clients['EKS'], self.clients['EC2'], etc.
         self._ecs_client = self._create_ecs_client(cred)
         self._ec2_client = self._create_ec2_client(cred)
@@ -98,7 +104,7 @@ class AwsCaas:
         # now set the manager as active
         self.status = True
 
-        atexit.register(self._shutdown)
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -125,6 +131,8 @@ class AwsCaas:
 
         # check if this launch will be a service
         if service:
+            if self.launch_type in EKS:
+                raise Exception('EKS does not support services yet')
             self.create_ecs_service()
 
         if self.launch_type in FARGATE:
@@ -152,6 +160,10 @@ class AwsCaas:
         # call get work to pull tasks
         self._get_work()
 
+    # --------------------------------------------------------------------------
+    #
+    def get_tasks(self):
+        return list(self._tasks_book.values())
 
     # --------------------------------------------------------------------------
     #
@@ -198,34 +210,6 @@ class AwsCaas:
     #
     def _get_runs_tree(self, run_id):
         return self.runs_tree[run_id]
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _get_run_status(self, run_id):
-        
-        run_status = [] 
-        for key, val in self._family_ids.items():
-            if val.get('run_id') == run_id:
-                tasks = [t.arn for t in val.get('task_list')]
-                statuses = self._get_task_statuses(tasks, self.cluster_name)
-                run_status.append(statuses)
-
-        run_stat =  [item for sublist in run_status for item in sublist]
-        pending = list(filter(lambda pending: pending == 'PENDING', run_stat))
-        running = list(filter(lambda pending: pending == 'RUNNING', run_stat))
-        stopped = list(filter(lambda pending: pending == 'STOPPED', run_stat))
-
-        msg = ('pending: {0}, running: {1}, stopped: {2}'.format(len(pending),
-                                                                 len(running),
-                                                                 len(stopped)))
-        if running or pending:
-            print('run: {0} is running'.format(run_id))
-
-        if all([status == 'STOPPED' for status in run_stat]):
-            print('run: {0} is finished'.format(run_id))
-
-        print(msg)
 
 
     # --------------------------------------------------------------------------
@@ -411,7 +395,7 @@ class AwsCaas:
     def _wait_clusters(self, cluster_name):
 
         clsuter = self.get_ecs_cluster_arn(cluster_name=cluster_name)
-        while True:
+        while not self._terminate.is_set():
             statuses = self._get_cluster_statuses(cluster_name)
             if all([status == 'ACTIVE' for status in statuses]):
                 self.logger.trace('cluster {0} is active'.format(cluster_name))
@@ -459,11 +443,6 @@ class AwsCaas:
                    'environment' : [],
                    'mountPoints' : [],
                    'volumesFrom' : [],
-                   "logConfiguration": {"logDriver": "awslogs",
-                                        "options": { 
-                                                    "awslogs-group" : "/ecs/first-run-task-definition",
-                                                    "awslogs-region": "us-east-1",
-                                                    "awslogs-stream-prefix": "ecs"}},
                    'image'       : ctask.image,
                    "entryPoint"  : [],
                    'command'     : ctask.cmd}
@@ -473,77 +452,81 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_fargate_task_def(self, container_def, cpu, memory):
-        """Build the internal structure of the task defination.
+    def create_ecs_task(self, container_def, batch):
+        """Build the internal structure of the task.
 
            :param: container_def: a dictionary of a container specifications.
 
-           :return: task defination name and task ARN (Amazon Resource Names)
+           :param: batch: list of containers to be added to the task
+
+           :return: ecs task object and the family_id of the task
         """
+        cpus = 0
+        memory = 0
         task_def = {}
-        if not cpu or not memory:
-            raise Exception('Fargate task must have a memory or cpu units specified')
+        ecs_task = {}
+        family_id = f'hydraa_family_{str(uuid.uuid4())}'
 
-        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
+        # cpu and memory specifications are required when using ECS FARGATE
+        # FIXME: find a way to round the sum to a value that FARGATE allows
+        if self.launch_type in FARGATE:
+            cpus = sum(t.vcpus for t in batch)
+            memory = sum(t.memory for t in batch)
 
-        task_def['family']                  = family_id
-        task_def['volumes']                 = []
-        task_def['cpu']                     = str(cpu)    # required
-        task_def['memory']                  = str(memory) # required
-        task_def['containerDefinitions']    = container_def
-        task_def['executionRoleArn']        = 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'
-        task_def['networkMode']             = 'awsvpc'
-        task_def['requiresCompatibilities'] = ['FARGATE']
+            # check min cpus and memory
+            if cpus < 256 or memory < 512:
+                self.logger.warning('setting FARGATE resource requeste to minimum allowed:'
+                                    ' CPU/MEM: 256/512')
+                cpus = 256
+                memory = 512
 
+            task_def['cpu']  = str(cpus)
+            task_def['memory'] = str(memory)
+            task_def['networkMode'] = 'awsvpc'
+
+            if batch[0].ecs_kwargs.get('subnet'):
+                subnet = batch[0].ecs_kwargs.get('subnet')
+
+            # FIXME: this will only work when we invoke the VM()
+            elif hasattr(self.vms[0], 'SubnetID'):
+                subnet = self.vms[0].SubnetID
+
+            else:
+                raise ValueError('FARGATE networkConfiguration requires subnet via VM'
+                                 ' (SubnetID) or task.ecs_kwargs')
+
+            ecs_task['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [subnet],
+                                                                        'assignPublicIp': 'ENABLED'}}
+
+        if not all(t.ecs_kwargs.get('executionRoleArn') for t in batch):
+            raise ValueError('ECS executionRoleArn is required to launch a task_def')
+
+        task_def['volumes'] = []
+        task_def['family'] = family_id
+        task_def['containerDefinitions'] = container_def
+        task_def['requiresCompatibilities'] = [self.launch_type.upper()]
+        task_def['executionRoleArn'] = batch[0].ecs_kwargs['executionRoleArn']
+
+        # FIXME: sperate ecs_kwargs into: ecs_def_kwargs and ecs_kwargs
+        # update the task def with any user specific ECS kwargs
+
+        # register the task defination
         reg_task = self._ecs_client.register_task_definition(**task_def)
 
         task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']
 
-        self.logger.trace('task {0} is registered'.format(family_id))
+        self.logger.trace(f'task {family_id} is registered')
+
+        ecs_task['count'] = 1
+        ecs_task['cluster'] = self.cluster_name
+        ecs_task['launchType'] = self.launch_type.upper()
+        ecs_task['taskDefinition'] = task_def_arn
 
         # save the family id and its ARN
         self._family_ids[family_id] = OrderedDict()
-        self._family_ids[family_id]['ARN'] =  task_def_arn
+        self._family_ids[family_id]['ARN'] = task_def_arn
 
-        return family_id, task_def_arn
-
-
-    # --------------------------------------------------------------------------
-    #
-    def create_ec2_task_def(self, container_defs, cpu = 0, memory = 0):
-        """Build the internal structure of the task defination.
-
-           :param: container_def: a dictionary of a container specifications.
-
-           :param: cpu: the number of CPU units used by the task.
-
-           :param: memory: the amount of memory (in MiB) used by the task.
-
-           :return: task defination name and task ARN (Amazon Resource Names)
-        """
-        # represents a pod in kuberentes lingo
-        task_def = {}
-        if cpu:
-            task_def['cpu'] = cpu # optional
-        if memory:
-            task_def['memory'] = memory    # optional
-
-        family_id = 'hydraa_family_{0}'.format(str(uuid.uuid4()))
-
-        reg_task = self._ecs_client.register_task_definition(volumes=[],
-                                                             family=family_id,
-                                                             requiresCompatibilities=['EC2'],
-                                                             containerDefinitions=container_defs,
-                                                             executionRoleArn='arn:aws:iam::626113121967:role/ecsTaskExecutionRole')
-
-        task_def_arn = reg_task['taskDefinition']['taskDefinitionArn']      
-        self.logger.trace('task {0} is registered'.format(family_id))
-
-        # save the family id and its ARN
-        self._family_ids[family_id] = OrderedDict()
-        self._family_ids[family_id]['ARN'] =  task_def_arn
-
-        return family_id, task_def_arn
+        return family_id, ecs_task
 
 
     # --------------------------------------------------------------------------
@@ -573,11 +556,11 @@ class AwsCaas:
                 return service
 
         self.logger.trace('no exisitng service found, creating.....')
-        response = self._ecs_client.create_service(cluster        = self.cluster_name,
-                                                   serviceName    = self.service_name,
-                                                   taskDefinition = self._task_name,
-                                                   launchType     = 'FARGATE',
-                                                   desiredCount   = 1,
+        response = self._ecs_client.create_service(desiredCount = 1,
+                                                   launchType = self.launch_type.upper(),
+                                                   cluster = self.cluster_name,
+                                                   serviceName = self.service_name,
+                                                   taskDefinition = 'Hydraa-Task-Def',
                                                    networkConfiguration = {'awsvpcConfiguration': {
                                                                           'subnets': ['subnet-094da8d73899da51c',],
                                                                           'assignPublicIp': 'ENABLED',
@@ -665,80 +648,72 @@ class AwsCaas:
            :return: submited ctasks ARNs
 
         """
-        tptd       = self._schedule(ctasks)
+        tptd = self._schedule(ctasks)
         containers = []
         for batch in tptd:
             for ctask in batch:
                 # build an aws container defination from the task object
-                ctask.run_id      = self.run_id
-                ctask.id          = self._task_id
-                ctask.name        = 'ctask-{0}'.format(ctask.id)
-                ctask.provider    = AWS
+                ctask.provider = AWS
+                ctask.id = self._task_id
+                ctask.run_id = self.run_id
                 ctask.launch_type = self.launch_type
-                
-                containers.append(self.create_container_def(ctask))
-                
+                ctask.name = f'ctask-{ctask.id}'
+
                 self._tasks_book[str(ctask.name)] = ctask
 
-                self.logger.trace('submitting tasks {0}'.format(ctask.name))
+                containers.append(self.create_container_def(ctask))
+
+                self.logger.trace(f'submitting tasks {ctask.name}')
 
                 self._task_id +=1
 
             try:
-                # FIXME: Pass the memory and cpu via a VM class
                 if self.launch_type in FARGATE:
-                    task_def_arn = self.create_fargate_task_def(containers, 256, 1024)
-                    kwargs['platformVersion']      = 'LATEST'
-                    kwargs['networkConfiguration'] = {'awsvpcConfiguration': {'subnets': [
-                                                                            'subnet-094da8d73899da51c',],
-                                                    'assignPublicIp'     : 'ENABLED',
-                                                    'securityGroups'     : ["sg-0702f37d21c55da64"]}}
+                    if not all(t.ecs_launch_type in FARGATE for t in batch):
+                        raise ValueError(f'Got wrong ECS task launch type, expected: {FARGATE}')
 
                 # EC2 does not support Network config or platform version
-                if self.launch_type in EC2:
-                    family_id, task_def_arn = self.create_ec2_task_def(containers)
+                elif self.launch_type in EC2:
+                    if not all(t.ecs_launch_type in EC2 for t in batch):
+                        raise ValueError(f'Got wrong ECS tasks launch type, expected: {EC2}')
 
-                kwargs = {}
-                # count of tasks is count of pods
-                # FIXME: find a way to let the user make set
-                # the number of pods if they are identical
-                kwargs['count']         = 1
-                kwargs['cluster']       = cluster_name
-                kwargs['launchType']    = self.launch_type
-                kwargs['overrides']     = {}
-                kwargs['taskDefinition'] = task_def_arn
+                else:
+                    raise RuntimeError(f'launch type {self.launch_type} is not supported')
+
+                family_id, ecs_task = self.create_ecs_task(containers, batch)
 
                 # submit tasks of size "batch_size"
-                response = self._ecs_client.run_task(**kwargs)
+                response = self._ecs_client.run_task(**ecs_task)
                 if response['failures']:
-                    self.logger.error(", ".join(["fail to run task {0} reason: {1}".format(failure['arn'],
-                                                failure['reason']) for failure in response['failures']]))
+                    failures = [(failure['arn'], failure['reason']) for failure in response['failures']]
+                    raise Exception(failures)
+
+                task_def_arn = response['tasks'][0]['taskArn']
+                for ctask in batch:
+                    ctask.arn = task_def_arn
 
                 # attach the unique ARN (i.e. pod id) to batch
-                self._family_ids[family_id]['task_arns'] = []
-
-                for i, task in enumerate(response['tasks']):
-                    self._family_ids[family_id]['task_arns'].append(task['taskArn'])
-
-                self._family_ids[family_id]['manager_id'] = self.manager_id
-                self._family_ids[family_id]['run_id']     = self.run_id
                 self._family_ids[family_id]['task_list']  = batch
+                self._family_ids[family_id]['run_id'] = self.run_id
                 self._family_ids[family_id]['batch_size'] = len(batch)
-            
+                self._family_ids[family_id]['manager_id'] = self.manager_id
+                self._family_ids[family_id]['task_arns'] = response['tasks'][0]['taskArn']
+
             except Exception as e:
-                # upon failure mark the tasks
-                # as failed
+                # upon failure mark the tasks as failed
                 for ctask in batch:
-                    self.logger.error('failed to submit {0}, check task exception'.format(ctask.name))
+                    ctask.state = 'Failed'
                     ctask.set_exception(e)
 
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_stamps(self, tasks, cluster):
+    def _get_task_stamps(self, tasks, cluster=None):
         """Pull the timestamps for every task by its ARN and convert
            them to a human readable.
         """
+        if not cluster:
+            cluster = self.cluster_name
 
         task_stamps  = OrderedDict()
         task_arns    = [arn for arn in tasks.keys()]
@@ -772,7 +747,7 @@ class AwsCaas:
             print('profiles already exist {0}'.format(fname))
             return fname
 
-        task_stamps = self._get_task_stamps(self._tasks_book, self.cluster_name)
+        task_stamps = self._get_task_stamps(self._tasks_book)
 
         try:
             import pandas as pd
@@ -816,27 +791,28 @@ class AwsCaas:
         """
         # describe_tasks accepts only 100 arns per invokation
         # so we split the task arns into chunks of 100
-        tasks_arns = list(iter.chain.from_iterable(tasks))
+        if not isinstance(tasks, list):
+            tasks = [tasks]
+
+        tasks_arns = [t.arn for t in tasks]
+
         if len(tasks_arns) <= 100:
             response = self._ecs_client.describe_tasks(tasks=tasks_arns,
                                                         cluster=cluster)
             return [response['tasks']]
 
-        tasks = iter(tasks)
         tasks_chuncks = []
-
         # break the task_arns into a chunks of 100
         chunks = [tasks_arns[x:x+100] for x in range(0, len(tasks_arns), 100)]
 
         for chunk in chunks:
             response = self._ecs_client.describe_tasks(tasks=chunk,
-                                                   cluster=cluster)
+                                                       cluster=cluster)
 
-            #FIXME: if we have a failure then update the tasks_book 
+            #FIXME: if we have a failure then update the tasks_book
             #       with status/error code and print it.
             if response['failures'] != []:
-                raise Exception('There were some failures:\n{0}'.format(
-                    response['failures']))
+                raise Exception(f"There were some failures:\n{response['failures']}")
             status_code = response['ResponseMetadata']['HTTPStatusCode']
             if status_code != 200:
                 msg = 'Task status request received status code {0}:\n{1}'
@@ -849,119 +825,138 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, cluster):
+    def _get_task_statuses(self, tasks, cluster=None):
         """
         ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
         Retrieve task statuses from ECS API
 
         Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
-        """
-        statuses = {}
-        stopped = []
-        failed  = []
-        running = []
-        '''
+
         Lifecycle states: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle.html
-        '''
+        """
 
-        tasks_chunks = self._describe_tasks(tasks, cluster)
-        for task_chunk in tasks_chunks:
-            for task in task_chunk:
-                # the task (i.e. pod) stopped
-                if task['lastStatus'] == 'STOPPED':
+        # Pulling tasks statuses in batches gets slower with the number of tasks
+        # and sometimes causes the wait thread to hang, so we only pull status per task
+        if isinstance(tasks, list) and len(tasks) < 1:
+            raise Exception('Pulling statuses in batches is supported'
+                            ' but not permitted')
+
+        if not cluster:
+            cluster = self.cluster_name
+        
+        task = tasks
+
+        if task.done() and not task.arn:
+            if task.state == 'Failed':
+                return task.state
+
+            # the task state got altered by external elements
+            else:
+                raise Exception('Incosistent task state')
+
+        tasks_chunks = self._describe_tasks(task, cluster)
+        for chunk in tasks_chunks:
+            # task_def (i.e. Pod)
+            for task_def in chunk:
+                status = task_def['lastStatus']
+                if status == 'STOPPED':
                     # if the pod stopped then mark all of 
-                    # its container as stopped
-                    for container in task['containers']:
-                        if container['exitCode'] == 0:
-                            stopped.append(container['name'])
-                        else:
-                            failed.append(container['name'])
-
-                # the task (i.e. pod) running
-                if task['lastStatus'] == 'RUNNING':
-                    for container in task['containers']:
-                        if container['lastStatus'] == 'STOPPED':
-                            if container['exitCode'] == 0:
-                                stopped.append(container['name'])
+                    # its container as done/failed
+                    for container in task_def['containers']:
+                        if container.get('name') == task.name:
+                            if container.get('exitCode') == 0:
+                                return 'Completed'
                             else:
-                                failed.append(container['name'])
+                                return 'Failed'
 
-                        elif container['lastStatus'] == 'RUNNING':
-                            running.append(container['name'])
+                if status == 'RUNNING':
+                    for container in task_def['containers']:
+                        return 'Running'
 
                 # else it is transitioning 
-                elif task['lastStatus'] in ['PROVISIONING', 'PENDING', 'ACTIVATING',
-                                            'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'DELETED']:
-                                            for container in task['containers']:
-                                                running.append(container['name'])
-
-            statuses = {'stopped': stopped, 'failed': failed, 'running':running}
-
-        return statuses
+                elif status in ECS_TASKS_OTHER_STATUSES:
+                    return 'Running'
+                else:
+                    return status if status else 'Unknown'
 
 
     # --------------------------------------------------------------------------
     #
     def _wait_tasks(self):
-        """
-        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
-        Wait for task status until STOPPED
-        """
-        if self.asynchronous:
-            self.logger.error('tasks wait is not supported in asynchronous mode')
-        
-        marked_tasks = set()
+
+        msg = None
+        finshed = []
+        failed, done, running = 0, 0, 0
 
         while not self._terminate.is_set():
 
-            statuses = None
-
+            # pull any new upcoming tasks added to the tasks book
             if self.launch_type in EKS:
-                statuses = self.cluster._get_task_statuses()
-            
+                get_statuses = self.cluster._get_task_statuses
             else:
-                # some other threads updates the task book so keep this
-                # thread updated as well with the latest task book entries
-                tasks = [t['task_arns'] for t in self._family_ids.values()]
+                get_statuses = self._get_task_statuses
 
-                # request the statuses for all task_arns
-                statuses = self._get_task_statuses(tasks, self.cluster_name)
+            with self._task_lock:
+                _tasks = self.get_tasks()
+                tasks = copy.copy(_tasks)
 
-            if statuses:
-                msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
-                                                                   len(statuses['stopped']),
-                                                                   len(statuses['running']))
+            for task in tasks:
+                # if task is already marked as done or failed then skip it
+                if task.name in finshed:
+                    continue
 
-                for task in self._tasks_book.values():
-                    if task in marked_tasks:
-                        if task.state == 'FAILED':
-                            # state is changed so reset the task state to 'PENDING'
-                            if task.name not in statuses['failed']:
-                                task.reset_state()
-                                marked_tasks.remove(task)
-                        else:
-                            continue
-    
-                    if task.name in statuses['stopped']:
-                        if not task.done():
-                            task.state = 'DONE'
-                            task.set_result('Done')
-                            marked_tasks.add(task)
-    
-                    elif task.name in statuses['failed']:
-                        if task.state != 'FAILED':
-                            task.state = 'FAILED'
-                            task.set_exception(Exception('Failed'))
-                            marked_tasks.add(task)
-    
-                    elif task.name in statuses['running']:
-                        if not task.running():
-                            task.state = 'RUNNING'
-                            task.set_running_or_notify_cancel()
-    
+                status = get_statuses(task)
+                if not status:
+                    continue
+
+                if status == 'Completed':
+                    if task.running():
+                        running -= 1
+                    task.set_result('Finished successfully')
+                    finshed.append(task.name)
+                    done += 1
+
+                elif status == 'Running':
+                    if not task.running():
+                        task.set_running_or_notify_cancel()
+                        running += 1
+                    else:
+                        continue
+
+                # sometimes tasks requires sometime to reach running
+                # state like MPI when the worker is reported to be "failed"
+                # then running this approach should update task state after
+                # failer for now.
+                elif status == 'Failed':
+                    # default number of tries is 3 * 5s = 15s
+                    # after that declare the task as failed
+                    if task.tries:
+                        task.tries -= 1
+                        task.reset_state()
+                    else:
+                        if task.running():
+                            running -= 1
+
+                        # task already failed during submission
+                        if not task._exception:
+                            task.set_exception(Exception('Failed due to container error, check the logs'))
+                        finshed.append(task.name)
+                        failed += 1
+
+                else:
+                    self.logger.info(f'task {task.name} is in {status} state')
+
+                task.state = status
+                msg = f'[failed: {failed}, done {done}, running {running}]'
+
                 self.outgoing_q.put(msg)
-    
-                time.sleep(5)
+
+                if len(finshed) == len(self._tasks_book):
+                    if self.auto_terminate:
+                        msg = (0, AWS)
+                        self.outgoing_q.put(msg)
+
+            time.sleep(5)
 
 
     # --------------------------------------------------------------------------
@@ -974,11 +969,11 @@ class AwsCaas:
         3- COST_CANCELED : Task must be kill due to exceeding cost
                            limit (set by user)
         """
-        task_arn = self.tasks_book[task_id]
+        task_arn = self._tasks_book[task_id]
 
-        response = self._ecs_client.stop_task(cluster = cluster_name,
-                                              task    = task_arn,
-                                              reason  = reason)
+        response = self._ecs_client.stop_task(task = task_arn,
+                                              reason = reason,
+                                              cluster = cluster_name)
 
         return response
 
@@ -1015,51 +1010,44 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def create_ec2_instance(self, VM):
+    def create_ec2_instance(self, VM, use_existing=False):
             """
-            ImageId: An AMI ID is required to launch an instance and must be
-                    specified here or in a launch template.
-
-            Instancetype: The instance type. Default m1.small For more information 
-                        (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html).
-            
-            MinCount: The minimum number of instances to launch.
-            MaxCount: The maximum number of instances to launch.
-
-            UserData: accept any linux commnad (acts as a bootstraper for the instance)
+            VM: VM class object of vm.AwsVM
+            use_existing: if True, then we will use the first running instance
             """
+            # return dict of VM attributes by invoking the vm class
             vm = VM(self.cluster_name)
+            instances = []
 
-            # FIXME: check for exisitng EC2 hydraa instances specifically.
-            
-            # check if we have an already running instance
-            reservations = self._ec2_client.describe_instances(Filters=[{"Name": "instance-state-name",
-                                                                         "Values": ["running"]},]).get("Reservations")
-            
-            # if we have a running instance(s) return the first one 
-            if reservations:
-                for reservation in reservations:
-                    for instance in reservation["Instances"]:
-                        # TODO: maybe we should ask the users if they
-                        # want to use that instance or not.
-                        if instance["InstanceType"] == VM.InstanceID :
-                            self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
+            if use_existing:
+                # check if we have an already running instance
+                filters=[{"Name": "instance-state-name", "Values": ["running"]}]
+                reservations = self._ec2_client.describe_instances(filters).get("Reservations")
 
-                            return instance["InstanceId"]
+                # if we have a running instance(s) return the first one 
+                if reservations:
+                    for reservation in reservations:
+                        for instance in reservation["Instances"]:
+                            # TODO: maybe we should ask the users if they
+                            # want to use that instance or not.
+                            if instance["InstanceType"] == VM.InstanceID:
+                                self.logger.trace("found running instances of type {0}".format(instance["InstanceType"]))
+                                instances.append(instance)
+                                break
 
-            self.logger.trace("no existing EC2 instance found with the same resource requirements")
-
-            instances = self._ec2_resource.create_instances(**vm)
+            if not instances or not use_existing:
+                self.logger.trace("no existing EC2 instance found or use_existing is disabled. Creating new instance")
+                instances = self._ec2_resource.create_instances(**vm)
 
             for instance in instances:
                 self.logger.trace("waiting for EC2 instance {0} to be launched".format(instance.id))
                 instance.wait_until_running()
                 self.logger.trace("EC2 instance: {0} has been launched".format(instance.id))
-            
+
             VM.InstanceID = instance.id
 
             # wait for the instance to connect to the targeted cluster
-            while True:
+            while not self._terminate.is_set():
                 res = self._ecs_client.describe_clusters(clusters = [self.cluster_name])
                 if res['clusters'][0]['registeredContainerInstancesCount'] >= 1:
                     self.logger.trace("instance {0} has been registered".format(instance.id))
@@ -1082,9 +1070,6 @@ class AwsCaas:
             raise Exception('Batch size can not be 0')
 
         if self.launch_type in FARGATE:
-            # NOTE: submitting more than 50 conccurent tasks might fail
-            #       due to user ECS/Fargate quota
-            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-quotas.html
             if batch_size > TPFC:
                 raise Exception('batch limit per cluster ({0}>{1})'.format(batch_size, TPFC))
 
@@ -1131,7 +1116,7 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _shutdown(self):
+    def shutdown(self):
         """Shutdown and delete task/service/instance/cluster
         """
 

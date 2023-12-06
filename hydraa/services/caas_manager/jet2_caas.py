@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import uuid
+import copy
 import errno
 import queue
 import atexit
@@ -35,7 +36,7 @@ class Jet2Caas():
        :param DryRun: Do a dryrun first to verify permissions.
     """
 
-    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, log, prof):
+    def __init__(self, sandbox, manager_id, cred, VMS, asynchronous, auto_terminate, log, prof):
 
         self.manager_id = manager_id
         self.status = False
@@ -46,7 +47,7 @@ class Jet2Caas():
         self.client = self.create_op_client(cred)
         self.launch_type = VMS[0].LaunchType.lower()
 
-        self._task_id = 0    
+        self._task_id = 0
 
         self.vms = VMS
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
@@ -59,6 +60,7 @@ class Jet2Caas():
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
 
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, JET2, self.run_id)
         os.mkdir(self.sandbox, 0o777)
@@ -69,6 +71,7 @@ class Jet2Caas():
         self.incoming_q = queue.Queue()
         self.outgoing_q = queue.Queue()
 
+        self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
         self.start_thread = threading.Thread(target=self.start,
@@ -78,7 +81,7 @@ class Jet2Caas():
         if not self.start_thread.is_alive():
             self.start_thread.start()
 
-        atexit.register(self._shutdown)
+        atexit.register(self.shutdown)
 
 
     # --------------------------------------------------------------------------
@@ -109,6 +112,11 @@ class Jet2Caas():
 
         self.runs_tree[self.run_id] =  self._pods_book
 
+
+    # --------------------------------------------------------------------------
+    #
+    def get_tasks(self):
+        return list(self._tasks_book.values())
 
     # --------------------------------------------------------------------------
     #
@@ -425,51 +433,68 @@ class Jet2Caas():
     #
     def _wait_tasks(self):
 
-        marked_tasks = set()
+        msg = None
+        finshed = []
+        failed, done, running = 0, 0, 0
 
         while not self._terminate.is_set():
 
-            statuses = self.cluster._get_task_statuses()
+            with self._task_lock:
+                _tasks = self.get_tasks()
+                tasks = copy.copy(_tasks)
 
-            if not statuses:
-                time.sleep(5)
-                continue
+            for task in tasks:
+                # if task is already marked as done or failed then skip it
+                if task.name in finshed:
+                    continue
 
-            msg = '[failed: {0}, done {1}, running {2}]'.format(len(statuses['failed']),
-                                                                len(statuses['stopped']),
-                                                                len(statuses['running']))
+                status = self.cluster._get_task_statuses(task)
+                if not status:
+                    continue
 
-            for task in self._tasks_book.values():
-                if task in marked_tasks:
-                    # NOTE: the MPI task takes sometime to connect to 
-                    # the worker which is reported to be "failed" then running
-                    # this approach should update task state after failer for now.
-                    if task.state == 'FAILED':
-                        # state is changed so reset the task state to 'PENDING'
-                        if task.name not in statuses['failed']:
-                            task.reset_state()
-                            marked_tasks.remove(task)
+                if status == 'Completed':
+                    if task.running():
+                        running -= 1
+                    task.set_result('Finished successfully')
+                    finshed.append(task.name)
+                    done += 1
+
+                elif status == 'Running':
+                    if not task.running():
+                        task.set_running_or_notify_cancel()
+                        running += 1
                     else:
                         continue
 
-                if task.name in statuses['stopped']:
-                    if not task.done():
-                        task.state = 'DONE'
-                        task.set_result('Done')
-                        marked_tasks.add(task)
+                # sometimes tasks requires sometime to reach running
+                # state like MPI when the worker is reported to be "failed"
+                # then running this approach should update task state after
+                # failer for now.
+                elif status == 'Failed':
+                    # default number of tries is 3 * 5s = 15s
+                    # after that declare the task as failed
+                    if task.tries:
+                        task.tries -= 1
+                        task.reset_state()
+                    else:
+                        if task.running():
+                            running -= 1
+                        task.set_exception(Exception('Failed due to container error, check the logs'))
+                        finshed.append(task.name)
+                        failed += 1
 
-                elif task.name in statuses['failed']:
-                    if task.state != 'FAILED':
-                        task.state = 'FAILED'
-                        task.set_exception(Exception('Failed'))
-                        marked_tasks.add(task)
+                else:
+                    self.logger.info(f'task {task.name} is in {status} state')
 
-                elif task.name in statuses['running']:
-                    if not task.running():
-                        task.state = 'RUNNING'
-                        task.set_running_or_notify_cancel()
+                task.state = status
+                msg = f'[failed: {failed}, done {done}, running {running}]'
 
-            self.outgoing_q.put(msg)
+                self.outgoing_q.put(msg)
+
+                if len(finshed) == len(self._tasks_book):
+                    if self.auto_terminate:
+                        msg = (0, JET2)
+                        self.outgoing_q.put(msg)
 
             time.sleep(5)
 
@@ -509,19 +534,18 @@ class Jet2Caas():
         self._run_cost    = 0
         self._tasks_book.clear()
 
-        if caller == '_shutdown':
-            self.manager_id = None
-            self.status = False
-            self.servers = None
-            self.client = None
+        self.manager_id = None
+        self.status = False
+        self.servers = None
+        self.client = None
 
-            self._pods_book.clear()
-            self.logger.trace('done')
+        self._pods_book.clear()
+        self.logger.trace('done')
 
 
     # --------------------------------------------------------------------------
     #
-    def _shutdown(self):
+    def shutdown(self):
 
         if not self.servers:
             return

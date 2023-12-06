@@ -30,9 +30,9 @@ class proxy:
         if not isinstance(providers, list):
             providers = [providers]
 
-        self._providers           = [pr.lower() for pr in providers]
-        self._loaded_providers    = []
-        self._loaded_credentials  = {}
+        self._providers = [pr.lower() for pr in providers]
+        self.loaded_providers = []
+        self._loaded_credentials = {}
         self._supported_providers = [AWS, AZURE, GCLOUD, JET2, CHI]
         self._login()
 
@@ -41,11 +41,11 @@ class proxy:
         for provider in self._providers:
             if provider in self._supported_providers:
                 self._verify_credentials(provider)
-                self._loaded_providers.append(provider)
+                self.loaded_providers.append(provider)
             else:
                 print('{0} provider not supported'.format(provider))
         
-        print('login to: {0} succeed'.format(self._loaded_providers))
+        print('login to: {0} succeed'.format(self.loaded_providers))
 
 
     def _verify_credentials(self, provider):
