@@ -1,17 +1,42 @@
-### Executing Regular Containers on multiple cloud providers
+
+
+
+### Hydraa supports multiple conccurent inter and cross providers containers execution approaches:
+- Azure:
+   - Azure Containers Services (ACS)
+   - Azure Kuberentes Services (AKS)
+- AWS:
+   - Elastic Containers Services (ECS):
+     - Fargate
+     - EC2
+   - Elastic Kuberentes Services (EKS)
+
+- Native Kuberentes Cluster deployemnts on multiple nodes
+
+### Executing Regular Containers on multiple cloud providers/services
+
+#### 1- Import Hydraa modules
 ```python
 
 from hydraa.cloud_vm import vm
 from hydraa import providers, services
 from hydraa.cloud_task.task import Task
 from hydraa import AZURE, AWS, CHI, JET2
+```
 
+#### 2- Create the required vms (resources):
+
+```python
 provider_mgr = providers.proxy([AZURE, AWS, CHI, JET2])
 
 service_mgr = services.manager
 
-vm1 = vm.AwsVM(launch_type='EC2', image_id='ami-061c10a2cb32f3491', min_count=1, max_count=1, instance_id='t2.micro',
-                user_data=None, profile={"Arn" : 'arn:aws:iam::xxxxx:instance-profile/ecsInstanceRole',}
+vm0 = vm.AwsVM(launch_type='FARGATE', SubnetID='subnet-xxx',
+               IamInstanceProfile={"Arn" : 'arn:aws:iam::xxxxx:instance-profile/ecsInstanceRole',})
+
+vm1 = vm.AwsVM(launch_type='EC2', image_id='ami-xxx',
+               min_count=1, max_count=1, instance_id='t2.micro',
+               IamInstanceProfile={"Arn" : 'arn:aws:iam::xxxxx:instance-profile/ecsInstanceRole',})
 
 vm2 = vm.AzureVM(launch_type='ACS', instance_id='Standard_B1s', min_count=1, max_count=1)
 
@@ -21,46 +46,62 @@ vm3 = vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='g3.medium',
 vm4 = vm.OpenStackVM(provider=CHI, launch_type='KVM', flavor_id='m1.xlarge',
                         image_id='CC-Ubuntu20.04', min_count=2, max_count=2)
 
-vms = [vm1, vm2, vm3, vm4]
+vms = [vm0, vm1, vm2, vm3, vm4]
 
 # start all vms and the requested resources (set asynchronous to True to wait for everything)
-caas_mgr = service_mgr.CaasManager(provider_mgr, vms, asynchronous=False)
+caas_mgr = service_mgr.CaasManager(provider_mgr, vms, asynchronous=False, autoterminate=False)
 ```
-
+#### 4- Hydraa supports 2 mechansims of submssion:
+- Batch submission on multiple cloud providers and services:
 ```python
 tasks = []
-# submit 1024 tasks for each vm
-for task in range(1024):
+# submit 1024 tasks (512 for each provider)
+for i in range(1024):
     task = Task()
     task.memory = 7
     task.vcpus  = 1
+    taks.provider = AWS if i % 2 == 0 else AZURE
     task.image  = "screwdrivercd/noop-container"
     task.cmd    = ['/bin/echo', 'noop']
     tasks.append(task)
 caas_mgr.submit(tasks)
 ```
-
+- Stream submission:
 ```python
-def do_something():
-    if task[10].done():
-       result = task[10].result()
-  
-       simul_task = Task()
-       simul_task.memory   = 100 #MB
-       simul_task.vcpus    = 2
-       simul_task.image    = "xxx/simulate"
-       simul_task.args     = result
-       simul_task.provider = AWS
-       caas_mgr.submit(simul_task)
-    
-    # wait for the task
-    simul_task.done()
-    
-    print(task.result())
-  
+caas_mgr.submit(task)
 ```
-### Executing MPI containers:
-#### Specify the setup of the MPI workers and Masters (Launchers): 
+
+#### 4- Hydraa flexible API and their `Future` based tasks allows users to build their own logic:
+
+##### Create a TF training function:
+```python
+def train_tf_module():
+    task = Task(memory=1024, vcpus=8,
+                provider=JET2, image='tf_job_mnist',
+                cmd = ['python', '/var/tf_mnist/mnist_with_summaries.py',
+                       '--learning_rate=0.01', '--batch_size=150'], set_logs=True)
+    return task
+
+caas_mgr.submit(train_tf_module())
+```
+##### Wait for the task to finish:
+```python
+train_tf_module.result()
+```
+##### Create a TF posprocess function:
+```python
+def post_process_train():
+    task = Task(memory=1024, vcpus=2,
+                provider=JET2, image='tf_job_mnist',
+                cmd = ['python', '/var/tf_mnist/mnist_posprocess.py'], set_logs=True)
+    return task
+
+caas_mgr.submit(post_process_train())
+```
+final_results = post_process_train.result()
+
+### Hydraa also support Heterogenious tasks execution:
+#### Executing MPI containers: Specify the setup of the MPI workers and Masters (Launchers): 
 ```python
 from hydraa.services.caas_manager.integrations.kubeflow import KubeflowMPILauncher
 mpi_tasks = []
@@ -81,13 +122,13 @@ mpi_launcher.launch(mpi_tasks, num_workers=1, slots_per_worker=5)
 all(t.result() for t in mpi_tasks)
 ```
 
-### Executing Workflows:
+### Hydraa can integrate easily with different executing Workflows engines:
 #### 1- create a PVC
 ```python
 from hydraa.services.data.volumes import PersistentVolume, PersistentVolumeClaim
 pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessModes='ReadWriteMany')
 ```
-#### 2- create N workflows and assign the created PVC to the workflow instance
+#### 2- create N workflows with `Argo` backend and assign the created PVC to the workflow instance
 ```python
 from hydraa.services.caas_manager.integrations.workflows import ContainerSetWorkflow
 
@@ -138,4 +179,7 @@ for i in range(1000):
 wf.run()
 ```
 
-
+```python
+# wait for all workflows to finish
+all(t.result() for t in wf.tasks)
+```
