@@ -10,9 +10,11 @@ from hydraa.services.caas_manager.chi_caas import ChiCaas
 from hydraa.services.caas_manager.aws_caas import AwsCaas
 from hydraa.services.caas_manager.jet2_caas import Jet2Caas
 from hydraa.services.caas_manager.azure_caas import AzureCaas
+from hydraa.services.caas_manager.local_caas import LocalCaas
 
 AWS = 'aws'
 AZURE = 'azure'
+LOCAL = 'local'
 GCLOUD = 'google'
 CHI = 'chameleon'
 JET2 = 'jetstream2'
@@ -21,7 +23,8 @@ PROVIDER_TO_CLASS = {
     AWS: AwsCaas,
     CHI: ChiCaas,
     JET2: Jet2Caas,
-    AZURE: AzureCaas}
+    AZURE: AzureCaas,
+    LOCAL: LocalCaas}
 
 TERM_SIGNALS = {0: "Auto-terminate was set, terminating.",
                 1: "No more tasks to process, terminating.",

@@ -13,6 +13,7 @@ CHI    = 'chameleon'
 JET2   = 'jetstream2'
 AZURE  = 'azure'
 GCLOUD = 'google'
+LOCAL = 'local'
 
 
 class proxy:
@@ -33,7 +34,7 @@ class proxy:
         self._providers = [pr.lower() for pr in providers]
         self.loaded_providers = []
         self._loaded_credentials = {}
-        self._supported_providers = [AWS, AZURE, GCLOUD, JET2, CHI]
+        self._supported_providers = [AWS, AZURE, GCLOUD, JET2, CHI, LOCAL]
         self._login()
 
 
@@ -96,6 +97,10 @@ class proxy:
         if provider == GCLOUD:
             raise NotImplementedError
 
+        if provider == LOCAL:
+            pass
+            
+
 
     def _load_credentials(self, provider):
         """
@@ -154,6 +159,9 @@ class proxy:
 
         if provider == GCLOUD:
              raise NotImplementedError
+        
+        if provider == LOCAL:
+            return {}
                 
 
     

@@ -239,7 +239,8 @@ class K8sCluster:
 
         self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
 
-        self.control_plane.get('.kube/config', local=config_file, preserve_mode=True)
+        self.control_plane.get('.kube/config', local=config_file,
+                                               preserve_mode=True)
 
         return config_file
 

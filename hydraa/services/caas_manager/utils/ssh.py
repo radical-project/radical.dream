@@ -13,16 +13,17 @@ class Remote:
     def __init__(self, vm_keys, user, fip, log, local=False):
 
         self.ip = fip        # public ip
-        self.user = user       # user name
+        self.user = user      # user name
         self.key = vm_keys[0] # path to the private key
         self.logger = log
-        self.conn = self.__connect(local=local)
+        self.local = local
+        self.conn = self.__connect()
 
 
     # --------------------------------------------------------------------------
     #
-    def __connect(self, local):
-        if local:
+    def __connect(self):
+        if self.local:
             return fabric.Connection(self.ip, port=22, user=None)
 
         conn = fabric.Connection(self.ip, port=22, user=self.user,
@@ -44,6 +45,9 @@ class Remote:
     # --------------------------------------------------------------------------
     #
     def put(self, local_file, **kwargs):
+        if self.local:
+            raise RuntimeWarning('put method is not supported in local mode')
+
         self.conn.put(local_file, **kwargs)
 
 
@@ -57,6 +61,8 @@ class Remote:
         a json output need to be processed
         into a json object
         '''
+        if self.local:
+            self.conn.run = self.conn.local
 
         # FIXME: why not?
         if logger and munch:
@@ -91,13 +97,18 @@ class Remote:
     # --------------------------------------------------------------------------
     #
     def get(self, remote_file, **kwargs):
+        if self.local:
+            raise RuntimeWarning('get method is not supported in local mode')
         self.conn.get(remote_file, **kwargs)
 
 
     # --------------------------------------------------------------------------
     #
     def check_ssh_connection(self, ip):
-        
+
+        if self.local:
+            raise RuntimeWarning('check_ssh is not supported in local mode')
+
         self.logger.trace("waiting for ssh connectivity on {0}".format(ip))
         timeout = 60 * 2
         start_time = time.perf_counter()
@@ -190,4 +201,6 @@ class Remote:
     #
     def close(self):
         self.logger.trace('closing all ssh connections')
+        if self.local:
+            return
         self.conn.close()
