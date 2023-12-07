@@ -24,6 +24,7 @@ from ..utils.misc import dump_multiple_yamls
 from ....cloud_vm.vm import AwsVM
 from ....cloud_vm.vm import AzureVM
 from ....cloud_task.task import Task
+from ....cloud_vm.vm import LocalVM
 from ....cloud_vm.vm import OpenStackVM
 
 
@@ -215,7 +216,7 @@ class K8sCluster:
                                                                  remote_key_path)
         bootstrap_cmd += '/dev/null < /dev/null &'
         self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
-        
+
         self.wait_for_cluster(timeout)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
@@ -882,8 +883,8 @@ class K8sCluster:
     def get_instance_resources(self, vm):
 
         vcpus, memory, storage = 0, 0, 0
-        if not isinstance(vm, OpenStackVM):
-            raise TypeError(f'vm must be an instance of {OpenStackVM}')
+        if not isinstance(vm, OpenStackVM) or not isinstance(vm, LocalVM):
+            raise TypeError(f'vm must be an instance of OpenStackVM or LocalVM')
 
         vcpus = vm.Servers[0].flavor.vcpus
         memory = vm.Servers[0].flavor.ram

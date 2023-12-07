@@ -10,18 +10,21 @@ NONE=null=None
 FALSE=false=False
 
 class Remote:
-    def __init__(self, vm_keys, user, fip, log):
+    def __init__(self, vm_keys, user, fip, log, local=False):
 
-        self.ip     = fip        # public ip
-        self.user   = user       # user name
-        self.key    = vm_keys[0] # path to the private key
+        self.ip = fip        # public ip
+        self.user = user       # user name
+        self.key = vm_keys[0] # path to the private key
         self.logger = log
-        self.conn   = self.__connect()
+        self.conn = self.__connect(local=local)
 
 
     # --------------------------------------------------------------------------
     #
-    def __connect(self):
+    def __connect(self, local):
+        if local:
+            return fabric.Connection(self.ip, port=22, user=None)
+
         conn = fabric.Connection(self.ip, port=22, user=self.user,
                         connect_kwargs={'key_filename' :self.key})
         self.check_ssh_connection(self.ip)
