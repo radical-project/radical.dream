@@ -202,12 +202,14 @@ class K8sCluster:
             # create a new local cluster
             elif head_node.LaunchType == 'create':
                 # make sure the user is root to create a local cluster
+                # FIXME: NOT WORKING FOR NOW (i.e is_root)
                 if is_root():
                     os.environ['KUBE_LOCAL'] = 'True'
 
                     # move the boostrapper to the local sandbox and build the boostrapping command
-                    boostrapper_path = self.control_plane.get(boostrapper, local=self.sandbox)
-                    local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup .{boostrapper_path} '
+                    self.control_plane.get(boostrapper, local=self.sandbox)
+                    boostrapper_path = f"{self.sandbox}/bootstrap_kubernetes.sh"
+                    local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup {boostrapper_path} '
                     local_bootstrap_cmd += '/dev/null < /dev/null &'
 
                     out, err, ret = sh_callout(local_bootstrap_cmd, shell=True)

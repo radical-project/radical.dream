@@ -13,8 +13,7 @@ install_local_kuberentes() {
     # Start Minikube
     minikube start
     # Set up kubectl alias
-    kubectl="minikube kubectl --"
-    export kubectl
+    sudo ln -s $(which minikube) /usr/local/bin/kubectl
 }
 
 if [ -n "$KUBE_LOCAL" ]; then
@@ -25,6 +24,7 @@ if [ -n "$KUBE_LOCAL" ]; then
         echo "Error setting up kuberenetes cluster locally" 1>> $LOG_ERR
         exit 1
     fi
+    exit 0
 fi
 
 
