@@ -50,6 +50,7 @@ MAX_PODS = 110
 MAX_POD_LOGS_LENGTH = 1000000
 
 KUBECTL = shutil.which('kubectl')
+KUBE_LOCAL = os.getenv('KUBE_LOCAL')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
 KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
 KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
@@ -198,23 +199,28 @@ class K8sCluster:
         loc = os.path.join(os.path.dirname(__file__))
         boostrapper = "{0}/bootstrap_kubernetes.sh".format(loc)
 
-        self.control_plane.put(boostrapper)
+        if not KUBE_LOCAL:
+            # bug in fabric: https://github.com/fabric/fabric/issues/323
+            remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
+            remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
+            remote_key_path = remote_ssh_path + '/' + remote_ssh_name
 
-        # bug in fabric: https://github.com/fabric/fabric/issues/323
-        remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
-        remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
-        remote_key_path = remote_ssh_path + '/' + remote_ssh_name
+            for key in head_node.KeyPair:
+                self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
 
-        for key in head_node.KeyPair:
-            self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
+            self.control_plane.put(boostrapper)
+        
+        else:
+            remote_key_path = 'Null'
 
-        # start the bootstraping as a background process.
         bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
         bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
         bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
                                                                  self.control_plane.user,
                                                                  remote_key_path)
         bootstrap_cmd += '/dev/null < /dev/null &'
+
+        # start the bootstraping as a background process.
         self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
 
         self.wait_for_cluster(timeout)
@@ -939,7 +945,8 @@ class K8sCluster:
         if self.control_plane:
             self.control_plane.close()
             if hasattr(self, '_tunnel'):
-                self._tunnel.stop()
+                if not self.control_plane.local:
+                    self._tunnel.stop()
 
 
 # --------------------------------------------------------------------------

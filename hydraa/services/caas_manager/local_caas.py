@@ -20,6 +20,8 @@ class LocalCaas(Jet2Caas):
 
         super().__init__(sandbox, manager_id, cred,
                          VMS, asynchronous, auto_terminate, log, prof)
+        
+        os.environ["KUBE_LOCAL"] = True
 
 
     # --------------------------------------------------------------------------

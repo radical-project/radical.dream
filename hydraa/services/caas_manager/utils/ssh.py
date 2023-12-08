@@ -2,6 +2,7 @@ import os
 import time
 import socket
 import fabric
+import shutil
 from .misc import sh_callout
 from sshtunnel import SSHTunnelForwarder
 
@@ -98,7 +99,13 @@ class Remote:
     #
     def get(self, remote_file, **kwargs):
         if self.local:
-            raise RuntimeWarning('get method is not supported in local mode')
+            to_dir = os.getcwd()
+            if kwargs.get('local'):
+                to_dir = kwargs['local']
+
+            shutil.move(remote_file, to_dir)
+            return 
+
         self.conn.get(remote_file, **kwargs)
 
 
@@ -128,6 +135,11 @@ class Remote:
     # --------------------------------------------------------------------------
     #
     def setup_ssh_tunnel(self, kube_config):
+
+        if self.local:
+            self.logger.warn('ssh tunnel is not required in local mode')
+            return None
+
         # default Kube API service port
         out, err, ret = sh_callout('grep "server: https://" {0}'.format(kube_config),
                                                                           shell=True)
