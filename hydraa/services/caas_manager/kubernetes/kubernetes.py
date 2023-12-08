@@ -13,6 +13,7 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
+from ..utils.misc import is_root
 from ..utils.misc import build_pod
 from ..utils.misc import unique_id
 from ..utils.misc import sh_callout
@@ -172,31 +173,60 @@ class K8sCluster:
         4- Request join token from the master for each worker node.
         5- Join each worker to the master node.
         """
+        head_node = self.vms[0]
 
         worker_nodes = len(self.get_worker_nodes())
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
 
-        # Attempt to fix Paramiko issue #75 temporarily
-        time.sleep(5)
-
         self.status = BUSY
-
         self.add_nodes_properity()
-
-        head_node = self.vms[0]
 
         if KUBE_TIMEOUT:
             timeout = int(KUBE_TIMEOUT)
-
+        
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
-        nodes_map = self.create_nodes_map()
         loc = os.path.join(os.path.dirname(__file__))
         boostrapper = "{0}/bootstrap_kubernetes.sh".format(loc)
 
-        if self.provider != LOCAL:
+        # local mode setup
+        if self.provider == LOCAL:
+            # join an existing cluster
+            if head_node.launch_type == 'join':
+                # make sure kubectl is installed
+                if not KUBECTL:
+                    raise RuntimeError('Kubectl is required to join a Kuberentes cluster')
+
+            # create a new local cluster
+            elif head_node.launch_type == 'create':
+                # make sure the user is root to create a local cluster
+                if is_root():
+                    os.environ['KUBE_LOCAL'] = 'True'
+
+                    # move the boostrapper to the local sandbox and build the boostrapping command
+                    boostrapper_path = self.control_plane.get(boostrapper, local=self.sandbox)
+                    local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup .{boostrapper_path} '
+                    local_bootstrap_cmd += '/dev/null < /dev/null &'
+
+                    out, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
+                    if ret:
+                        raise RuntimeError(f'failed to create a local Kuberentes cluster: {err}')
+
+                else:
+                    raise RuntimeError('Creating a local Kuberentes cluster requries root access')
+
+            else:
+                raise ValueError(f'Unknown launch type {head_node.launch_type}')
+
+        # remote mode setup
+        else:
+            # Attempt to fix Paramiko issue #75 temporarily
+            time.sleep(5)
+
+            nodes_map = self.create_nodes_map()
+
             # bug in fabric: https://github.com/fabric/fabric/issues/323
             remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
             remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
@@ -207,21 +237,15 @@ class K8sCluster:
             # put the bootstrap script in the control plane node $HOME dir
             self.control_plane.put(boostrapper)
 
-        else:
-            remote_key_path = 'Null'
-            os.environ["KUBE_LOCAL"] = "TRUE"
-            # put the bootstrap script in cwd locally
-            self.control_plane.get(boostrapper)
+            bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
+            bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
+            bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
+                                                                    self.control_plane.user,
+                                                                    remote_key_path)
+            bootstrap_cmd += '/dev/null < /dev/null &'
 
-        bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
-        bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
-        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                 self.control_plane.user,
-                                                                 remote_key_path)
-        bootstrap_cmd += '/dev/null < /dev/null &'
-
-        # start the bootstraping as a background process.
-        self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
+            # start the bootstraping as a background process.
+            self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
 
         self.wait_for_cluster(timeout)
 

@@ -104,6 +104,11 @@ def create_sandbox(id, sub=False):
 
 # --------------------------------------------------------------------------
 #
+def is_root():
+    return os.geteuid() == 0
+
+# --------------------------------------------------------------------------
+#
 def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None):
     """
     Comprehensively adds a new logging level to the `logging` module and the

@@ -103,7 +103,7 @@ class Remote:
             if kwargs.get('local'):
                 to_dir = kwargs['local']
 
-            shutil.move(remote_file, to_dir)
+            shutil.copy(remote_file, to_dir)
             return 
 
         self.conn.get(remote_file, **kwargs)

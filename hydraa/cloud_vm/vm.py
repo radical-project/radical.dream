@@ -138,9 +138,12 @@ class OpenStackVM:
 
 
 class LocalVM(OpenStackVM):
-    def __init__(self, **input_kwargs):
+    def __init__(self, launch_type, **input_kwargs):
 
-        super().__init__(provider='local', launch_type='local',
+        if launch_type not in ['join', 'create']:
+            raise ValueError('LaunchType must be: ``join`` or ``create``')
+
+        super().__init__(provider='local', launch_type=launch_type,
                          flavor_id=None, image_id=None,
                          min_count=1, max_count=1, **input_kwargs)
 
