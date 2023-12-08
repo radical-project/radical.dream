@@ -46,11 +46,11 @@ PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
 SLEEP = 2
 BUSY = 'Busy'
 READY = 'Ready'
+LOCAL = 'local'
 MAX_PODS = 110
 MAX_POD_LOGS_LENGTH = 1000000
 
 KUBECTL = shutil.which('kubectl')
-KUBE_LOCAL = os.getenv('KUBE_LOCAL')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
 KUBE_TIMEOUT = os.getenv('KUBE_TIMEOUT') # minutes
 KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
@@ -187,9 +187,6 @@ class K8sCluster:
 
         head_node = self.vms[0]
 
-        if not KUBECTL:
-            raise Exception('Kubectl is required to manage Kuberentes cluster')
-
         if KUBE_TIMEOUT:
             timeout = int(KUBE_TIMEOUT)
 
@@ -199,7 +196,7 @@ class K8sCluster:
         loc = os.path.join(os.path.dirname(__file__))
         boostrapper = "{0}/bootstrap_kubernetes.sh".format(loc)
 
-        if not KUBE_LOCAL:
+        if self.provider != LOCAL:
             # bug in fabric: https://github.com/fabric/fabric/issues/323
             remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
             remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
