@@ -204,11 +204,14 @@ class K8sCluster:
 
             for key in head_node.KeyPair:
                 self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
-
+            # put the bootstrap script in the control plane node $HOME dir
             self.control_plane.put(boostrapper)
-        
+
         else:
             remote_key_path = 'Null'
+            os.environ["KUBE_LOCAL"] = "TRUE"
+            # put the bootstrap script in cwd locally
+            self.control_plane.get(boostrapper)
 
         bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
         bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
