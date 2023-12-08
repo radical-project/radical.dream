@@ -194,13 +194,13 @@ class K8sCluster:
         # local mode setup
         if self.provider == LOCAL:
             # join an existing cluster
-            if head_node.launch_type == 'join':
+            if head_node.LaunchType == 'join':
                 # make sure kubectl is installed
                 if not KUBECTL:
                     raise RuntimeError('Kubectl is required to join a Kuberentes cluster')
 
             # create a new local cluster
-            elif head_node.launch_type == 'create':
+            elif head_node.LaunchType == 'create':
                 # make sure the user is root to create a local cluster
                 if is_root():
                     os.environ['KUBE_LOCAL'] = 'True'
