@@ -908,7 +908,7 @@ class K8sCluster:
         6- self.get_cluster_allocatable_size()
         """
         raise NotImplementedError('adding node to a running K8s cluster'
-                                   'is not implemented yet')
+                                  'is not implemented yet')
 
 
     # --------------------------------------------------------------------------
@@ -916,7 +916,7 @@ class K8sCluster:
     def get_instance_resources(self, vm):
 
         vcpus, memory, storage = 0, 0, 0
-        if not isinstance(vm, OpenStackVM) or not isinstance(vm, LocalVM):
+        if not isinstance(vm, OpenStackVM) and not isinstance(vm, LocalVM):
             raise TypeError(f'vm must be an instance of OpenStackVM or LocalVM')
 
         vcpus = vm.Servers[0].flavor.vcpus
