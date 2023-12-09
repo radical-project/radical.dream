@@ -162,9 +162,6 @@ class K8sCluster:
     #
     def bootstrap(self, timeout=30):
         """
-        The function to build Kuberentes n nodes (1 master) (n-1) workers
-        using n virtual or physical machines and wait for them to finish.
-
         Bootstrap a Kubernetes cluster with one master node and (n-1) worker nodes.
 
         This method orchestrates the process of building a Kubernetes cluster
