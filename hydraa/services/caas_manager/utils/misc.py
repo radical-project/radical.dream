@@ -105,7 +105,7 @@ def create_sandbox(id, sub=False):
 # --------------------------------------------------------------------------
 #
 def is_root():
-    return os.geteuid() == 0
+    return sh_callout('sudo -n true 2>/dev/null', shell=True)[2]
 
 # --------------------------------------------------------------------------
 #

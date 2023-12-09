@@ -106,16 +106,6 @@ ansible-playbook -i inventory/mycluster/hosts.yml --private-key=$key -u $user --
 
 # setup the master node kube config
 mkdir -p $HOME/.kube
-cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-chown $(id -u):$(id -g) $HOME/.kube/config
 
-# Check if the KUBE_LOCAL environment variable is set
-if [ -n "$KUBE_LOCAL" ]; then
-    # If KUBE_LOCAL is set, don't use sudo
-    echo "Using KUBE_LOCAL environment variable, not using sudo."
-    setup_kube_config
-else
-    # If KUBE_LOCAL is not set, use sudo
-    echo "KUBE_LOCAL environment variable not found, using sudo."
-    sudo setup_kube_config
-fi
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config

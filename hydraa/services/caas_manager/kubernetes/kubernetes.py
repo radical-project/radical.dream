@@ -165,13 +165,42 @@ class K8sCluster:
         The function to build Kuberentes n nodes (1 master) (n-1) workers
         using n virtual or physical machines and wait for them to finish.
 
-        For each node this function does:
+        Bootstrap a Kubernetes cluster with one master node and (n-1) worker nodes.
 
-        1- Adding hosts (ip and name) to each node.
-        2- Bootstrap Kuberentes on each node.
-        3- Wait for each node to become active
-        4- Request join token from the master for each worker node.
-        5- Join each worker to the master node.
+        This method orchestrates the process of building a Kubernetes cluster
+        with n nodes (1 master) (n-1) workers using n virtual or physical machines
+        by performing the following steps:
+
+        1. Determine the number of worker nodes and print cluster details.
+        2. Set the status of the cluster to 'BUSY'.
+        3. Add hosts (IP and name) to each node.
+        4. Adjust the timeout value if specified in the configuration.
+        5. Set up the local mode if the provider is 'LOCAL'.
+            - Join an existing cluster if the launch type is 'join'.
+            - Create a new local cluster if the launch type is 'create'.
+        6. Set up the remote mode if the provider is different from 'LOCAL'.
+        7. Create a map of nodes for remote setup.
+        8. Copy necessary SSH keys and the bootstrap script to the control plane node.
+        9. Wait for the cluster to become ready within the specified timeout.
+        10. Configure the Kubernetes client and set up an SSH tunnel.
+        11. Set the status of the cluster to 'READY'.
+
+        Parameters:
+        - timeout (int): Maximum time (in seconds) to wait for the cluster to finish. Default is 30 seconds.
+
+        Raises:
+        - RuntimeError: If Kubectl is required but not installed.
+        - RuntimeError: If creating a local Kubernetes cluster requires root access.
+        - ValueError: If an unknown launch type is specified.
+
+        Returns:
+        - None
+
+        Example:
+        ```python
+        cluster = K8sCluster()
+        cluster.bootstrap(timeout=60)
+        ```
         """
         head_node = self.vms[0]
 
@@ -202,7 +231,6 @@ class K8sCluster:
             # create a new local cluster
             elif head_node.LaunchType == 'create':
                 # make sure the user is root to create a local cluster
-                # FIXME: NOT WORKING FOR NOW (i.e is_root)
                 if is_root():
                     os.environ['KUBE_LOCAL'] = 'True'
 
@@ -491,61 +519,6 @@ class K8sCluster:
            del task_batch[:batch]
 
         return(objs_batch)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def wait_to_finish(self, outgoing_q):
-
-        cmd  = 'kubectl '
-        cmd += 'get pod --field-selector=status.phase=Succeeded '
-        cmd += '| grep Completed* | wc -l'
-        cmd2  = 'kubectl get pods | grep -E "{0}" | wc -l'.format('|'.join(PFAILED_STATE))
-
-        self.profiler.prof('wait_pods_start', uid=self.id)
-
-        old_done  = 0
-        old_fail  = 0
-
-        while True:
-            done_pods = 0
-            fail_pods = 0
-
-            old_done  = done_pods
-            old_fail  = fail_pods
-
-            out, err, _ = sh_callout(cmd, shell=True, kube=self)
-            out2, err2, _ = sh_callout(cmd2, shell=True, kube=self)
-
-            done_pods = int(out.strip())
-            fail_pods = int(out2.strip())
-
-            if done_pods or fail_pods:
-                # logic error
-                if not self.pod_counter:
-                    continue
-
-                if self.pod_counter == int(done_pods):
-                    print('{0} pods finished with status "Completed"'.format(done_pods))
-                    break
-
-                elif self.pod_counter == int(fail_pods):
-                    print('{0} pods failed'.format(fail_pods))
-                    break
-
-                elif int(sum([done_pods, fail_pods])) == self.pod_counter:
-                    break
-                else:
-                    if old_done != done_pods or old_fail != fail_pods:
-                        msg = {'done': done_pods, 'failed': fail_pods}
-                        outgoing_q.put(msg)
-                    time.sleep(60)
-
-        self.status = READY
-
-        self.profiler.prof('wait_pods_stop', uid=self.id)
-
-        return True
 
 
     # --------------------------------------------------------------------------
