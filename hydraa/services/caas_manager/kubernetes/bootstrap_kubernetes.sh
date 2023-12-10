@@ -3,6 +3,32 @@
 LOG_OUT=$HOME/k8s_bootstrap.out
 LOG_ERR=$HOME/k8s_bootstrap.err
 KUBE_REPO=https://github.com/kubernetes-sigs/kubespray.git
+LINK=https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+
+install_local_kuberentes() {
+    # Download Minikube
+    curl -LO $LINK || { echo "Error downloading Minikube"; exit 1; }
+    # Install Minikube
+    sudo install minikube-linux-amd64 /usr/local/bin/minikube || { echo "Error installing Minikube"; exit 1; }
+    # Start Minikube
+    minikube start
+    # Set up kubectl alias
+    sudo ln -s $(which minikube) /usr/local/bin/kubectl
+}
+
+if [ -n "$KUBE_LOCAL" ]; then
+    # If KUBE_LOCAL is set, don't use sudo
+    echo "setting up kuberenetes cluster locally"
+    install_local_kuberentes 1>> $LOG_OUT 2>> $LOG_ERR
+    if [ $? -ne 0 ]; then
+        echo "Error setting up kuberenetes cluster locally" 1>> $LOG_ERR
+        exit 1
+    fi
+    exit 0
+fi
+
+
+echo "setting up kuberenetes cluster remotely" 1>> $LOG_OUT
 
 # get the python version
 PYTHON_VERSION=$(python3 -c "import sys; print('.'.join(map(str, sys.version_info[:2])))")
@@ -80,5 +106,6 @@ ansible-playbook -i inventory/mycluster/hosts.yml --private-key=$key -u $user --
 
 # setup the master node kube config
 mkdir -p $HOME/.kube
+
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config

@@ -13,6 +13,7 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
+from ..utils.misc import is_root
 from ..utils.misc import build_pod
 from ..utils.misc import unique_id
 from ..utils.misc import sh_callout
@@ -24,6 +25,7 @@ from ..utils.misc import dump_multiple_yamls
 from ....cloud_vm.vm import AwsVM
 from ....cloud_vm.vm import AzureVM
 from ....cloud_task.task import Task
+from ....cloud_vm.vm import LocalVM
 from ....cloud_vm.vm import OpenStackVM
 
 
@@ -45,6 +47,7 @@ PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
 SLEEP = 2
 BUSY = 'Busy'
 READY = 'Ready'
+LOCAL = 'local'
 MAX_PODS = 110
 MAX_POD_LOGS_LENGTH = 1000000
 
@@ -159,63 +162,118 @@ class K8sCluster:
     #
     def bootstrap(self, timeout=30):
         """
-        The function to build Kuberentes n nodes (1 master) (n-1) workers
-        using n virtual or physical machines and wait for them to finish.
+        Bootstrap a Kubernetes cluster with one master node and (n-1) worker nodes.
 
-        For each node this function does:
+        This method orchestrates the process of building a Kubernetes cluster
+        with n nodes (1 master) (n-1) workers using n virtual or physical machines
+        by performing the following steps:
 
-        1- Adding hosts (ip and name) to each node.
-        2- Bootstrap Kuberentes on each node.
-        3- Wait for each node to become active
-        4- Request join token from the master for each worker node.
-        5- Join each worker to the master node.
+        1. Determine the number of worker nodes and print cluster details.
+        2. Set the status of the cluster to 'BUSY'.
+        3. Add hosts (IP and name) to each node.
+        4. Adjust the timeout value if specified in the configuration.
+        5. Set up the local mode if the provider is 'LOCAL'.
+            - Join an existing cluster if the launch type is 'join'.
+            - Create a new local cluster if the launch type is 'create'.
+        6. Set up the remote mode if the provider is different from 'LOCAL'.
+        7. Create a map of nodes for remote setup.
+        8. Copy necessary SSH keys and the bootstrap script to the control plane node.
+        9. Wait for the cluster to become ready within the specified timeout.
+        10. Configure the Kubernetes client and set up an SSH tunnel.
+        11. Set the status of the cluster to 'READY'.
+
+        Parameters:
+        - timeout (int): Maximum time (in seconds) to wait for the cluster to finish. Default is 30 seconds.
+
+        Raises:
+        - RuntimeError: If Kubectl is required but not installed.
+        - RuntimeError: If creating a local Kubernetes cluster requires root access.
+        - ValueError: If an unknown launch type is specified.
+
+        Returns:
+        - None
+
+        Example:
+        ```python
+        cluster = K8sCluster()
+        cluster.bootstrap(timeout=60)
+        ```
         """
+        head_node = self.vms[0]
 
         worker_nodes = len(self.get_worker_nodes())
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
 
-        # Attempt to fix Paramiko issue #75 temporarily
-        time.sleep(5)
-
         self.status = BUSY
-
         self.add_nodes_properity()
-
-        head_node = self.vms[0]
-
-        if not KUBECTL:
-            raise Exception('Kubectl is required to manage Kuberentes cluster')
 
         if KUBE_TIMEOUT:
             timeout = int(KUBE_TIMEOUT)
-
+        
         self.profiler.prof('bootstrap_cluster_start', uid=self.id)
 
-        nodes_map = self.create_nodes_map()
         loc = os.path.join(os.path.dirname(__file__))
         boostrapper = "{0}/bootstrap_kubernetes.sh".format(loc)
 
-        self.control_plane.put(boostrapper)
+        # local mode setup
+        if self.provider == LOCAL:
+            # join an existing cluster
+            if head_node.LaunchType == 'join':
+                # make sure kubectl is installed
+                if not KUBECTL:
+                    raise RuntimeError('Kubectl is required to join a Kuberentes cluster')
 
-        # bug in fabric: https://github.com/fabric/fabric/issues/323
-        remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
-        remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
-        remote_key_path = remote_ssh_path + '/' + remote_ssh_name
+            # create a new local cluster
+            elif head_node.LaunchType == 'create':
+                # make sure the user is root to create a local cluster
+                if is_root():
+                    os.environ['KUBE_LOCAL'] = 'True'
 
-        for key in head_node.KeyPair:
-            self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
+                    # move the boostrapper to the local sandbox and build the boostrapping command
+                    self.control_plane.get(boostrapper, local=self.sandbox)
+                    boostrapper_path = f"{self.sandbox}/bootstrap_kubernetes.sh"
+                    local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup {boostrapper_path} '
+                    local_bootstrap_cmd += '/dev/null < /dev/null &'
 
-        # start the bootstraping as a background process.
-        bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
-        bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
-        bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                 self.control_plane.user,
-                                                                 remote_key_path)
-        bootstrap_cmd += '/dev/null < /dev/null &'
-        self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
-        
+                    out, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
+                    if ret:
+                        raise RuntimeError(f'failed to create a local Kuberentes cluster: {err}')
+
+                else:
+                    raise RuntimeError('Creating a local Kuberentes cluster requries root access')
+
+            else:
+                raise ValueError(f'Unknown launch type {head_node.launch_type}')
+
+        # remote mode setup
+        else:
+            # Attempt to fix Paramiko issue #75 temporarily
+            time.sleep(5)
+
+            nodes_map = self.create_nodes_map()
+
+            # bug in fabric: https://github.com/fabric/fabric/issues/323
+            remote_ssh_path = '/home/{0}/.ssh'.format(self.control_plane.user)
+            remote_ssh_name = head_node.KeyPair[0].split('.ssh/')[-1:][0]
+            remote_key_path = remote_ssh_path + '/' + remote_ssh_name
+
+            for key in head_node.KeyPair:
+                self.control_plane.put(key, remote=remote_ssh_path, preserve_mode=True)
+            # put the bootstrap script in the control plane node $HOME dir
+            self.control_plane.put(boostrapper)
+
+            bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
+            bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
+            bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
+                                                                    self.control_plane.user,
+                                                                    remote_key_path)
+            bootstrap_cmd += '/dev/null < /dev/null &'
+
+            # start the bootstraping as a background process.
+            self.control_plane.run(bootstrap_cmd, hide=True, warn=True)
+
         self.wait_for_cluster(timeout)
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
@@ -231,14 +289,29 @@ class K8sCluster:
     #
     def configure(self):
 
+        kube_config_locs = ['.kube/config', '~/.kube/config']
+
         self.logger.trace('creating .kube folder')
         config_file = self.sandbox + "/.kube/config"
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+        kube_config_path = None
+        for ploc in kube_config_locs:
+            res = self.control_plane.run(f'cat {ploc}', warn=True,
+                                                        hide=True)
+            if not res.return_code:
+                kube_config_path = ploc
+                break
 
-        self.control_plane.get('.kube/config', local=config_file, preserve_mode=True)
+        if kube_config_path:
+            self.control_plane.get(kube_config_path, local=config_file,
+                                                     preserve_mode=True)
+            self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+        else:
+            raise FileNotFoundError(f'failed to find kubeconfig file under'
+                                    ' {kube_config_locs}.\n You can set the'
+                                    ' path via VM.KubeConfigPath')
 
         return config_file
 
@@ -249,7 +322,8 @@ class K8sCluster:
         start_time = time.time()
 
         while True:
-            check_cluster = self.control_plane.run('kubectl get nodes', warn=True, hide=True)
+            check_cluster = self.control_plane.run('kubectl get nodes', warn=True,
+                                                                        hide=True)
             if not check_cluster.return_code:
                 self.logger.trace('{0} installation succeeded'.format(self.name))
                 break
@@ -457,61 +531,6 @@ class K8sCluster:
            del task_batch[:batch]
 
         return(objs_batch)
-
-
-    # --------------------------------------------------------------------------
-    #
-    def wait_to_finish(self, outgoing_q):
-
-        cmd  = 'kubectl '
-        cmd += 'get pod --field-selector=status.phase=Succeeded '
-        cmd += '| grep Completed* | wc -l'
-        cmd2  = 'kubectl get pods | grep -E "{0}" | wc -l'.format('|'.join(PFAILED_STATE))
-
-        self.profiler.prof('wait_pods_start', uid=self.id)
-
-        old_done  = 0
-        old_fail  = 0
-
-        while True:
-            done_pods = 0
-            fail_pods = 0
-
-            old_done  = done_pods
-            old_fail  = fail_pods
-
-            out, err, _ = sh_callout(cmd, shell=True, kube=self)
-            out2, err2, _ = sh_callout(cmd2, shell=True, kube=self)
-
-            done_pods = int(out.strip())
-            fail_pods = int(out2.strip())
-
-            if done_pods or fail_pods:
-                # logic error
-                if not self.pod_counter:
-                    continue
-
-                if self.pod_counter == int(done_pods):
-                    print('{0} pods finished with status "Completed"'.format(done_pods))
-                    break
-
-                elif self.pod_counter == int(fail_pods):
-                    print('{0} pods failed'.format(fail_pods))
-                    break
-
-                elif int(sum([done_pods, fail_pods])) == self.pod_counter:
-                    break
-                else:
-                    if old_done != done_pods or old_fail != fail_pods:
-                        msg = {'done': done_pods, 'failed': fail_pods}
-                        outgoing_q.put(msg)
-                    time.sleep(60)
-
-        self.status = READY
-
-        self.profiler.prof('wait_pods_stop', uid=self.id)
-
-        return True
 
 
     # --------------------------------------------------------------------------
@@ -874,7 +893,7 @@ class K8sCluster:
         6- self.get_cluster_allocatable_size()
         """
         raise NotImplementedError('adding node to a running K8s cluster'
-                                   'is not implemented yet')
+                                  'is not implemented yet')
 
 
     # --------------------------------------------------------------------------
@@ -882,8 +901,8 @@ class K8sCluster:
     def get_instance_resources(self, vm):
 
         vcpus, memory, storage = 0, 0, 0
-        if not isinstance(vm, OpenStackVM):
-            raise TypeError(f'vm must be an instance of {OpenStackVM}')
+        if not isinstance(vm, OpenStackVM) and not isinstance(vm, LocalVM):
+            raise TypeError(f'vm must be an instance of OpenStackVM or LocalVM')
 
         vcpus = vm.Servers[0].flavor.vcpus
         memory = vm.Servers[0].flavor.ram
@@ -937,7 +956,8 @@ class K8sCluster:
         if self.control_plane:
             self.control_plane.close()
             if hasattr(self, '_tunnel'):
-                self._tunnel.stop()
+                if not self.control_plane.local:
+                    self._tunnel.stop()
 
 
 # --------------------------------------------------------------------------

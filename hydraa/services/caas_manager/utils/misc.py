@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib import request
 from kubernetes import client
 
-from hydraa import AWS, AZURE
+from hydraa import JET2, CHI
 
 
 TRUE = true=True
@@ -57,12 +57,12 @@ def sh_callout(cmd, stdout=True, stderr=True,
         CalledProcessError: If the command exits with a non-zero status code.
     """
     if kube:
-        if AWS in kube.provider or AZURE in kube.provider:
-            cmd = inject_kubeconfig(cmd, kube.kube_config,
-                                    local_bind_port=None)
-        else:
-            cmd = inject_kubeconfig(cmd, kube.kube_config,
-                                    kube._tunnel.local_bind_port)
+        lbp = None
+        if kube.provider == JET2 or kube.provider == CHI:
+            lbp = kube._tunnel.local_bind_port
+
+        cmd = inject_kubeconfig(cmd, kube.kube_config,
+                                local_bind_port=lbp)
 
     # convert string into arg list if needed
     if hasattr(str, cmd) and \
@@ -101,6 +101,11 @@ def create_sandbox(id, sub=False):
 
     return main_sandbox
 
+
+# --------------------------------------------------------------------------
+#
+def is_root():
+    return sh_callout('sudo -n true 2>/dev/null', shell=True)[2]
 
 # --------------------------------------------------------------------------
 #

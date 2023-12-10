@@ -3,7 +3,7 @@ import uuid
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 LTYPE  = ['FARGATE', 'fargate', 'EC2', 'ec2', 'EKS', 'eks']
-OPTYPE = ['chameleon', 'jetstream2']
+OPTYPE = ['chameleon', 'jetstream2', 'local']
 
 
 # --------------------------------------------------------------------
@@ -135,3 +135,17 @@ class OpenStackVM:
 
         kwargs = {**self.required_kwargs, **self.input_kwargs}
         return kwargs
+
+
+class LocalVM(OpenStackVM):
+    def __init__(self, launch_type, **input_kwargs):
+
+        if launch_type not in ['join', 'create']:
+            raise ValueError('LaunchType must be: ``join`` or ``create``')
+
+        super().__init__(provider='local', launch_type=launch_type,
+                         flavor_id=None, image_id=None,
+                         min_count=1, max_count=1, **input_kwargs)
+
+        self.Servers = []
+        self.VmName = 'LocalVM-{0}'.format(uuid.uuid4())
