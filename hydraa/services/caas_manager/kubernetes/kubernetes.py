@@ -289,15 +289,29 @@ class K8sCluster:
     #
     def configure(self):
 
+        kube_config_locs = ['.kube/config', '~/.kube/config']
+
         self.logger.trace('creating .kube folder')
         config_file = self.sandbox + "/.kube/config"
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+        kube_config_path = None
+        for ploc in kube_config_locs:
+            res = self.control_plane.run(f'cat {ploc}', warn=True,
+                                                        hide=True)
+            if not res.return_code:
+                kube_config_path = ploc
+                break
 
-        self.control_plane.get('.kube/config', local=config_file,
-                                               preserve_mode=True)
+        if kube_config_path:
+            self.control_plane.get(kube_config_path, local=config_file,
+                                                     preserve_mode=True)
+            self.logger.trace('setting kubeconfig path to: {0}'.format(config_file))
+        else:
+            raise FileNotFoundError(f'failed to find kubeconfig file under'
+                                    ' {kube_config_locs}.\n You can set the'
+                                    ' path via VM.KubeConfigPath')
 
         return config_file
 
@@ -308,7 +322,8 @@ class K8sCluster:
         start_time = time.time()
 
         while True:
-            check_cluster = self.control_plane.run('kubectl get nodes', warn=True, hide=True)
+            check_cluster = self.control_plane.run('kubectl get nodes', warn=True,
+                                                                        hide=True)
             if not check_cluster.return_code:
                 self.logger.trace('{0} installation succeeded'.format(self.name))
                 break

@@ -103,6 +103,9 @@ class Remote:
             if kwargs.get('local'):
                 to_dir = kwargs['local']
 
+            if '~' in remote_file:
+                remote_file = os.path.expanduser(remote_file)
+
             shutil.copy(remote_file, to_dir)
             return 
 
