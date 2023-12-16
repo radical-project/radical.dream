@@ -137,23 +137,15 @@ class Remote:
 
     # --------------------------------------------------------------------------
     #
-    def setup_ssh_tunnel(self, kube_config):
+    def setup_ssh_tunnel(self, kube_server):
+
+        remote_port = 22
 
         if self.local:
             self.logger.warn('ssh tunnel is not required in local mode')
             return None
 
-        # default Kube API service port
-        out, err, ret = sh_callout('grep "server: https://" {0}'.format(kube_config),
-                                                                          shell=True)
-
-        if ret:
-            raise Exception('failed to fetch kubectl config ip: {0}'.format(err))
-
-        ip_port = out.strip().split('server: https://')[1]
-        remote_port = 22
-
-        local_host, local_port = ip_port.split(":", 1)
+        local_host, local_port = kube_server.split('//')[1].split(':')
         open_port = self.find_open_port(local_host)
 
         server = SSHTunnelForwarder((self.ip, remote_port),

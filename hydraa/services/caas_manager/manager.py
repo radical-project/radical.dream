@@ -229,9 +229,10 @@ class CaasManager:
                 manager = next(iter(self._registered_managers.values()))
                 self.log.warning('no manager found for this task, submitting to a any manager')
 
-            print('submitting tasks: ', tasks_counter, end='\r')
             manager['in_q'].put(task)
             tasks_counter += 1
+
+        print(f'{tasks_counter} tasks is submitted')
 
 
     # --------------------------------------------------------------------------

@@ -53,7 +53,6 @@ class Jet2Caas():
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
 
         self._tasks_book  = OrderedDict()
-        self._pods_book   = OrderedDict()
 
         self._run_cost    = 0
         self.runs_tree    = OrderedDict()
@@ -110,8 +109,6 @@ class Jet2Caas():
 
         self.status = ACTIVE
 
-        self.runs_tree[self.run_id] =  self._pods_book
-
 
     # --------------------------------------------------------------------------
     #
@@ -124,8 +121,8 @@ class Jet2Caas():
 
         bulk = list()
         max_bulk_size = 1000000
-        max_bulk_time = 2        # seconds
-        min_bulk_time = 0.1      # seconds
+        max_bulk_time = 0.5 # seconds
+        min_bulk_time = 0.1 # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='Jet2CaaSWatcher')
@@ -150,7 +147,8 @@ class Jet2Caas():
                         break
 
             if bulk:
-                self.submit(bulk)
+                with self._task_lock:
+                    self.submit(bulk)
 
             bulk = list()
 
@@ -414,15 +412,7 @@ class Jet2Caas():
             self._task_id +=1
 
         # submit to Kubernets cluster
-        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
-
-        # create entry for the pod in the pods book
-        for idx, pod_name in enumerate(pods_names):
-            self._pods_book[pod_name] = OrderedDict()
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batches[idx]
-            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
-            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
+        self.cluster.submit(ctasks)
 
         self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks)))
 
@@ -439,64 +429,79 @@ class Jet2Caas():
 
         while not self._terminate.is_set():
 
-            with self._task_lock:
-                _tasks = self.get_tasks()
-                tasks = copy.copy(_tasks)
+            try:
+                # pull a message from the cluster queue
+                if not self.cluster.result_queue.empty():
+                    _msg = self.cluster.result_queue.get(block=True, timeout=0.1)
 
-            for task in tasks:
-                # if task is already marked as done or failed then skip it
-                if task.name in finshed:
-                    continue
+                    if _msg:
+                        pod_id = _msg.get('pod_id')
+                        status = _msg.get('status')
 
-                status = self.cluster._get_task_statuses(task)
-                if not status:
-                    continue
+                        # filter out the tasks that are not related to this pod and not in finshed list
+                        tasks = self.get_tasks()
+                        with self._task_lock:
+                            linked_tasks = [task for task in tasks if task.pod_name == pod_id and task.name not in finshed]
 
-                if status == 'Completed':
-                    if task.running():
-                        running -= 1
-                    task.set_result('Finished successfully')
-                    finshed.append(task.name)
-                    done += 1
-
-                elif status == 'Running':
-                    if not task.running():
-                        task.set_running_or_notify_cancel()
-                        running += 1
                     else:
                         continue
 
-                # sometimes tasks requires sometime to reach running
-                # state like MPI when the worker is reported to be "failed"
-                # then running this approach should update task state after
-                # failer for now.
-                elif status == 'Failed':
-                    # default number of tries is 3 * 5s = 15s
-                    # after that declare the task as failed
-                    if task.tries:
-                        task.tries -= 1
-                        task.reset_state()
-                    else:
-                        if task.running():
-                            running -= 1
-                        task.set_exception(Exception('Failed due to container error, check the logs'))
-                        finshed.append(task.name)
-                        failed += 1
+                    for task in linked_tasks:
 
-                else:
-                    self.logger.info(f'task {task.name} is in {status} state')
+                        if not status:
+                            continue
 
-                task.state = status
-                msg = f'[failed: {failed}, done {done}, running {running}]'
+                        if status == 'Succeeded':
+                            if task.running():
+                                running -= 1
+                            task.set_result('Finished successfully')
+                            finshed.append(task.name)
+                            done += 1
 
-                self.outgoing_q.put(msg)
+                        elif status == 'Running':
+                            if not task.running():
+                                task.set_running_or_notify_cancel()
+                                running += 1
+                            else:
+                                continue
 
-                if len(finshed) == len(self._tasks_book):
-                    if self.auto_terminate:
-                        msg = (0, JET2)
-                        self.outgoing_q.put(msg)
+                        # sometimes tasks requires sometime to reach running
+                        # state like MPI when the worker is reported to be "failed"
+                        # then running this approach should update task state after
+                        # failer for now.
+                        elif status == 'Failed':
+                            # default number of tries is 5
+                            # after that declare the task as failed
+                            if task.tries:
+                                task.tries -= 1
+                                task.reset_state()
+                            else:
+                                if task.running():
+                                    running -= 1
+                                task.set_exception(Exception('Failed due to container error,'
+                                                             ' check the logs'))
+                                finshed.append(task.name)
+                                failed += 1
 
-            time.sleep(5)
+                        elif status == 'Pending':
+                            pass
+
+                        else:
+                            self.logger.info(f'task {task.name} is in {status} state')
+
+                        task.state = status
+
+                    msg = f'[failed: {failed}, done {done}, running {running}]'
+
+                    self.outgoing_q.put(msg)
+
+                    if len(finshed) == len(self._tasks_book):
+                        if self.auto_terminate:
+                            termination_msg = (0, JET2)
+                            self.outgoing_q.put(termination_msg)
+
+            except queue.Empty:
+                continue
 
 
     # --------------------------------------------------------------------------
@@ -539,7 +544,6 @@ class Jet2Caas():
         self.servers = None
         self.client = None
 
-        self._pods_book.clear()
         self.logger.trace('done')
 
 

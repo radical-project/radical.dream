@@ -294,7 +294,7 @@ class KubeflowMPILauncher(Kubeflow):
                               "slots": slots_per_worker,
                               "scheduler": ""}
 
-            task.tries = 3
+            task.tries = 5
 
             # make sure only one instance is updating 
             # the task_id at a time.
@@ -312,7 +312,7 @@ class KubeflowMPILauncher(Kubeflow):
         dump_multiple_yamls(kf_jobs, file_path)
         self.cluster.profiler.prof('create_kf_job_stop', uid='kf_mpijob')
 
-        self.cluster.submit(deployment_file=file_path)
+        self.cluster.submit(deployment_file=file_path, custom_resource=True)
 
     # --------------------------------------------------------------------------
     #

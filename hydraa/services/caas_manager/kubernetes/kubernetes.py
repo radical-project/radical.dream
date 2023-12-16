@@ -2,6 +2,7 @@ import os
 import time
 import math
 import copy
+import queue
 import atexit
 import shutil
 
@@ -13,8 +14,15 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
+from kubernetes import watch
+from kubernetes import client
+from kubernetes import config
+from kubernetes import utils as kutills
+
 from ..utils.misc import is_root
 from ..utils.misc import build_pod
+from ..utils.misc import load_yaml
+from ..utils.misc import dump_yaml
 from ..utils.misc import unique_id
 from ..utils.misc import sh_callout
 from ..utils.misc import generate_id
@@ -104,6 +112,8 @@ class K8sCluster:
 
         vms : List[hydraa.vm.VirtualMachine]
             A list of AWS/Azure/OpenStack Hydraa VM instances.
+        
+        result_q : Queue to send results back to the controller manager.
 
         sandbox : str
             The path to the folder of the Hydraa manager.
@@ -117,14 +127,15 @@ class K8sCluster:
         self.status = None
         self.pod_counter = 0
         self.sandbox = sandbox
-        self.kube_config  = None
+        self.kube_config = None
+        self.result_queue = queue.Queue()
         self.provider = self.vms[0].Provider
         self.size = self.get_cluster_allocatable_size()
         self.nodes = sum([vm.MinCount for vm in self.vms])
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
         self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
 
-        self.stop_event = mt.Event()
+        self.terminate = mt.Event()
         self.updater_lock = mt.Lock()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
 
@@ -279,7 +290,11 @@ class K8sCluster:
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
         self.kube_config = self.configure()
-        self._tunnel = self.control_plane.setup_ssh_tunnel(self.kube_config)
+
+        self.namespace = self.create_namespace()
+
+        # start the watcher thread
+        self._watch_pods_statuses()
 
         self.status = READY
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -313,7 +328,49 @@ class K8sCluster:
                                     ' {kube_config_locs}.\n You can set the'
                                     ' path via VM.KubeConfigPath')
 
+        if self.provider != LOCAL:
+            kube_config = load_yaml(config_file)
+            kube_server = kube_config['clusters'][0]['cluster']['server']
+
+            # create the ssh tunnel
+            self.tunnel = self.control_plane.setup_ssh_tunnel(kube_server)
+
+            # update the Kube config file with the tunneled port
+            kube_config['clusters'][0]['cluster']['server'] = \
+                f'https://127.0.0.1:{self.tunnel.local_bind_port}'
+
+            # write the changes to the disk
+            dump_yaml(kube_config, config_file, safe=False)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(config_file)
+
         return config_file
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_namespace(self, namespace=None):
+
+        if not namespace:
+            namespace = generate_id(prefix='hydraa-ns-')
+
+        namespaces = client.CoreV1Api().list_namespace()
+        all_namespaces = []
+        for ns in namespaces.items:
+            all_namespaces.append(ns.metadata.name)
+
+        if namespace in all_namespaces:
+            self.logger.warning(f"namespace {namespace} exists on {self.name}"
+                                 " and wwill be reused")
+        else:
+            namespace_metadata = client.V1ObjectMeta(name=namespace)
+            client.CoreV1Api().create_namespace(
+                client.V1Namespace(metadata=namespace_metadata))
+
+            self.logger.trace(f"namespace {namespace} is created on {self.name}")
+
+        return namespace
 
 
     # --------------------------------------------------------------------------
@@ -321,7 +378,7 @@ class K8sCluster:
     def wait_for_cluster(self, timeout):
         start_time = time.time()
 
-        while True:
+        while not self.terminate.is_set():
             check_cluster = self.control_plane.run('kubectl get nodes', warn=True,
                                                                         hide=True)
             if not check_cluster.return_code:
@@ -417,7 +474,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks=[], deployment_file=None):
+    def submit(self, ctasks=[], deployment_file=None, custom_resource=False):
         
         """
         This function to coordiante the submission of list of tasks.
@@ -425,6 +482,10 @@ class K8sCluster:
 
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
+
+            deployment_file (str): a path for the deployment file.
+
+            custom_resource (bool): if True then we submit via a commandline
         
         Returns:
             deployment_file (str) : path for the deployment file.
@@ -446,28 +507,24 @@ class K8sCluster:
             deployment_file, pods_names, batches = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} >> {1}'.format(deployment_file,
-                                                            self.sandbox)
-            cmd += '/apply_output.log 2>&1 </dev/null &'
+        if custom_resource:
+            out, err, ret = sh_callout(f'nohup kubectl apply -f {deployment_file}', shell=True)
+            if ret:
+                self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
 
-            out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        else:
+            apply_thread = mt.Thread(daemon=True,
+                                    target=kutills.create_from_yaml,
+                                    kwargs={'yaml_file':deployment_file,
+                                            'k8s_client':client.ApiClient()})
 
-            msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
-                                                            self.name)
-            if not ret:
-                print(msg)
-                self.logger.trace('{0}, deployemnt output is under'
-                                  ' apply_output.log'.format(msg))
-                return deployment_file, pods_names, batches
+            # start the submission as a background thread.
+            apply_thread.start()
 
-            # FIXME: we use nohup, to apply the deployemnt in the 
-            # background, so how can we report error if we fail?
-            else:
-                self.logger.error(err)
-                print('failed to submit pods, please check the logs for more info.')
+        self.logger.trace('deployment {0} is submitted to {1}'.format(deployment_file,
+                                                                      self.name))
 
-        self.collect_profiles()
+        return deployment_file, pods_names, batches
 
 
     # --------------------------------------------------------------------------
@@ -535,10 +592,10 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, task=None):
+    def _watch_pods_statuses(self):
 
         """
-        This function to generate a json with the current containers statuses
+        This function should start as a thread to monitor the status of the tasks
         and collect STOPPED, RUNNING and FAILED containers to report them back
         to the controller manager.
 
@@ -548,37 +605,25 @@ class K8sCluster:
         Returns:
             statuses (list): a list of list for all of the task statuses.
         """
+        w = watch.Watch()
 
-        cmd1 = f'kubectl get pods -l task_label={task.pod_name} -o custom-columns=:.status.phase'
-        cmd2 = f"kubectl get pod -l task_label={task.pod_name} -o jsonpath="'{.items[*].status.containerStatuses}'""
-        try:
-            pod_status, _, _ = sh_callout(cmd1, shell=True, kube=self)
-            pod_status = pod_status.strip()
-            pod_containers, _, _ = sh_callout(cmd2, shell=True, munch=True, kube=self)
-        except SyntaxError:
-            return "Unknown"
+        def _watch():
+            for event in w.stream(client.CoreV1Api().list_namespaced_pod,
+                                  'default', _request_timeout=90000000):
 
-        if pod_status == 'Succeeded':
-            return "Completed"
+                pod = event['object']
+                msg = {'pod_id': pod.metadata.name, 'status': pod.status.phase}
 
-        elif pod_status == 'Running':
-            return "Running"
+                self.result_queue.put(msg)
+                
+                if self.terminate.is_set():
+                    self.logger.trace(f'watcher thread recieved stop event')
+                    break
 
-        elif pod_status == 'Pending':
-            return "Pending"
+        watcher = mt.Thread(target=_watch, daemon=True)
+        watcher.start()
 
-        elif pod_status in PFAILED_STATE:
-            # mostly MCPP mode
-            for container in pod_containers:
-                if container.get('name') == task.name:
-                    status = next(iter(container.get('state').keys()))
-                    if status == 'terminated':
-                        if container['state'][status]['exitCode'] == 0:
-                            return "Completed"
-                        else:
-                            return "Failed"
-        else:
-            return pod_status if pod_status else "Unknown"
+        self.logger.trace(f'watcher thread {watcher.ident} started on {self.name}')
 
     # --------------------------------------------------------------------------
     #
@@ -680,7 +725,7 @@ class K8sCluster:
         ------
         - Operates within an internal loop for periodic collection.
         - Intended for use as a background thread.
-        - Utilizes a stop_event to exit the loop and cease collection.
+        - Utilizes a termination to exit the loop and cease collection.
 
         Example:
         --------
@@ -691,7 +736,7 @@ class K8sCluster:
         # ...execute other tasks...
 
         # When done, signal the thread to stop and wait for it to finish
-        self.stop_event.set()
+        self.terminate.set()
         collector_thread.join()
         """
         ids = 0
@@ -706,15 +751,15 @@ class K8sCluster:
     
             self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
 
-        # Iterate until the stop_event is triggered
-        while not self.stop_event.is_set():
+        # Iterate until the termination is triggered
+        while not self.terminate.is_set():
             for t in range(collect_every, 0, -1):
                 if t == 1:
                     # Save a checkpoint every ~ 55 minutes
                     collect(ids)
 
-                # Exit the loop if stop_event is true
-                if self.stop_event.is_set():
+                # Exit the loop if termination is triggered is true
+                if self.terminate.is_set():
                     break
 
                 else:
@@ -854,7 +899,8 @@ class K8sCluster:
                 return path
             return '\n'.join(logs)
         else:
-            return None
+            self.logger.error(f'No logs were found for {task.name}')
+            return
 
 
     # --------------------------------------------------------------------------
@@ -951,13 +997,16 @@ class K8sCluster:
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
+
+        self.terminate.set()
+
         # nothing to shutdown here besides closing
         # the ssh channels and tunnels
         if self.control_plane:
             self.control_plane.close()
-            if hasattr(self, '_tunnel'):
+            if hasattr(self, 'tunnel'):
                 if not self.control_plane.local:
-                    self._tunnel.stop()
+                    self.tunnel.stop()
 
 
 # --------------------------------------------------------------------------
@@ -1195,7 +1244,7 @@ class AKSCluster(K8sCluster):
     #
     def shutdown(self):
 
-        self.stop_event.set()
+        self.terminate.set()
         self._delete()
 
 
@@ -1441,5 +1490,5 @@ class EKSCluster(K8sCluster):
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
-        self.stop_event.set()
+        self.terminate.set()
         self._delete()

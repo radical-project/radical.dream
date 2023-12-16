@@ -59,7 +59,7 @@ def sh_callout(cmd, stdout=True, stderr=True,
     if kube:
         lbp = None
         if kube.provider == JET2 or kube.provider == CHI:
-            lbp = kube._tunnel.local_bind_port
+            lbp = kube.tunnel.local_bind_port
 
         cmd = inject_kubeconfig(cmd, kube.kube_config,
                                 local_bind_port=lbp)
