@@ -136,7 +136,6 @@ class K8sCluster:
         self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
 
         self.terminate = mt.Event()
-        self.updater_lock = mt.Lock()
         self.watch_profiles = mt.Thread(target=self._profiles_collector)
 
 
@@ -435,6 +434,7 @@ class K8sCluster:
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
+
         deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
                                                             unique_id())
 
@@ -458,6 +458,7 @@ class K8sCluster:
                 self.pod_counter +=1
                 pod = build_pod(batch, str(self.pod_counter).zfill(6))
                 _mcpp.append(pod)
+
             dump_multiple_yamls(_mcpp, deployment_file)
 
         if scpp:
@@ -466,10 +467,10 @@ class K8sCluster:
                 self.pod_counter +=1
                 pod = build_pod([task], str(self.pod_counter).zfill(6))
                 _scpp.append(pod)
+
             dump_multiple_yamls(_scpp, deployment_file)
 
-        # FIXME: why are we returning two empty lists?
-        return deployment_file, [], []
+        return deployment_file
 
 
     # --------------------------------------------------------------------------
@@ -492,8 +493,6 @@ class K8sCluster:
             pods_names      (list): list of generated pods names.
             batches         (list): the actual tasks batches.
         """
-        batches = []
-        pods_names = []
         if not ctasks and not deployment_file:
             self.logger.error('at least deployment or tasks must be specified')
             return None, [], []
@@ -504,19 +503,20 @@ class K8sCluster:
 
         if ctasks:
             self.profiler.prof('generate_pods_start', uid=self.id)
-            deployment_file, pods_names, batches = self.generate_pods(ctasks)
+            deployment_file = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
         if custom_resource:
-            out, err, ret = sh_callout(f'nohup kubectl apply -f {deployment_file}', shell=True)
+            out, err, ret = sh_callout(f'nohup kubectl apply -f {deployment_file}',
+                                       shell=True, kube=self)
             if ret:
                 self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
 
         else:
             apply_thread = mt.Thread(daemon=True,
-                                    target=kutills.create_from_yaml,
-                                    kwargs={'yaml_file':deployment_file,
-                                            'k8s_client':client.ApiClient()})
+                                     target=kutills.create_from_yaml,
+                                     kwargs={'yaml_file':deployment_file,
+                                             'k8s_client':client.ApiClient()})
 
             # start the submission as a background thread.
             apply_thread.start()
@@ -524,7 +524,7 @@ class K8sCluster:
         self.logger.trace('deployment {0} is submitted to {1}'.format(deployment_file,
                                                                       self.name))
 
-        return deployment_file, pods_names, batches
+        return deployment_file
 
 
     # --------------------------------------------------------------------------
@@ -605,19 +605,29 @@ class K8sCluster:
         Returns:
             statuses (list): a list of list for all of the task statuses.
         """
-        w = watch.Watch()
 
         def _watch():
+
+            w = watch.Watch()
+
             for event in w.stream(client.CoreV1Api().list_namespaced_pod,
                                   'default', _request_timeout=90000000):
 
                 pod = event['object']
-                msg = {'pod_id': pod.metadata.name, 'status': pod.status.phase}
 
-                self.result_queue.put(msg)
-                
+                if pod.status.phase in ['Pending', 'Running', 'Succeeded', 'Failed']:
+
+                    # get the pod containers names
+                    containers = [c.name for c in pod.spec.containers if c.name.startswith('ctask')]
+                    msg = {'pod_id': pod.metadata.name,
+                           'status': pod.status.phase,
+                           'containers': containers}
+
+                    self.result_queue.put(msg)
+
                 if self.terminate.is_set():
                     self.logger.trace(f'watcher thread recieved stop event')
+                    w.stop()
                     break
 
         watcher = mt.Thread(target=_watch, daemon=True)
@@ -858,6 +868,7 @@ class K8sCluster:
                     else:
                         self.logger.error(f'no related container(s) found for pod {pod_name}')
                         return
+
                 # if no containers found in the pod then just use the pod name
                 elif not ret and not out:
                     cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
@@ -868,6 +879,7 @@ class K8sCluster:
                     else:
                         self.logger.error(f'failed to get {pod_name} logs: {err}')
                         return
+
                 # we have an error and we failed
                 else:
                     self.logger.error(f'failed to get {pod_name} logs: {err}')

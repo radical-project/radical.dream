@@ -153,7 +153,9 @@ class Remote:
             ssh_private_key=self.key,
             remote_bind_address=(local_host, int(local_port)),
             local_bind_address=(local_host, open_port),)
-
+    
+        server.daemon_forward_servers = True
+        server.daemon_transport = True
         server.start()
 
         self.logger.trace('ssh tunnel is created for {0} on {1}:{2}'.format(self.ip,

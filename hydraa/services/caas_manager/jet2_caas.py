@@ -52,10 +52,11 @@ class Jet2Caas():
         self.vms = VMS
         self.run_id = '{0}.{1}'.format(self.launch_type, str(uuid.uuid4()))
 
-        self._tasks_book  = OrderedDict()
+        self._pods_book = dict()
+        self._tasks_book = OrderedDict()
 
-        self._run_cost    = 0
-        self.runs_tree    = OrderedDict()
+        self._run_cost = 0
+        self.runs_tree = OrderedDict()
 
         # wait or do not wait for the tasks to finish 
         self.asynchronous = asynchronous
@@ -120,8 +121,8 @@ class Jet2Caas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 1000000
-        max_bulk_time = 0.5 # seconds
+        max_bulk_size = 1024
+        max_bulk_time = 1   # seconds
         min_bulk_time = 0.1 # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
@@ -408,7 +409,7 @@ class Jet2Caas():
             ctask.provider    = JET2
             ctask.launch_type = self.launch_type
 
-            self._tasks_book[str(ctask.id)] = ctask
+            self._tasks_book[ctask.name] = ctask
             self._task_id +=1
 
         # submit to Kubernets cluster
@@ -432,21 +433,22 @@ class Jet2Caas():
             try:
                 # pull a message from the cluster queue
                 if not self.cluster.result_queue.empty():
-                    _msg = self.cluster.result_queue.get(block=True, timeout=0.1)
+                    _msg = self.cluster.result_queue.get(block=True,
+                                                         timeout=1.0)
 
                     if _msg:
                         pod_id = _msg.get('pod_id')
                         status = _msg.get('status')
-
-                        # filter out the tasks that are not related to this pod and not in finshed list
-                        tasks = self.get_tasks()
-                        with self._task_lock:
-                            linked_tasks = [task for task in tasks if task.pod_name == pod_id and task.name not in finshed]
+                        tasks_names = _msg.get('containers')
 
                     else:
                         continue
 
-                    for task in linked_tasks:
+                    for name in tasks_names:
+                        task = self._tasks_book.get(name)
+
+                        if task.name in finshed:
+                            continue
 
                         if not status:
                             continue
@@ -489,6 +491,7 @@ class Jet2Caas():
                         else:
                             self.logger.info(f'task {task.name} is in {status} state')
 
+                        # preserve the task state for future use
                         task.state = status
 
                     msg = f'[failed: {failed}, done {done}, running {running}]'
@@ -501,6 +504,7 @@ class Jet2Caas():
                             self.outgoing_q.put(termination_msg)
 
             except queue.Empty:
+                time.sleep(0.5)  # Adjust the sleep duration as needed
                 continue
 
 
@@ -544,7 +548,7 @@ class Jet2Caas():
         self.servers = None
         self.client = None
 
-        self.logger.trace('done')
+        self.logger.trace('internal cleanup is done')
 
 
     # --------------------------------------------------------------------------
