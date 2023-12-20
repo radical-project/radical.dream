@@ -17,7 +17,6 @@ from typing import Tuple
 from kubernetes import watch
 from kubernetes import client
 from kubernetes import config
-from kubernetes import utils as kutills
 
 from ..utils.misc import is_root
 from ..utils.misc import build_pod
@@ -96,9 +95,6 @@ class K8sCluster:
     
     2- Schedule and partion containers into pods based on
        the cluster size.
-    
-    3- Moniter and collect tasks/containers/pods results and 
-       performance metrics.
     """
 
     def __init__(self, run_id, vms, sandbox, log):
@@ -136,7 +132,6 @@ class K8sCluster:
         self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
 
         self.terminate = mt.Event()
-        self.watch_profiles = mt.Thread(target=self._profiles_collector)
 
 
     # --------------------------------------------------------------------------
@@ -429,8 +424,6 @@ class K8sCluster:
         
         Returns:
             deployment_file (str) : path for the deployment file.
-            pods_names      (list): list of generated pods names.
-            batches         (list): the actual tasks batches.
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
@@ -446,6 +439,9 @@ class K8sCluster:
             # Multiple Containers Per Pod (MCPP).
             elif any([c in [ctask.type] for c in CONTAINER]):
                 mcpp.append(ctask)
+
+            else:
+                raise Exception(f'Unknow task of type: {ctask.type}')
 
         if mcpp:
             _mcpp = []
@@ -475,7 +471,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks=[], deployment_file=None, custom_resource=False):
+    def submit(self, ctasks=[], deployment_file=None):
         
         """
         This function to coordiante the submission of list of tasks.
@@ -490,8 +486,6 @@ class K8sCluster:
         
         Returns:
             deployment_file (str) : path for the deployment file.
-            pods_names      (list): list of generated pods names.
-            batches         (list): the actual tasks batches.
         """
         if not ctasks and not deployment_file:
             self.logger.error('at least deployment or tasks must be specified')
@@ -506,25 +500,25 @@ class K8sCluster:
             deployment_file = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if custom_resource:
-            out, err, ret = sh_callout(f'nohup kubectl apply -f {deployment_file}',
-                                       shell=True, kube=self)
+        if os.path.exists(deployment_file):
+            cmd = f'nohup kubectl apply -f {deployment_file} >> {self.sandbox}'
+            cmd += '/apply_output.log 2>&1 </dev/null &'
+
+            out, err, ret = sh_callout(cmd, shell=True, kube=self)
+
             if ret:
                 self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
 
+            # FIXME: this should be a message to the controller manager
+            else:
+                fname = deployment_file.split('/')[-1]
+                print('deployment {0} is submitted to {1}'.format(fname, self.name))
+
+            return deployment_file
+
         else:
-            apply_thread = mt.Thread(daemon=True,
-                                     target=kutills.create_from_yaml,
-                                     kwargs={'yaml_file':deployment_file,
-                                             'k8s_client':client.ApiClient()})
-
-            # start the submission as a background thread.
-            apply_thread.start()
-
-        self.logger.trace('deployment {0} is submitted to {1}'.format(deployment_file,
-                                                                      self.name))
-
-        return deployment_file
+            raise FileExistsError(f'failed to find {deployment_file}')
+            return None
 
 
     # --------------------------------------------------------------------------
@@ -605,179 +599,66 @@ class K8sCluster:
         Returns:
             statuses (list): a list of list for all of the task statuses.
         """
+        w = watch.Watch()
 
         def _watch():
-
-            w = watch.Watch()
 
             for event in w.stream(client.CoreV1Api().list_namespaced_pod,
                                   'default', _request_timeout=90000000):
 
                 pod = event['object']
 
-                if pod.status.phase in ['Pending', 'Running', 'Succeeded', 'Failed']:
+                if pod and pod.status.phase in ['Pending', 'Running', 'Succeeded', 'Failed']:
 
                     # get the pod containers names
-                    containers = [c.name for c in pod.spec.containers if c.name.startswith('ctask')]
-                    msg = {'pod_id': pod.metadata.name,
-                           'status': pod.status.phase,
-                           'containers': containers}
+                    containers = []
 
-                    self.result_queue.put(msg)
+                    if not pod.status.container_statuses:
+                        continue
+
+                    for cont in pod.status.container_statuses:
+                        msg = {}
+
+                        if not cont.name.startswith('ctask'):
+                            continue
+
+                        if cont.state.terminated:
+                            if cont.state.terminated.exit_code:
+                                msg = {'id': cont.name,
+                                       'status': 'Failed',
+                                       'exception': cont.state.terminated.reason}
+                            else:
+                                msg = {'id': cont.name,
+                                       'status': 'Completed'}
+
+                        elif cont.state.waiting:
+                            msg = {'id': cont.name,
+                                   'status': 'Pending',
+                                   'exception': cont.state.waiting.reason}
+
+                        elif cont.state.running:
+                            msg = {'id': cont.name,
+                                   'status': 'Running'}
+                        else:
+                            msg = {'id': cont.name,
+                                   'status': cont.status.phase}
+
+                        if msg:
+                            containers.append(msg)
+
+                    if containers:
+                        self.result_queue.put({'pod_id':pod.metadata.name,
+                                               'pod_status': pod.status.phase,
+                                               'containers': containers})
 
                 if self.terminate.is_set():
                     self.logger.trace(f'watcher thread recieved stop event')
                     w.stop()
-                    break
 
         watcher = mt.Thread(target=_watch, daemon=True)
         watcher.start()
 
         self.logger.trace(f'watcher thread {watcher.ident} started on {self.name}')
-
-    # --------------------------------------------------------------------------
-    #
-    def collect_profiles(self):
-
-        if not self.watch_profiles.is_alive():
-            self.watch_profiles.daemon = True
-            self.watch_profiles.start()
-
-            self.logger.trace(f'profilies collection started on {self.name}')
-
-
-    # --------------------------------------------------------------------------
-    #
-    def get_pod_status(self):
-
-        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
-        response = None
-
-        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
-
-        if response:
-            df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
-            # iterate on pods
-            i = 0
-            for pod in response['items']:
-                # get the status of each pod
-                phase = pod['status']['phase']
-
-                # iterate on containers
-                for container in pod['status']['containerStatuses']:
-                    c_name = container.get('name')
-                    for k, v in  container['state'].items():
-                        state = container.get('state', None)
-                        if state:
-                            for kk, vv in container['state'].items():
-                                start_time = convert_time(v.get('startedAt', 0.0))
-                                stop_time  = convert_time(v.get('finishedAt', 0.0))
-                                df.loc[i] = (c_name, (kk, v.get('reason', None)), start_time, stop_time)
-                                i +=1
-
-                        else:
-                            self.logger.trace('Pods did not finish yet or failed')
-
-            return df
-
-
-    # --------------------------------------------------------------------------
-    #
-    def get_pod_events(self):
-        
-        cmd = 'kubectl get events -A -o json' 
-
-        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
-
-        df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
-        if response:
-            id = 0
-            for it in response['items']:
-                field = it['involvedObject'].get('fieldPath', None)
-                if field:
-                    if 'spec.containers' in field:
-                        if 'ctask' in field:
-                            cid        = field.split('}')[0].split('{')[1]
-                            reason     = it.get('reason', None)
-                            reason_fts = convert_time(it.get('firstTimestamp', 0.0))
-                            reason_lts = convert_time(it.get('lastTimestamp', 0.0))
-                            df.loc[id] = (cid, reason, reason_fts, reason_lts)
-                            id +=1
-
-        return df
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _profiles_collector(self, collect_every=3300):
-        """
-        Background Thread for Profiles Collection
-
-        This method should be started as a background thread.
-
-        AKS/EKS clusters do not permit modifying ttl-events, causing profiles
-        to be deleted from the cluster after > 1 hour, potentially replaced
-        by new ones (unless Azure/AWS monitoring is enabled, which incurs cost).
-
-        This function saves profile checkpoints as dataframes approximately
-        every 55 minutes, merging them at execution end.
-        https://github.com/Azure/AKS/issues/2140
-
-        Parameters:
-        ----------
-        None
-
-        Returns:
-        -------
-        None
-
-        Notes:
-        ------
-        - Operates within an internal loop for periodic collection.
-        - Intended for use as a background thread.
-        - Utilizes a termination to exit the loop and cease collection.
-
-        Example:
-        --------
-        # Assuming `self` is an instance of the class
-        collector_thread = threading.Thread(target=self._profiles_collector)
-        collector_thread.start()
-
-        # ...execute other tasks...
-
-        # When done, signal the thread to stop and wait for it to finish
-        self.terminate.set()
-        collector_thread.join()
-        """
-        ids = 0
-
-        def collect(ids):
-            fname = self.sandbox + '/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
-            
-            df1 = self.get_pod_status()
-            df2 = self.get_pod_events()
-            df = (pd.merge(df1, df2, on='Task_ID'))
-            df.to_csv(fname)
-    
-            self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
-
-        # Iterate until the termination is triggered
-        while not self.terminate.is_set():
-            for t in range(collect_every, 0, -1):
-                if t == 1:
-                    # Save a checkpoint every ~ 55 minutes
-                    collect(ids)
-
-                # Exit the loop if termination is triggered is true
-                if self.terminate.is_set():
-                    break
-
-                else:
-                    time.sleep(SLEEP)
-
-            ids +=1
-        # Save a checkpoint if the thread exits
-        collect(ids)
 
 
     # --------------------------------------------------------------------------

@@ -312,7 +312,7 @@ class KubeflowMPILauncher(Kubeflow):
         dump_multiple_yamls(kf_jobs, file_path)
         self.cluster.profiler.prof('create_kf_job_stop', uid='kf_mpijob')
 
-        self.cluster.submit(deployment_file=file_path, custom_resource=True)
+        self.cluster.submit(deployment_file=file_path)
 
     # --------------------------------------------------------------------------
     #

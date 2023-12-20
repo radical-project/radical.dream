@@ -201,7 +201,7 @@ class Workflow:
         file_path = f'{self.cluster.sandbox}/{self.wf_type.lower()}-workflow.yaml'
         dump_multiple_yamls(self.workflows, file_path, sort_keys=False)
 
-        self.cluster.submit(deployment_file=file_path, custom_resource=True)
+        self.cluster.submit(deployment_file=file_path)
         self.workflows.clear()
 
 

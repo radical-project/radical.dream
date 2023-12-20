@@ -100,6 +100,9 @@ class CaasManager:
         self.sandbox = misc.create_sandbox(_id)
         self.log = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
+        providers = len(self._proxy.loaded_providers)
+        print(f'session sandbox is created: {self.sandbox} with [{providers}] providers')
+
         for provider in self._proxy.loaded_providers:
             if provider in PROVIDER_TO_CLASS:
                 cred = self._proxy._load_credentials(provider)

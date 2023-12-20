@@ -434,18 +434,23 @@ class Jet2Caas():
                 # pull a message from the cluster queue
                 if not self.cluster.result_queue.empty():
                     _msg = self.cluster.result_queue.get(block=True,
-                                                         timeout=1.0)
+                                                         timeout=1)
 
                     if _msg:
-                        pod_id = _msg.get('pod_id')
-                        status = _msg.get('status')
-                        tasks_names = _msg.get('containers')
+                        parent_pod = _msg.get('pod_id')
+                        containers = _msg.get('containers')
 
                     else:
                         continue
 
-                    for name in tasks_names:
-                        task = self._tasks_book.get(name)
+                    for cont in containers:
+
+                        tid = cont.get('id')
+                        status = cont.get('status')
+                        task = self._tasks_book.get(tid)
+
+                        if not task:
+                            raise RuntimeError(f'task {cont.name} does not exist, existing')
 
                         if task.name in finshed:
                             continue
@@ -453,7 +458,7 @@ class Jet2Caas():
                         if not status:
                             continue
 
-                        if status == 'Succeeded':
+                        if status == 'Completed':
                             if task.running():
                                 running -= 1
                             task.set_result('Finished successfully')
@@ -467,34 +472,22 @@ class Jet2Caas():
                             else:
                                 continue
 
-                        # sometimes tasks requires sometime to reach running
-                        # state like MPI when the worker is reported to be "failed"
-                        # then running this approach should update task state after
-                        # failer for now.
                         elif status == 'Failed':
-                            # default number of tries is 5
-                            # after that declare the task as failed
                             if task.tries:
                                 task.tries -= 1
                                 task.reset_state()
                             else:
                                 if task.running():
                                     running -= 1
-                                task.set_exception(Exception('Failed due to container error,'
-                                                             ' check the logs'))
+                                exception = cont.get('exception')
+                                task.set_exception(Exception(exception))
                                 finshed.append(task.name)
                                 failed += 1
-
-                        elif status == 'Pending':
-                            pass
-
-                        else:
-                            self.logger.info(f'task {task.name} is in {status} state')
 
                         # preserve the task state for future use
                         task.state = status
 
-                    msg = f'[failed: {failed}, done {done}, running {running}]'
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                     self.outgoing_q.put(msg)
 
@@ -504,7 +497,7 @@ class Jet2Caas():
                             self.outgoing_q.put(termination_msg)
 
             except queue.Empty:
-                time.sleep(0.5)  # Adjust the sleep duration as needed
+                time.sleep(0.1)
                 continue
 
 
