@@ -16,11 +16,11 @@ for i in range(10):
     task.vcpus  = 1
     task.ecs_launch_type = 'FARGATE'
     task.provider = AWS
-    task.ecs_kwargs = {'subnet': 'subnet-0447d4ea0172668d1',
-                       'executionRoleArn': 'arn:aws:iam::626113121967:role/ecsTaskExecutionRole'}
+    task.ecs_kwargs = {'subnet': 'subnet-your-subnet-id',
+                       'executionRoleArn': 'arn:aws:iam::xxxxxx:role/ecsTaskExecutionRole'}
 
     task.image  = "screwdrivercd/noop-container"
-    task.cmd    = ['/bin/echo', 'I AM A BARBY GIRL']
+    task.cmd    = ['/bin/echo', 'hello fargate ecs task']
     tasks.append(task)
     
 caas_mgr.submit(tasks)
