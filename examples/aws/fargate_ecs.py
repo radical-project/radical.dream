@@ -6,7 +6,10 @@ from hydraa import AWS
 provider_mgr = providers.proxy([AWS])
 
 
-vms = [vm.AwsVM(launch_type='FARGATE')]
+fargate_vm = [vm.AwsVM(launch_type='FARGATE')]
+caas_mgr = services.manager.CaasManager(provider_mgr,
+                                        fargate_vm,
+                                        asynchronous=False)
 
 # submit 10 tasks for each vm
 tasks = []
@@ -24,3 +27,7 @@ for i in range(10):
     tasks.append(task)
     
 caas_mgr.submit(tasks)
+
+# wait for all tasks
+all(t.result() for t in tasks)
+

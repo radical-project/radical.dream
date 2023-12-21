@@ -4,25 +4,28 @@ from hydraa import AWS, providers, services
 
 provider_mgr = providers.proxy([AWS])
 
-vm = vm.AwsVM(launch_type='EC2', instance_id='t2.micro', min_count=1, max_count=1,
-              image_id='ami-your-ami-id', SubnetId='subnet-you-subnet-id',
-              IamInstanceProfile={'Arn': 'arn:aws:iam::xxxxx:instance-profile/ecsInstanceRole'})
+ec2vm = vm.AwsVM(launch_type='EC2', instance_id='t2.micro', min_count=1, max_count=1,
+                 image_id='ami-your-image-id', SubnetId='subnet-you-subnet-id',
+                 IamInstanceProfile={'Arn': 'arn:aws:iam::XXXXXXXX:instance-profile/ecsInstanceRole'})
 
-caas_mgr = services.manager.CaasManager(provider_mgr, [vm], asynchronous=False, auto_terminate=False)
+caas_mgr = services.manager.CaasManager(provider_mgr, [ec2vm],
+                                        asynchronous=False)
 
 tasks = []
-for i in range(1024):
+for i in range(10):
     task = Task()
     task.memory = 7
     task.vcpus  = 1
     task.provider = AWS
     task.ecs_launch_type = 'EC2'
-    task.ecs_kwargs = {'executionRoleArn': 'arn:aws:iam::xxxxxx:role/ecsTaskExecutionRole'}
+    task.ecs_kwargs = {'executionRoleArn': 'arn:aws:iam::XXXXXXX:role/ecsTaskExecutionRole'}
     task.image  = "screwdrivercd/noop-container"
-    task.cmd    = ['/bin/echo', 'hello world ec2 task']
+    task.cmd    = ['python3', '-c', 'import math\nprint(math.sin(10))']
     
     tasks.append(task)
 
 
 caas_mgr.submit(tasks)
-all(t.result() for t in tasks)
+results = [t.result() for t in tasks]
+
+print(resuls)
