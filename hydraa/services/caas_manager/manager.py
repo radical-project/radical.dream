@@ -235,7 +235,7 @@ class CaasManager:
             manager['in_q'].put(task)
             tasks_counter += 1
 
-        print(f'{tasks_counter} tasks is submitted')
+        print(f'{tasks_counter} tasks are submitted')
 
 
     # --------------------------------------------------------------------------

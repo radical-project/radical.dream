@@ -77,8 +77,9 @@ class ChiCaas:
         self.logger   = log
         self.profiler = prof(name=__name__, path=self.sandbox)
 
-        self.incoming_q = queue.Queue()
-        self.outgoing_q = queue.Queue()
+        self.incoming_q = queue.Queue() # caas manager -> main manager
+        self.outgoing_q = queue.Queue() # main manager -> caas manager
+        self.internal_q = queue.Queue() # caas manager -> caas manager
 
         self._task_lock = threading.Lock()
         self._terminate = threading.Event()
@@ -144,9 +145,9 @@ class ChiCaas:
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 1000000
-        max_bulk_time = 2        # seconds
-        min_bulk_time = 0.1      # seconds
+        max_bulk_size = os.environ.get('MAX_BULK_SIZE', 1024) # tasks
+        max_bulk_time = os.environ.get('MAX_BULK_TIME', 2)    # seconds
+        min_bulk_time = os.environ.get('MAX_BULK_TIME', 0.1)  # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='ChiCaaSWatcher')
@@ -172,7 +173,8 @@ class ChiCaas:
                         break
 
             if bulk:
-                self.submit(bulk)
+                with self._task_lock:
+                    self.submit(bulk)
 
             bulk = list()
 
@@ -483,25 +485,15 @@ class ChiCaas:
             ctask.provider    = CHI
             ctask.launch_type = self.launch_type
 
-            self._tasks_book[str(ctask.id)] = ctask
+            self._tasks_book[str(ctask.name)] = ctask
             self._task_id +=1
 
         # submit to kubernets cluster
-        depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
-        
-        # create entry for the pod in the pods book
-        for idx, pod_name in enumerate(pods_names):
-            self._pods_book[pod_name] = OrderedDict()
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batches[idx]
-            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
-            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        
-        self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks))) 
+        self.cluster.submit(ctasks)
+
+        self.logger.trace('batch of [{0}] tasks is submitted'.format(len(ctasks))) 
 
         self.profiler.prof('submit_batch_stop', uid=self.run_id)
-
-        #self.profiles()
 
 
     # --------------------------------------------------------------------------
@@ -512,66 +504,83 @@ class ChiCaas:
         finshed = []
         failed, done, running = 0, 0, 0
 
+        queue = self.cluster.result_queue
+
         while not self._terminate.is_set():
 
-            with self._task_lock:
-                _tasks = self.get_tasks()
-                tasks = copy.copy(_tasks)
+            try:
+                # pull a message from the cluster queue
+                if not queue.empty():
+                    _msg = queue.get(block=True, timeout=1)
 
-            for task in tasks:
-                # if task is already marked as done or failed then skip it
-                if task.name in finshed:
-                    continue
+                    if _msg:
+                        parent_pod = _msg.get('pod_id')
+                        containers = _msg.get('containers')
 
-                status = self.cluster._get_task_statuses(task)
-                if not status:
-                    continue
-
-                if status == 'Completed':
-                    if task.running():
-                        running -= 1
-                    task.set_result('Finished successfully')
-                    finshed.append(task.name)
-                    done += 1
-
-                elif status == 'Running':
-                    if not task.running():
-                        task.set_running_or_notify_cancel()
-                        running += 1
                     else:
                         continue
 
-                # sometimes tasks requires sometime to reach running
-                # state like MPI when the worker is reported to be "failed"
-                # then running this approach should update task state after
-                # failer for now.
-                elif status == 'Failed':
-                    # default number of tries is 3 * 5s = 15s
-                    # after that declare the task as failed
-                    if task.tries:
-                        task.tries -= 1
-                        task.reset_state()
-                    else:
-                        if task.running():
-                            running -= 1
-                        task.set_exception(Exception('Failed due to container error, check the logs'))
-                        finshed.append(task.name)
-                        failed += 1
+                    for cont in containers:
 
-                else:
-                    self.logger.info(f'task {task.name} is in {status} state')
+                        tid = cont.get('id')
+                        status = cont.get('status')
+                        task = self._tasks_book.get(tid)
 
-                task.state = status
-                msg = f'[failed: {failed}, done {done}, running {running}]'
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
-                self.outgoing_q.put(msg)
+                        if not task:
+                            raise RuntimeError(f'task {cont.name} does not exist, existing')
 
-                if len(finshed) == len(self._tasks_book):
-                    if self.auto_terminate:
-                        msg = (0, CHI)
-                        self.outgoing_q.put(msg)
+                        if task.name in finshed:
+                            continue
 
-            time.sleep(5)
+                        if not status:
+                            continue
+
+                        if status == 'Completed':
+                            if task.running():
+                                running -= 1
+                            task.set_result('Finished successfully')
+                            finshed.append(task.name)
+                            done += 1
+
+                        elif status == 'Running':
+                            if not task.running():
+                                task.set_running_or_notify_cancel()
+                                running += 1
+                            else:
+                                continue
+
+                        elif status == 'Failed':
+                            if task.tries:
+                                task.tries -= 1
+                                task.reset_state()
+                            else:
+                                if task.running():
+                                    running -= 1
+                                exception = cont.get('exception')
+                                task.set_exception(Exception(exception))
+                                finshed.append(task.name)
+                                failed += 1
+
+                        elif status == 'Pending':
+                            reason = cont.get('reason')
+                            message = cont.get('message')
+                            msg += f': reason: {reason}, message: {message}'
+
+                        # preserve the task state for future use
+                        task.state = status
+
+                    self.outgoing_q.put(msg)
+
+                    if len(finshed) == len(self._tasks_book):
+                        if self.auto_terminate:
+                            termination_msg = (0, JET2)
+                            self.outgoing_q.put(termination_msg)
+
+            except queue.Empty:
+                time.sleep(0.1)
+                continue
 
 
     # --------------------------------------------------------------------------
@@ -618,7 +627,7 @@ class ChiCaas:
         self.servers  = None
 
         self._pods_book.clear()
-        self.logger.trace('done')
+        self.logger.trace('internal cleanup is done')
 
     # --------------------------------------------------------------------------
     #
@@ -630,6 +639,9 @@ class ChiCaas:
         self.logger.trace("termination started")
 
         self._terminate.set()
+
+        if self.cluster:
+            self.cluster.shutdown()
 
         if self.keypair:
             self.logger.trace('deleting ssh keys')
@@ -650,8 +662,5 @@ class ChiCaas:
                 lease.delete(self.lease['id'])
             else:
                 pass
-
-        if self.cluster:
-            self.cluster.shutdown()
 
         self.__cleanup()

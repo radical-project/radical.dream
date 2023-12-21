@@ -178,10 +178,12 @@ class AzureCaas:
                         break
 
             if bulk:
-                if self.launch_type in AKS:
-                    self.submit_to_aks(bulk)
-                else:
-                    self.submit(bulk)
+                with self._task_lock:
+                    if self.launch_type in AKS:
+                        self.submit_to_aks(bulk)
+                    else:
+                        self.submit(bulk)
+
                 bulk = list()
 
 

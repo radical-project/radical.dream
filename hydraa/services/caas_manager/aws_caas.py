@@ -197,11 +197,12 @@ class AwsCaas:
                         break
 
             if bulk:
-                if self.launch_type in EKS:
-                    self.submit_to_eks(bulk)
+                with self._task_lock:
+                    if self.launch_type in EKS:
+                        self.submit_to_eks(bulk)
 
-                else:
-                    self.submit(bulk, self.ecs)
+                    else:
+                        self.submit(bulk, self.ecs)
 
                 bulk = list()
 
