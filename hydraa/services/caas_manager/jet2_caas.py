@@ -121,9 +121,10 @@ class Jet2Caas():
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 1024
-        max_bulk_time = 1   # seconds
-        min_bulk_time = 0.1 # seconds
+
+        max_bulk_size = os.environ.get('MAX_BULK_SIZE', 1024) # tasks
+        max_bulk_time = os.environ.get('MAX_BULK_TIME', 2)    # seconds
+        min_bulk_time = os.environ.get('MAX_BULK_TIME', 0.1)  # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='Jet2CaaSWatcher')

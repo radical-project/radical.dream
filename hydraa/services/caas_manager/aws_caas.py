@@ -138,12 +138,10 @@ class AwsCaas:
             self.create_ecs_service()
 
         if self.launch_type in FARGATE:
-            self.logger.trace('Fargate VM type')
             self.ecs = self.create_cluster()
             self._wait_clusters(self.ecs)
 
         if self.launch_type in EC2:
-            self.logger.trace('EC2 VM type')
             self.ecs = self.create_cluster()
             self._wait_clusters(self.ecs)
             for vm in self.vms:
@@ -172,9 +170,9 @@ class AwsCaas:
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 1000000
-        max_bulk_time = 2        # seconds
-        min_bulk_time = 0.1      # seconds
+        max_bulk_size = os.environ.get('MAX_BULK_SIZE', 1024) # tasks
+        max_bulk_time = os.environ.get('MAX_BULK_TIME', 2)    # seconds
+        min_bulk_time = os.environ.get('MAX_BULK_TIME', 0.1)  # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='AwSCaaSWatcher')	
@@ -619,15 +617,6 @@ class AwsCaas:
         # submit to kubernets cluster
         depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
 
-        # create entry for the pod in the pods book
-        '''
-        for idx, pod_name in enumerate(pods_names):
-            self._pods_book[pod_name] = OrderedDict()
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batches[idx]
-            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
-            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        '''
         self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks)))
 
         self.profiler.prof('submit_batch_stop', uid=self.run_id)  
@@ -828,9 +817,10 @@ class AwsCaas:
 
             while not self._terminate.is_set():
                 msgs = []
-                tasks = self.get_tasks()
+                with self._task_lock:
+                    tasks = self.get_tasks()
 
-                # make we have tasks in the task book and they have ARNs 
+                # make sure all tasks have ARNs and registered
                 if tasks and all(t.arn for t in tasks):
                     tasks_chunks = self._describe_tasks(tasks, cluster)
                 else:
@@ -866,7 +856,7 @@ class AwsCaas:
                                            'status': 'Running'}
                                 else:
                                     msg = {'id': cont.get('name'),
-                                           'status': 'Unknown'}
+                                           'status': cont['lastStatus']}
 
                                 if msg:
                                     msgs.append(msg)
