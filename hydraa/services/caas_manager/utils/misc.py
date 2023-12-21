@@ -134,13 +134,6 @@ def logger(path, levelName='TRACE', levelNum=logging.DEBUG - 5, methodName=None)
     if not methodName:
         methodName = levelName.lower()
 
-    if hasattr(logging, levelName):
-       raise AttributeError('{} already defined in logging module'.format(levelName))
-    if hasattr(logging, methodName):
-       raise AttributeError('{} already defined in logging module'.format(methodName))
-    if hasattr(logging.getLoggerClass(), methodName):
-       raise AttributeError('{} already defined in logger class'.format(methodName))
-
     # This method was inspired by the answers to Stack Overflow post
     # http://stackoverflow.com/q/2183233/2988730, especially
     # http://stackoverflow.com/a/13638084/2988730

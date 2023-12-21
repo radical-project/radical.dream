@@ -24,7 +24,8 @@ class AwsVM:
 
         if self.LaunchType in LTYPE[2:]:
             ec2_eks_required = ['image_id', 'min_count', 'max_count', 'instance_id']
-            if not any(image_id or min_count or max_count or instance_id):
+
+            if not all([image_id, min_count, max_count, instance_id]):
                 raise ValueError(f'EC2/EKS VM requires {ec2_eks_required} values to be set')
 
         self.ImageId = image_id
