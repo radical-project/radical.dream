@@ -2,9 +2,6 @@ from hydraa.cloud_vm import vm
 from hydraa.cloud_task.task import Task
 from hydraa import providers, services, JET2
 
-from hydraa.services.caas_manager.kubernetes.integrations.kubeflow import KubeflowMPILauncher
-
-
 # before running this example, make sure you have a valid jetstream2 credential
 provider_mgr = providers.proxy([JET2])
 

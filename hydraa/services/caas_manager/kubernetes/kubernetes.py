@@ -472,7 +472,7 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks=[], deployment_file=None):
+    def submit(self, ctasks: list=[], deployment_file: str=None) -> str:
         
         """
         This function to coordiante the submission of list of tasks.
@@ -482,9 +482,7 @@ class K8sCluster:
             ctasks (list): a batch of tasks (HYDRAA.Task)
 
             deployment_file (str): a path for the deployment file.
-
-            custom_resource (bool): if True then we submit via a commandline
-        
+ 
         Returns:
             deployment_file (str) : path for the deployment file.
         """

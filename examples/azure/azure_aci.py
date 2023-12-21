@@ -19,5 +19,5 @@ for i in range(10):
     task.image  = "screwdrivercd/noop-container"
     task.cmd    = ['/bin/echo', 'I AM A BARBY GIRL']
     tasks.append(task)
-    
+
 caas_mgr.submit(tasks)

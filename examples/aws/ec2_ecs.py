@@ -1,4 +1,4 @@
-from hydraa.cloud_vm import vm 
+from hydraa.cloud_vm import vm
 from hydraa.cloud_task.task import Task
 from hydraa import AWS, providers, services
 
@@ -21,11 +21,11 @@ for i in range(10):
     task.ecs_kwargs = {'executionRoleArn': 'arn:aws:iam::XXXXXXX:role/ecsTaskExecutionRole'}
     task.image  = "screwdrivercd/noop-container"
     task.cmd    = ['python3', '-c', 'import math\nprint(math.sin(10))']
-    
+
     tasks.append(task)
 
 
 caas_mgr.submit(tasks)
 results = [t.result() for t in tasks]
 
-print(resuls)
+print(results)

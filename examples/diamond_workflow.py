@@ -1,5 +1,5 @@
 # The following workflow executes a diamond workflow via Hydraa API on AWS EKS cluster
-# 
+#
 #   A
 #  / \
 # B   C

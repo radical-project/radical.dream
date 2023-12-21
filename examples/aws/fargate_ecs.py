@@ -25,9 +25,8 @@ for i in range(10):
     task.image  = "screwdrivercd/noop-container"
     task.cmd    = ['/bin/echo', 'hello fargate ecs task']
     tasks.append(task)
-    
+
 caas_mgr.submit(tasks)
 
 # wait for all tasks
 all(t.result() for t in tasks)
-
