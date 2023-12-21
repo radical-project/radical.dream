@@ -428,13 +428,14 @@ class Jet2Caas():
         finshed = []
         failed, done, running = 0, 0, 0
 
+        queue = self.cluster.result_queue
+
         while not self._terminate.is_set():
 
             try:
                 # pull a message from the cluster queue
-                if not self.cluster.result_queue.empty():
-                    _msg = self.cluster.result_queue.get(block=True,
-                                                         timeout=1)
+                if not queue.empty():
+                    _msg = queue.get(block=True, timeout=1)
 
                     if _msg:
                         parent_pod = _msg.get('pod_id')
@@ -448,6 +449,8 @@ class Jet2Caas():
                         tid = cont.get('id')
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
+
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if not task:
                             raise RuntimeError(f'task {cont.name} does not exist, existing')
@@ -484,10 +487,13 @@ class Jet2Caas():
                                 finshed.append(task.name)
                                 failed += 1
 
+                        elif status == 'Pending':
+                            reason = cont.get('reason')
+                            message = cont.get('message')
+                            msg += f': reason: {reason}, message: {message}'
+
                         # preserve the task state for future use
                         task.state = status
-
-                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                     self.outgoing_q.put(msg)
 
@@ -555,6 +561,9 @@ class Jet2Caas():
 
         self._terminate.set()
 
+        if self.cluster:
+            self.cluster.shutdown()
+
         if self.keypair:
             self.logger.trace('deleting ssh keys')
             if self.keypair.id:
@@ -567,8 +576,5 @@ class Jet2Caas():
             self.logger.trace('server {0} is deleted'.format(server.name))
             self.client.delete_floating_ip(server.access_ipv4)
             self.logger.trace('floating ip [{0}] is deleted'.format(server.access_ipv4))
-
-        if self.cluster:
-            self.cluster.shutdown()
 
         self.__cleanup()

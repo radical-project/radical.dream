@@ -76,8 +76,10 @@ class AwsCaas:
 
         self.profiler = prof(name=__name__, path=self.sandbox)
 
-        self.incoming_q = queue.Queue()
-        self.outgoing_q = queue.Queue()
+        self.incoming_q = queue.Queue() # caas manager -> main manager
+        self.outgoing_q = queue.Queue() # main manager -> caas manager
+        self.internal_q = queue.Queue() # caas manager -> caas manager
+
         self._task_lock = threading.Lock()
         self._terminate = threading.Event()
 
@@ -783,22 +785,12 @@ class AwsCaas:
     # --------------------------------------------------------------------------
     #
     def _describe_tasks(self, tasks, cluster):
-        """
-        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
-        Retrieve task statuses from ECS API
-
-        Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
-        """
-        # describe_tasks accepts only 100 arns per invokation
-        # so we split the task arns into chunks of 100
-        if not isinstance(tasks, list):
-            tasks = [tasks]
 
         tasks_arns = [t.arn for t in tasks]
 
         if len(tasks_arns) <= 100:
             response = self._ecs_client.describe_tasks(tasks=tasks_arns,
-                                                        cluster=cluster)
+                                                       cluster=cluster)
             return [response['tasks']]
 
         tasks_chuncks = []
@@ -825,59 +817,74 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, cluster=None):
-        """
-        ref: https://luigi.readthedocs.io/en/stable/_modules/luigi/contrib/ecs.html
-        Retrieve task statuses from ECS API
-
-        Returns list of {RUNNING|PENDING|STOPPED} for each id in tasks_book
-
-        Lifecycle states: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle.html
-        """
-
-        # Pulling tasks statuses in batches gets slower with the number of tasks
-        # and sometimes causes the wait thread to hang, so we only pull status per task
-        if isinstance(tasks, list) and len(tasks) < 1:
-            raise Exception('Pulling statuses in batches is supported'
-                            ' but not permitted')
+    def ecs_tasks_statuses_watcher(self, cluster=None):
 
         if not cluster:
             cluster = self.cluster_name
-        
-        task = tasks
 
-        if task.done() and not task.arn:
-            if task.state == 'Failed':
-                return task.state
+        def _watch():
 
-            # the task state got altered by external elements
-            else:
-                raise Exception('Incosistent task state')
+            last_seen_msg = None
 
-        tasks_chunks = self._describe_tasks(task, cluster)
-        for chunk in tasks_chunks:
-            # task_def (i.e. Pod)
-            for task_def in chunk:
-                status = task_def['lastStatus']
-                if status == 'STOPPED':
-                    # if the pod stopped then mark all of 
-                    # its container as done/failed
-                    for container in task_def['containers']:
-                        if container.get('name') == task.name:
-                            if container.get('exitCode') == 0:
-                                return 'Completed'
-                            else:
-                                return 'Failed'
+            while not self._terminate.is_set():
+                msgs = []
+                tasks = self.get_tasks()
 
-                if status == 'RUNNING':
-                    for container in task_def['containers']:
-                        return 'Running'
-
-                # else it is transitioning 
-                elif status in ECS_TASKS_OTHER_STATUSES:
-                    return 'Running'
+                # make we have tasks in the task book and they have ARNs 
+                if tasks and all(t.arn for t in tasks):
+                    tasks_chunks = self._describe_tasks(tasks, cluster)
                 else:
-                    return status if status else 'Unknown'
+                    time.sleep(0.1)
+                    continue
+
+                for chunk in tasks_chunks:
+                    # task_def (i.e. Pod)
+                    for task_def in chunk:
+                        status = task_def['lastStatus']
+                        if status and status in ['PENDING', 'RUNNING', 'STOPPED']:
+
+                            containers = task_def['containers']
+                            for cont in containers:
+                                msg = {}
+                                if cont['lastStatus'] == 'STOPPED':
+
+                                    if cont.get('exitCode') == 0:
+                                        msg = {'id': cont.get('name'),
+                                               'status': 'Completed'}
+                                    else:
+                                        msg = {'id': cont.get('name'),
+                                               'status': 'Failed',
+                                               'exception': cont.get('reason')}
+
+                                elif cont['lastStatus'] == 'PENDING':
+                                    msg = {'id': cont.get('name'),
+                                           'status': 'Pending',
+                                           'reason': cont.get('reason')}
+
+                                elif cont['lastStatus'] == 'RUNNING':
+                                    msg = {'id': cont.get('name'),
+                                           'status': 'Running'}
+                                else:
+                                    msg = {'id': cont.get('name'),
+                                           'status': 'Unknown'}
+
+                                if msg:
+                                    msgs.append(msg)
+                        else:
+                            pass
+
+                    if msgs and msgs != last_seen_msg:
+                        self.internal_q.put({'pod_id': task_def['taskArn'],
+                                             'pod_status': status,
+                                             'containers': msgs})
+                        last_seen_msg = msgs
+
+                time.sleep(0.5)    
+
+        watcher = threading.Thread(target=_watch, daemon=True, name='EcsEventWatcher')
+        watcher.start()
+
+        self.logger.trace(f'watcher thread {watcher.ident} started on {self.cluster_name}')
 
 
     # --------------------------------------------------------------------------
@@ -888,75 +895,89 @@ class AwsCaas:
         finshed = []
         failed, done, running = 0, 0, 0
 
+        if self.launch_type in EKS:
+            queue = self.cluster.return_queue
+
+        else:
+            # set the queue and start the ecs watcher thread
+            queue = self.internal_q
+            self.ecs_tasks_statuses_watcher()
+
         while not self._terminate.is_set():
 
-            # pull any new upcoming tasks added to the tasks book
-            if self.launch_type in EKS:
-                get_statuses = self.cluster._get_task_statuses
-            else:
-                get_statuses = self._get_task_statuses
+            try:
+                # pull a message from the cluster queue
+                if not queue.empty():
+                    _msg = queue.get(block=True, timeout=1)
 
-            with self._task_lock:
-                _tasks = self.get_tasks()
-                tasks = copy.copy(_tasks)
+                    if _msg:
+                        parent_pod = _msg.get('pod_id')
+                        containers = _msg.get('containers')
 
-            for task in tasks:
-                # if task is already marked as done or failed then skip it
-                if task.name in finshed:
-                    continue
-
-                status = get_statuses(task)
-                if not status:
-                    continue
-
-                if status == 'Completed':
-                    if task.running():
-                        running -= 1
-                    task.set_result('Finished successfully')
-                    finshed.append(task.name)
-                    done += 1
-
-                elif status == 'Running':
-                    if not task.running():
-                        task.set_running_or_notify_cancel()
-                        running += 1
                     else:
                         continue
 
-                # sometimes tasks requires sometime to reach running
-                # state like MPI when the worker is reported to be "failed"
-                # then running this approach should update task state after
-                # failer for now.
-                elif status == 'Failed':
-                    # default number of tries is 3 * 5s = 15s
-                    # after that declare the task as failed
-                    if task.tries:
-                        task.tries -= 1
-                        task.reset_state()
-                    else:
-                        if task.running():
-                            running -= 1
+                    for cont in containers:
 
-                        # task already failed during submission
-                        if not task._exception:
-                            task.set_exception(Exception('Failed due to container error, check the logs'))
-                        finshed.append(task.name)
-                        failed += 1
+                        tid = cont.get('id')
+                        status = cont.get('status')
+                        task = self._tasks_book.get(tid)
 
-                else:
-                    self.logger.info(f'task {task.name} is in {status} state')
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
-                task.state = status
-                msg = f'[failed: {failed}, done {done}, running {running}]'
+                        if not task:
+                            raise RuntimeError(f'task {cont.name} does not exist, existing')
 
-                self.outgoing_q.put(msg)
+                        if task.name in finshed:
+                            continue
 
-                if len(finshed) == len(self._tasks_book):
-                    if self.auto_terminate:
-                        msg = (0, AWS)
-                        self.outgoing_q.put(msg)
+                        if not status:
+                            continue
 
-            time.sleep(5)
+                        if status == 'Completed':
+                            if task.running():
+                                running -= 1
+                            task.set_result('Finished successfully')
+                            finshed.append(task.name)
+                            done += 1
+
+                        elif status == 'Running':
+                            if not task.running():
+                                task.set_running_or_notify_cancel()
+                                running += 1
+                            else:
+                                continue
+
+                        elif status == 'Failed':
+                            if task.tries:
+                                task.tries -= 1
+                                task.reset_state()
+                            else:
+                                if task.running():
+                                    running -= 1
+                                exception = cont.get('exception')
+                                task.set_exception(Exception(exception))
+                                finshed.append(task.name)
+                                failed += 1
+
+                        elif status == 'Pending':
+                            reason = cont.get('reason')
+                            message = cont.get('message')
+                            msg += f': reason: {reason}, message: {message}'
+
+                        # preserve the task state for future use
+                        task.state = status
+
+                    self.outgoing_q.put(msg)
+
+                    if len(finshed) == len(self._tasks_book):
+                        if self.auto_terminate:
+                            termination_msg = (0, AWS)
+                            self.outgoing_q.put(termination_msg)
+
+            except queue.Empty:
+                time.sleep(0.1)
+                continue
 
 
     # --------------------------------------------------------------------------

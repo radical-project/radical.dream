@@ -117,7 +117,7 @@ class Remote:
     def check_ssh_connection(self, ip):
 
         if self.local:
-            raise RuntimeWarning('check_ssh is not supported in local mode')
+            raise RuntimeWarning('"check_ssh" is not supported in local mode')
 
         self.logger.trace("waiting for ssh connectivity on {0}".format(ip))
         timeout = 60 * 2
@@ -167,7 +167,7 @@ class Remote:
     # --------------------------------------------------------------------------
     #
     def find_open_port(self, host):
-    
+
         '''
         Check for the HYDRAA_USED_PORTS env var exist, which will hold
         the used port of the tunnelized Kuberentes cluster endpoints.
@@ -202,7 +202,7 @@ class Remote:
                 continue
             finally:
                 sock.close()
-        
+    
         return port
 
 
