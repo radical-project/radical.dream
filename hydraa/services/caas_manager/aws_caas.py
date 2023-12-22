@@ -7,6 +7,7 @@ import uuid
 import boto3
 import queue
 import atexit
+import botocore
 import threading
 import itertools as iter
 from datetime import datetime
@@ -970,30 +971,36 @@ class AwsCaas:
 
     # --------------------------------------------------------------------------
     #
-    def stop_ctask(self, cluster_name, task_id, reason):
+    def stop_ecs_tasks(self, cluster_name, reason):
         """
         we identify 3 reasons to stop task:
         1- USER_CANCELED : user requested to kill the task
         2- SYS_CANCELED  : the system requested to kill the task
-        3- COST_CANCELED : Task must be kill due to exceeding cost
-                           limit (set by user)
         """
-        task_arn = self._tasks_book[task_id]
+        tasks = self.get_tasks()
 
-        response = self._ecs_client.stop_task(task = task_arn,
-                                              reason = reason,
-                                              cluster = cluster_name)
+        # we elimnate any duplicates by using set 
+        tasks_arns = set([t.arn for t in tasks])
 
-        return response
+        for task_def_arn in tasks_arns:
+            response = self._ecs_client.stop_task(task = task_def_arn,
+                                                  reason = reason,
+                                                  cluster = cluster_name)
+
+            self.logger.info(f'stopping task {task_def_arn} on cluster {cluster_name} due to {reason}')
 
 
     # --------------------------------------------------------------------------
     #
-    def list_tasks(self, task_name):
-
+    def list_task_definitions(self, task_name, status=None):
+        """
+        List all the task definations that match the task name and status.
+        """
+        if not status:
+            status = 'ACTIVE'
 
         response = self._ecs_client.list_task_definitions(familyPrefix=task_name,
-                                                                 status='ACTIVE')
+                                                          status=status)
         return response
 
 
@@ -1173,10 +1180,18 @@ class AwsCaas:
                     waiter.wait(InstanceIds=[istance_id])
 
             # step-3 delete the ECS cluster
-            self._ecs_client.delete_cluster(cluster=self.cluster_name)
-            self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
+            try:
+                self._ecs_client.delete_cluster(cluster=self.cluster_name)
 
-        if self.launch_type in EKS:
+            except botocore.exceptions.ClientError as error:
+                if error.response['Error']['Code'] == 'ClusterContainsTasksException':
+                    self.stop_ecs_tasks(self.cluster_name, reason='USER_CANCELED')
+                else:
+                    raise error
+
+                self.logger.trace("hydraa cluster {0} found and deleted".format(self.cluster_name))
+
+        elif self.launch_type in EKS:
             self.cluster.shutdown()
             self.cluster = None
 
