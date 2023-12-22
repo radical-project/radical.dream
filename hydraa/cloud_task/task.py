@@ -142,7 +142,7 @@ class Task(Future):
     #
     def _verify(self):
         _required_args = ['cmd', 'vcpus', 'memory', 'image']
-        if not all([cmd, vcpus, memory, name, image]):
+        if not all([self.cmd, self.vcpus, self.memory, self.image]):
             raise ValueError(f'Missing required arguments: {_required_args}')
 
 
