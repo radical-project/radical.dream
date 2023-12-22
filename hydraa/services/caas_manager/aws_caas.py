@@ -1186,6 +1186,7 @@ class AwsCaas:
             except botocore.exceptions.ClientError as error:
                 if error.response['Error']['Code'] == 'ClusterContainsTasksException':
                     self.stop_ecs_tasks(self.cluster_name, reason='USER_CANCELED')
+                    self._ecs_client.delete_cluster(cluster=self.cluster_name)
                 else:
                     raise error
 
