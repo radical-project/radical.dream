@@ -784,6 +784,7 @@ class AwsCaas:
             return [response['tasks']]
 
         tasks_chuncks = []
+
         # break the task_arns into a chunks of 100
         chunks = [tasks_arns[x:x+100] for x in range(0, len(tasks_arns), 100)]
 
@@ -791,8 +792,6 @@ class AwsCaas:
             response = self._ecs_client.describe_tasks(tasks=chunk,
                                                        cluster=cluster)
 
-            #FIXME: if we have a failure then update the tasks_book
-            #       with status/error code and print it.
             if response['failures'] != []:
                 raise Exception(f"There were some failures:\n{response['failures']}")
             status_code = response['ResponseMetadata']['HTTPStatusCode']
@@ -814,10 +813,9 @@ class AwsCaas:
 
         def _watch():
 
-            last_seen_msg = None
+            last_seen_msgs = None
 
             while not self._terminate.is_set():
-                msgs = []
                 with self._task_lock:
                     tasks = self.get_tasks()
 
@@ -831,6 +829,7 @@ class AwsCaas:
                 for chunk in tasks_chunks:
                     # task_def (i.e. Pod)
                     for task_def in chunk:
+                        msgs = []
                         status = task_def['lastStatus']
                         if status and status in ['PENDING', 'RUNNING', 'STOPPED']:
 
@@ -861,14 +860,12 @@ class AwsCaas:
 
                                 if msg:
                                     msgs.append(msg)
-                        else:
-                            pass
 
-                    if msgs and msgs != last_seen_msg:
-                        self.internal_q.put({'pod_id': task_def['taskArn'],
-                                             'pod_status': status,
-                                             'containers': msgs})
-                        last_seen_msg = msgs
+                            if msgs and msgs != last_seen_msgs:
+                                self.internal_q.put({'pod_id': task_def['taskArn'],
+                                                    'pod_status': status,
+                                                    'containers': msgs})
+                                last_seen_msgs = msgs
 
                 time.sleep(0.5)    
 
@@ -959,7 +956,7 @@ class AwsCaas:
                         # preserve the task state for future use
                         task.state = status
 
-                    self.outgoing_q.put(msg)
+                        self.outgoing_q.put(msg)
 
                     if len(finshed) == len(self._tasks_book):
                         if self.auto_terminate:

@@ -376,7 +376,7 @@ class AzureCaas:
 
         def _watch():
 
-            last_seen_msg = None
+            last_seen_msgs = None
         
             while not self._terminate.is_set():
                 msgs = []
@@ -398,7 +398,6 @@ class AzureCaas:
                         containers = container_group.containers
                         for cont in containers:
                             msg = {}
-
                             # skip containers that has no status yet 
                             if not cont.as_dict().get('instance_view'):
                                 continue
@@ -435,14 +434,12 @@ class AzureCaas:
                                        'status': cont_status.state}
                             if msg:
                                 msgs.append(msg)
-                    else:
-                        pass
 
-                if msgs and msgs != last_seen_msg:
-                    self.internal_q.put({'pod_id': container_group.name,
-                                         'pod_status': status,
-                                         'containers': msgs})
-                    last_seen_msg = msgs
+                        if msgs and msgs != last_seen_msgs:
+                            self.internal_q.put({'pod_id': container_group.name,
+                                                'pod_status': status,
+                                                'containers': msgs})
+                            last_seen_msgs = msgs
 
             time.sleep(0.5)
 
@@ -533,7 +530,7 @@ class AzureCaas:
                         # preserve the task state for future use
                         task.state = status
 
-                    self.outgoing_q.put(msg)
+                        self.outgoing_q.put(msg)
 
                     if len(finshed) == len(self._tasks_book):
                         if self.auto_terminate:

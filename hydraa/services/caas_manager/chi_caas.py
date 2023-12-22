@@ -571,7 +571,7 @@ class ChiCaas:
                         # preserve the task state for future use
                         task.state = status
 
-                    self.outgoing_q.put(msg)
+                        self.outgoing_q.put(msg)
 
                     if len(finshed) == len(self._tasks_book):
                         if self.auto_terminate:
