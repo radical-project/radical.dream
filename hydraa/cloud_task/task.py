@@ -81,34 +81,69 @@ class Task(Future):
 
     """
 
-    def __init__(self, *args, **kwargs):
 
-        super().__init__(*args, **kwargs)
+    # --------------------------------------------------------------------------
+    def __init__(self,
+                 id: int = None,
+                 tries: int = 0,
+                 cmd: list = [],
+                 args: list = [],
+                 name: str = None,
+                 image: str = None,
+                 run_id: str = None,
+                 vcpus: float = 0.0,
+                 memory: float = 0.0,
+                 provider: str = None,
+                 ip: Optional[str] = None,
+                 arn: Optional[str] = None,
+                 type: Optional[str] = None,
+                 port: Optional[int] = None,
+                 depends_on: List[str] = [],
+                 ecs_launch_type: str = None,
+                 state: Optional[str] = None,
+                 volume: Optional[List] = None,
+                 env_var: Optional[str] = None,
+                 restart: Optional[bool] = None,
+                 container_group_name: str = None,
+                 inputs: Optional[List[str]] = [],
+                 outputs: Optional[List[str]] = [],
+                 ecs_kwargs: dict = {'executionRoleArn': ''}):
 
-        self.id: int = None
-        self.tries: int = 0
-        self.name : str = None
-        self.vcpus: float = 0.1
-        self.memory: float = 0.1
-        self.run_id : str = None
-        self.provider : str = None
-        self.args: List[str] = []
-        self.ip: Optional[str] = None
-        self.cmd: Optional[str] = None
-        self.depends_on: List[str] = []
-        self.arn: Optional[str] = None
-        self.type: Optional[str] = None
-        self.port: Optional[int] = None
-        self.state: Optional[str] = None
-        self.image: Optional[str] = None
-        self.volume: Optional[List] = None
-        self.env_var: Optional[str] = None
-        self.restart: Optional[bool] = None
-        self.inputs: Optional[List[str]] = []
-        self.outputs: Optional[List[str]] = []
-        self.contaier_group_name: str = None
-        self.ecs_launch_type: str = None
-        self.ecs_kwargs: dict = {'executionRoleArn': ''}
+
+        super().__init__()
+
+        self.id: int = id
+        self.cmd: str = cmd
+        self.name: str = name
+        self.tries: int = tries
+        self.image: str = image
+        self.run_id: str = run_id
+        self.vcpus: float = vcpus
+        self.memory: float = memory
+        self.args: List[str] = args
+        self.ip: Optional[str] = ip
+        self.provider: str = provider
+        self.arn: Optional[str] = arn
+        self.type: Optional[str] = type
+        self.port: Optional[int] = port
+        self.state: Optional[str] = state
+        self.ecs_kwargs: dict = ecs_kwargs
+        self.volume: Optional[List] = volume
+        self.env_var: Optional[str] = env_var
+        self.restart: Optional[bool] = restart
+        self.depends_on: List[str] = depends_on
+        self.inputs: Optional[List[str]] = inputs
+        self.outputs: Optional[List[str]] = outputs
+        self.ecs_launch_type: str = ecs_launch_type
+        self.container_group_name: str = container_group_name
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _verify(self):
+        _required_args = ['cmd', 'vcpus', 'memory', 'image']
+        if not all([cmd, vcpus, memory, name, image]):
+            raise ValueError(f'Missing required arguments: {_required_args}')
 
 
     # --------------------------------------------------------------------------

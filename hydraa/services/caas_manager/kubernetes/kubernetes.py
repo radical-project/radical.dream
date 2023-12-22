@@ -702,7 +702,7 @@ class K8sCluster:
             raise Exception(f'pod/container task must be an instance of {Task}')
 
         logs = []
-        label = {"task_label": task.pod_name}
+        label = f"task_label={task.pod_name}"
         watcher = watch.Watch()
 
         # some pods with third party tools like kubeflow or workflows

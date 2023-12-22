@@ -225,6 +225,7 @@ class CaasManager:
 
         tasks_counter = 0
         for task in tasks:
+            task._verify()
             task_provider = task.provider.lower()
             if self._registered_managers.get(task_provider, None):
                 manager = self._registered_managers.get(task_provider)
