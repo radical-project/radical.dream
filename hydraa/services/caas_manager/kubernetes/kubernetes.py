@@ -282,7 +282,7 @@ class K8sCluster:
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
-        self.kube_config = self.configure()
+        self.kube_config = self.configure(head_node)
 
         self.namespace = self.create_namespace()
 
@@ -295,8 +295,9 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def configure(self):
+    def configure(self, head_node):
 
+        kube_config_path = None
         kube_config_locs = ['.kube/config', '~/.kube/config']
 
         self.logger.trace('creating .kube folder')
@@ -304,13 +305,15 @@ class K8sCluster:
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        kube_config_path = None
-        for ploc in kube_config_locs:
-            res = self.control_plane.run(f'cat {ploc}', warn=True,
-                                                        hide=True)
-            if not res.return_code:
-                kube_config_path = ploc
-                break
+        if hasattr(head_node, 'KubeConfigPath'):
+            kube_config_path = head_node.KubeConfigPath
+        else:
+            for ploc in kube_config_locs:
+                res = self.control_plane.run(f'cat {ploc}', warn=True,
+                                                            hide=True)
+                if not res.return_code:
+                    kube_config_path = ploc
+                    break
 
         if kube_config_path:
             self.control_plane.get(kube_config_path, local=config_file,
@@ -319,7 +322,7 @@ class K8sCluster:
         else:
             raise FileNotFoundError(f'failed to find kubeconfig file under'
                                     ' {kube_config_locs}.\n You can set the'
-                                    ' path via VM.KubeConfigPath')
+                                    ' path via VM.KubeConfigPath="Your/Kube/Path"')
 
         if self.provider != LOCAL:
             kube_config = load_yaml(config_file)

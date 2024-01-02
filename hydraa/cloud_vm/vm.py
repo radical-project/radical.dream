@@ -147,7 +147,7 @@ class OpenStackVM:
 
 
 class LocalVM(OpenStackVM):
-    def __init__(self, launch_type, **input_kwargs):
+    def __init__(self, launch_type, KubeConfigPath=None, **input_kwargs):
 
         if launch_type not in LOCAL_LTYPE:
             raise ValueError(f'launch_type must be one of: {LOCAL_LTYPE}')
