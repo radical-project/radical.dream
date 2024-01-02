@@ -100,6 +100,9 @@ class CaasManager:
         self.sandbox = misc.create_sandbox(_id)
         self.log = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
+        providers = len(self._proxy.loaded_providers)
+        print(f'session sandbox is created: {self.sandbox} with [{providers}] providers')
+
         for provider in self._proxy.loaded_providers:
             if provider in PROVIDER_TO_CLASS:
                 cred = self._proxy._load_credentials(provider)
@@ -222,6 +225,7 @@ class CaasManager:
 
         tasks_counter = 0
         for task in tasks:
+            task._verify()
             task_provider = task.provider.lower()
             if self._registered_managers.get(task_provider, None):
                 manager = self._registered_managers.get(task_provider)
@@ -229,9 +233,10 @@ class CaasManager:
                 manager = next(iter(self._registered_managers.values()))
                 self.log.warning('no manager found for this task, submitting to a any manager')
 
-            print('submitting tasks: ', tasks_counter, end='\r')
             manager['in_q'].put(task)
             tasks_counter += 1
+
+        print(f'{tasks_counter} tasks are submitted')
 
 
     # --------------------------------------------------------------------------

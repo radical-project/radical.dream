@@ -34,7 +34,8 @@ from hydraa.services.caas_manager.utils.misc import generate_id
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
 
-AKS       = ['AKS', 'aks']
+AKS = ['AKS', 'aks']
+ACI = ['ACI', 'aci']
 AZURE     = 'azure'
 WAIT_TIME = 2
 AZURE_RGX = '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
@@ -81,8 +82,9 @@ class AzureCaas:
         self.res_client = self._create_resource_client(cred)
         self.con_client = self._create_container_client(cred)
 
-        self.incoming_q = queue.Queue()
-        self.outgoing_q = queue.Queue()
+        self.incoming_q = queue.Queue() # caas manager -> main manager
+        self.outgoing_q = queue.Queue() # main manager -> caas manager
+        self.internal_q = queue.Queue() # caas manager -> caas manager
 
         self._task_lock = threading.Lock()
         self._terminate = threading.Event()
@@ -148,9 +150,9 @@ class AzureCaas:
     def _get_work(self):
 
         bulk = list()
-        max_bulk_size = 1000000
-        max_bulk_time = 2 # seconds
-        min_bulk_time = 0.1 # seconds
+        max_bulk_size = os.environ.get('MAX_BULK_SIZE', 1024) # tasks
+        max_bulk_time = os.environ.get('MAX_BULK_TIME', 2)    # seconds
+        min_bulk_time = os.environ.get('MAX_BULK_TIME', 0.1)  # seconds
 
         self.wait_thread = threading.Thread(target=self._wait_tasks,
                                             name='AzureCaaSWatcher')
@@ -176,10 +178,12 @@ class AzureCaas:
                         break
 
             if bulk:
-                if self.launch_type in AKS:
-                    self.submit_to_aks(bulk)
-                else:
-                    self.submit(bulk)
+                with self._task_lock:
+                    if self.launch_type in AKS:
+                        self.submit_to_aks(bulk)
+                    else:
+                        self.submit(bulk)
+
                 bulk = list()
 
 
@@ -291,16 +295,7 @@ class AzureCaas:
 
         # submit to kubernets cluster
         depolyment_file, pods_names, batches = self.cluster.submit(ctasks)
-        
-        # create entry for the pod in the pods book
-        '''
-        for idx, pod_name in enumerate(pods_names):
-            self._pods_book[pod_name] = OrderedDict()
-            self._pods_book[pod_name]['manager_id']    = self.manager_id
-            self._pods_book[pod_name]['task_list']     = batches[idx]
-            self._pods_book[pod_name]['batch_size']    = len(batches[idx])
-            self._pods_book[pod_name]['pod_file_path'] = depolyment_file
-        '''
+
         self.logger.trace('batch of [{0}] tasks is submitted '.format(len(ctasks)))
 
         self.profiler.prof('submit_batch_stop', uid=self.run_id)
@@ -374,60 +369,84 @@ class AzureCaas:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, tasks, container_group_names=None):
-
-        # Pulling tasks statuses in batches gets slower with the number of tasks
-        # and sometimes causes the wait thread to hang, so we only pull status
-        # per task
-        if isinstance(tasks, list) and len(tasks) < 1:
-            raise Exception('Pulling statuses in batches is supported'
-                            ' but not permitted')
-
-        task = tasks
-        # an ACS task must have contaier_group_name attached to it
-        # otherwise task submission failed for a reason found in the
-        # task.excception
-        if task.done() and not task.contaier_group_name:
-            if task.state == 'Failed':
-                return task.state
-
-            # the task state got altered by external elements
-            else:
-                raise Exception('Incosistent task state')
+    def aci_tasks_statuses_watcher(self, container_group_names=None):
 
         if not container_group_names:
             container_group_names = self._container_group_names
 
-        container_group_obj = self.con_client.container_groups.get(self.resource_group_name,
-                                                                   task.contaier_group_name)
-        for container in container_group_obj.as_dict()['containers']:
-            name = container.get('name')
-            container_task = container.get('instance_view', {})
-            if name and container_task:
-                try:
-                    status = container_task['current_state']['state']
-                    if status == 'Terminated':
-                        if container_task['current_state']['exit_code'] == 0:
-                            return 'Completed'
-                        else:
-                            return 'Failed'
+        def _watch():
 
-                    elif status == 'Running':
-                        return 'Running'
+            last_seen_msgs = None
+        
+            while not self._terminate.is_set():
+                msgs = []
+                with self._task_lock:
+                    tasks = self.get_tasks()
 
-                    elif status == 'Waiting':
-                        events = container.get('events', {})
-                        for e in events:
-                            if e['name'] == 'Failed':
-                                return 'Failed'
+                # make sure all tasks have container group names and registered
+                if not tasks or not all(t.contaier_group_name for t in tasks):
+                    time.sleep(0.1)
+                    continue
+
+                # container_group (i.e. Pod)
+                for group in container_group_names.keys():
+                    container_group = self.con_client.container_groups.get(self.resource_group_name,
+                                                                           group)
+                    status = container_group.instance_view.state
+                    if status and status in ['Pending', 'Running', 'Succeeded', 'Failed']:
+
+                        containers = container_group.containers
+                        for cont in containers:
+                            msg = {}
+                            # skip containers that has no status yet 
+                            if not cont.as_dict().get('instance_view'):
+                                continue
+
+                            cont_status = cont.instance_view.current_state
+                            if cont_status.state == 'Terminated':
+                                if cont_status.exit_code == 0:
+                                    msg = {'id': cont.name,
+                                           'status': 'Completed'}
+                                else:
+                                    msg = {'id': cont.name,
+                                           'status': 'Failed',
+                                           'exception': cont_status.detail_status}
+
+                            elif cont_status.state == 'Waiting':
+
+                                # check if the container was terminated previously and stuck in restarting
+                                prev_state = cont.instance_view.as_dict().get('previous_state')
+                                if prev_state and cont.instance_view.previous_state.state == 'Terminated':
+                                    msg = {'id': cont.name,
+                                           'status': 'Failed',
+                                           'exception': cont_status.detail_status}
+                                else:
+                                    msg = {'id': cont.name,
+                                           'status': 'Pending',
+                                           'reason': cont_status.detail_status}
+
+                            elif cont_status.state == 'Running':
+                                msg = {'id': cont.name,
+                                       'status': 'Running'}
+
                             else:
-                                return 'Running'
-                    else:
-                        return status if status else 'Unknown'
+                                msg = {'id': cont.name,
+                                       'status': cont_status.state}
+                            if msg:
+                                msgs.append(msg)
 
-                except AttributeError:
-                    self.logger.warning('no task statuses avilable yet')
-                    time.sleep(1)
+                        if msgs and msgs != last_seen_msgs:
+                            self.internal_q.put({'pod_id': container_group.name,
+                                                'pod_status': status,
+                                                'containers': msgs})
+                            last_seen_msgs = msgs
+
+            time.sleep(0.5)
+
+        watcher = threading.Thread(target=_watch, daemon=True, name='AciEventWatcher')
+        watcher.start()
+
+        self.logger.trace(f'watcher thread {watcher.ident} started on {self.resource_group_name}')
 
 
     # --------------------------------------------------------------------------
@@ -438,76 +457,90 @@ class AzureCaas:
         finshed = []
         failed, done, running = 0, 0, 0
 
+        if self.launch_type in AKS:
+            queue = self.cluster.return_queue
+
+        else:
+            # set the queue and start the ecs watcher thread
+            queue = self.internal_q
+            self.aci_tasks_statuses_watcher()
+
         while not self._terminate.is_set():
 
-            # pull any new upcoming tasks added to the tasks book
-            if self.launch_type in AKS:
-                get_statuses = self.cluster._get_task_statuses
-            else:
-                get_statuses = self._get_task_statuses
+            try:
+                # pull a message from the cluster queue
+                if not queue.empty():
+                    _msg = queue.get(block=True, timeout=1)
 
-            with self._task_lock:
-                _tasks = self.get_tasks()
-                tasks = copy.copy(_tasks)
+                    if _msg:
+                        parent_pod = _msg.get('pod_id')
+                        containers = _msg.get('containers')
 
-            for task in tasks:
-                # if task is already marked as done or failed then skip it
-                if task.name in finshed:
-                    continue
-
-                status = get_statuses(task)
-                if not status:
-                    continue
-
-                if status == 'Completed':
-                    if task.running():
-                        running -= 1
-                    task.set_result('Finished successfully')
-                    finshed.append(task.name)
-                    done += 1
-
-                elif status == 'Running':
-                    if not task.running():
-                        task.set_running_or_notify_cancel()
-                        running += 1
                     else:
                         continue
 
-                # sometimes tasks requires sometime to reach running
-                # state like MPI when the worker is reported to be "failed"
-                # then running this approach should update task state after
-                # failer for now.
-                elif status == 'Failed':
-                    # default number of tries is 3 * 5s = 15s
-                    # after that declare the task as failed
-                    if task.tries:
-                        task.tries -= 1
-                        task.reset_state()
-                    else:
-                        if task.running():
-                            running -= 1
+                    for cont in containers:
 
-                        # task already failed during submission
-                        if not task._exception:
-                            task.set_exception(Exception('Failed due to container error, check the logs'))
+                        tid = cont.get('id')
+                        status = cont.get('status')
+                        task = self._tasks_book.get(tid)
 
-                        finshed.append(task.name)
-                        failed += 1
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
-                else:
-                    self.logger.info(f'task {task.name} is in {status} state')
+                        if not task:
+                            raise RuntimeError(f'task {cont.name} does not exist, existing')
 
-                task.state = status
-                msg = f'[failed: {failed}, done {done}, running {running}]'
+                        if task.name in finshed:
+                            continue
 
-                self.outgoing_q.put(msg)
+                        if not status:
+                            continue
 
-                if len(finshed) == len(self._tasks_book):
-                    if self.auto_terminate:
-                        msg = (0, AZURE)
+                        if status == 'Completed':
+                            if task.running():
+                                running -= 1
+                            task.set_result('Finished successfully')
+                            finshed.append(task.name)
+                            done += 1
+
+                        elif status == 'Running':
+                            if not task.running():
+                                task.set_running_or_notify_cancel()
+                                running += 1
+                            else:
+                                continue
+
+                        elif status == 'Failed':
+                            if task.tries:
+                                task.tries -= 1
+                                task.reset_state()
+                            else:
+                                if task.running():
+                                    running -= 1
+                                exception = cont.get('exception')
+                                task.set_exception(Exception(exception))
+                                finshed.append(task.name)
+                                failed += 1
+
+                        elif status == 'Pending':
+                            reason = cont.get('reason')
+                            message = cont.get('message')
+                            msg += f': reason: {reason}, message: {message}'
+
+                        # preserve the task state for future use
+                        task.state = status
+
                         self.outgoing_q.put(msg)
 
-            time.sleep(5)
+                    if len(finshed) == len(self._tasks_book):
+                        if self.auto_terminate:
+                            termination_msg = (0, AZURE)
+                            self.outgoing_q.put(termination_msg)
+
+            except queue.Empty:
+                time.sleep(0.1)
+                continue
+
 
 
     # --------------------------------------------------------------------------
@@ -620,7 +653,6 @@ class AzureCaas:
         if not batch_size:
             raise Exception('Batch size can not be 0')
 
-
         tasks_per_container_grp = []
 
         container_grps = math.ceil(batch_size / CPCG)
@@ -674,15 +706,15 @@ class AzureCaas:
 
         self._terminate.set()
 
+        if self.cluster:
+            self.cluster.shutdown()
+
         for key, val in self._container_group_names.items():
             self.logger.trace(("terminating container group {0}".format(key)))
             self.con_client.container_groups.begin_delete(self.resource_group_name, key)
         
         self.logger.trace(("terminating resource group {0}".format(self.resource_group_name)))
         self.res_client.resource_groups.begin_delete(self.resource_group_name)
-
-        if self.cluster:
-            self.cluster.shutdown()
 
         self.status = False
         self.resource_group_name = None

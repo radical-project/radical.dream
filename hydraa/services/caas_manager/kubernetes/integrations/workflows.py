@@ -197,9 +197,10 @@ class Workflow:
         """
         print('submitting workflows x [{0}] to {1}'.format(len(self.workflows),
                                                            self.cluster.name))
-        file_path = self.cluster.sandbox + '/' + self.wf_type.lower() + \
-                    '-workflow.yaml'
+
+        file_path = f'{self.cluster.sandbox}/{self.wf_type.lower()}-workflow.yaml'
         dump_multiple_yamls(self.workflows, file_path, sort_keys=False)
+
         self.cluster.submit(deployment_file=file_path)
         self.workflows.clear()
 

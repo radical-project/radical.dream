@@ -2,8 +2,10 @@ import os
 import time
 import math
 import copy
+import queue
 import atexit
 import shutil
+import urllib3
 
 import pandas as pd
 import threading as mt
@@ -13,8 +15,14 @@ from typing import List
 from typing import Dict
 from typing import Tuple
 
+from kubernetes import watch
+from kubernetes import client
+from kubernetes import config
+
 from ..utils.misc import is_root
 from ..utils.misc import build_pod
+from ..utils.misc import load_yaml
+from ..utils.misc import dump_yaml
 from ..utils.misc import unique_id
 from ..utils.misc import sh_callout
 from ..utils.misc import generate_id
@@ -49,7 +57,6 @@ BUSY = 'Busy'
 READY = 'Ready'
 LOCAL = 'local'
 MAX_PODS = 110
-MAX_POD_LOGS_LENGTH = 1000000
 
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
@@ -58,7 +65,6 @@ KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-TASK_PREFIX = ['hydraa', 'ctask']
 
 
 # --------------------------------------------------------------------------
@@ -88,9 +94,6 @@ class K8sCluster:
     
     2- Schedule and partion containers into pods based on
        the cluster size.
-    
-    3- Moniter and collect tasks/containers/pods results and 
-       performance metrics.
     """
 
     def __init__(self, run_id, vms, sandbox, log):
@@ -104,6 +107,8 @@ class K8sCluster:
 
         vms : List[hydraa.vm.VirtualMachine]
             A list of AWS/Azure/OpenStack Hydraa VM instances.
+        
+        result_q : Queue to send results back to the controller manager.
 
         sandbox : str
             The path to the folder of the Hydraa manager.
@@ -117,16 +122,15 @@ class K8sCluster:
         self.status = None
         self.pod_counter = 0
         self.sandbox = sandbox
-        self.kube_config  = None
+        self.kube_config = None
+        self.result_queue = queue.Queue()
         self.provider = self.vms[0].Provider
         self.size = self.get_cluster_allocatable_size()
         self.nodes = sum([vm.MinCount for vm in self.vms])
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
         self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
 
-        self.stop_event = mt.Event()
-        self.updater_lock = mt.Lock()
-        self.watch_profiles = mt.Thread(target=self._profiles_collector)
+        self.terminate = mt.Event()
 
 
     # --------------------------------------------------------------------------
@@ -278,8 +282,12 @@ class K8sCluster:
 
         self.profiler.prof('bootstrap_cluster_stop', uid=self.id)
 
-        self.kube_config = self.configure()
-        self._tunnel = self.control_plane.setup_ssh_tunnel(self.kube_config)
+        self.kube_config = self.configure(head_node)
+
+        self.namespace = self.create_namespace()
+
+        # start the watcher thread
+        self._watch_pods_statuses()
 
         self.status = READY
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -287,8 +295,9 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def configure(self):
+    def configure(self, head_node):
 
+        kube_config_path = None
         kube_config_locs = ['.kube/config', '~/.kube/config']
 
         self.logger.trace('creating .kube folder')
@@ -296,13 +305,15 @@ class K8sCluster:
         os.mkdir(self.sandbox + "/.kube")
         open(config_file, 'x')
 
-        kube_config_path = None
-        for ploc in kube_config_locs:
-            res = self.control_plane.run(f'cat {ploc}', warn=True,
-                                                        hide=True)
-            if not res.return_code:
-                kube_config_path = ploc
-                break
+        if hasattr(head_node, 'KubeConfigPath'):
+            kube_config_path = head_node.KubeConfigPath
+        else:
+            for ploc in kube_config_locs:
+                res = self.control_plane.run(f'cat {ploc}', warn=True,
+                                                            hide=True)
+                if not res.return_code:
+                    kube_config_path = ploc
+                    break
 
         if kube_config_path:
             self.control_plane.get(kube_config_path, local=config_file,
@@ -311,9 +322,51 @@ class K8sCluster:
         else:
             raise FileNotFoundError(f'failed to find kubeconfig file under'
                                     ' {kube_config_locs}.\n You can set the'
-                                    ' path via VM.KubeConfigPath')
+                                    ' path via VM.KubeConfigPath="Your/Kube/Path"')
+
+        if self.provider != LOCAL:
+            kube_config = load_yaml(config_file)
+            kube_server = kube_config['clusters'][0]['cluster']['server']
+
+            # create the ssh tunnel
+            self.tunnel = self.control_plane.setup_ssh_tunnel(kube_server)
+
+            # update the Kube config file with the tunneled port
+            kube_config['clusters'][0]['cluster']['server'] = \
+                f'https://127.0.0.1:{self.tunnel.local_bind_port}'
+
+            # write the changes to the disk
+            dump_yaml(kube_config, config_file, safe=False)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(config_file)
 
         return config_file
+
+
+    # --------------------------------------------------------------------------
+    #
+    def create_namespace(self, namespace=None):
+
+        if not namespace:
+            namespace = generate_id(prefix='hydraa-ns-')
+
+        namespaces = client.CoreV1Api().list_namespace()
+        all_namespaces = []
+        for ns in namespaces.items:
+            all_namespaces.append(ns.metadata.name)
+
+        if namespace in all_namespaces:
+            self.logger.warning(f"namespace {namespace} exists on {self.name}"
+                                 " and will be reused")
+        else:
+            namespace_metadata = client.V1ObjectMeta(name=namespace)
+            client.CoreV1Api().create_namespace(
+                client.V1Namespace(metadata=namespace_metadata))
+
+            self.logger.trace(f"namespace {namespace} is created on {self.name}")
+
+        return namespace
 
 
     # --------------------------------------------------------------------------
@@ -321,7 +374,7 @@ class K8sCluster:
     def wait_for_cluster(self, timeout):
         start_time = time.time()
 
-        while True:
+        while not self.terminate.is_set():
             check_cluster = self.control_plane.run('kubectl get nodes', warn=True,
                                                                         hide=True)
             if not check_cluster.return_code:
@@ -373,11 +426,10 @@ class K8sCluster:
         
         Returns:
             deployment_file (str) : path for the deployment file.
-            pods_names      (list): list of generated pods names.
-            batches         (list): the actual tasks batches.
         """
         scpp = [] # single container per pod
         mcpp = [] # multiple containers per pod
+
         deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
                                                             unique_id())
 
@@ -390,6 +442,9 @@ class K8sCluster:
             elif any([c in [ctask.type] for c in CONTAINER]):
                 mcpp.append(ctask)
 
+            else:
+                raise Exception(f'Unknow task of type: {ctask.type}')
+
         if mcpp:
             _mcpp = []
             # FIXME: use orhestrator.scheduler
@@ -401,6 +456,7 @@ class K8sCluster:
                 self.pod_counter +=1
                 pod = build_pod(batch, str(self.pod_counter).zfill(6))
                 _mcpp.append(pod)
+
             dump_multiple_yamls(_mcpp, deployment_file)
 
         if scpp:
@@ -409,15 +465,15 @@ class K8sCluster:
                 self.pod_counter +=1
                 pod = build_pod([task], str(self.pod_counter).zfill(6))
                 _scpp.append(pod)
+
             dump_multiple_yamls(_scpp, deployment_file)
 
-        # FIXME: why are we returning two empty lists?
-        return deployment_file, [], []
+        return deployment_file
 
 
     # --------------------------------------------------------------------------
     #
-    def submit(self, ctasks=[], deployment_file=None):
+    def submit(self, ctasks: list=[], deployment_file: str=None) -> str:
         
         """
         This function to coordiante the submission of list of tasks.
@@ -425,49 +481,44 @@ class K8sCluster:
 
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
-        
+
+            deployment_file (str): a path for the deployment file.
+ 
         Returns:
             deployment_file (str) : path for the deployment file.
-            pods_names      (list): list of generated pods names.
-            batches         (list): the actual tasks batches.
         """
-        batches = []
-        pods_names = []
         if not ctasks and not deployment_file:
             self.logger.error('at least deployment or tasks must be specified')
-            return None, [], []
+            return None
 
         if deployment_file and ctasks:
             self.logger.error('can not submit both deployment and tasks')
-            return None, [], []
+            return None
 
         if ctasks:
             self.profiler.prof('generate_pods_start', uid=self.id)
-            deployment_file, pods_names, batches = self.generate_pods(ctasks)
+            deployment_file = self.generate_pods(ctasks)
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if deployment_file:
-            cmd = 'nohup kubectl apply -f {0} >> {1}'.format(deployment_file,
-                                                            self.sandbox)
+        if os.path.exists(deployment_file):
+            cmd = f'nohup kubectl apply -f {deployment_file} >> {self.sandbox}'
             cmd += '/apply_output.log 2>&1 </dev/null &'
 
             out, err, ret = sh_callout(cmd, shell=True, kube=self)
 
-            msg = 'deployment {0} is created on {1}'.format(deployment_file.split('/')[-1],
-                                                            self.name)
-            if not ret:
-                print(msg)
-                self.logger.trace('{0}, deployemnt output is under'
-                                  ' apply_output.log'.format(msg))
-                return deployment_file, pods_names, batches
+            if ret:
+                self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
 
-            # FIXME: we use nohup, to apply the deployemnt in the 
-            # background, so how can we report error if we fail?
+            # FIXME: this should be a message to the controller manager
             else:
-                self.logger.error(err)
-                print('failed to submit pods, please check the logs for more info.')
+                fname = deployment_file.split('/')[-1]
+                print('deployment {0} is submitted to {1}'.format(fname, self.name))
 
-        self.collect_profiles()
+            return deployment_file
+
+        else:
+            raise FileExistsError(f'failed to find {deployment_file}')
+            return None
 
 
     # --------------------------------------------------------------------------
@@ -535,200 +586,98 @@ class K8sCluster:
 
     # --------------------------------------------------------------------------
     #
-    def _get_task_statuses(self, task=None):
+    def _watch_pods_statuses(self):
 
         """
-        This function to generate a json with the current containers statuses
-        and collect STOPPED, RUNNING and FAILED containers to report them back
-        to the controller manager.
+        This function starts as a thread to monitor the status of the pods and
+        their containers statuses and report them back to the controller manager.
 
         Parameters:
-            task (str): A name for a task which represents a pod or a container
-        
+            None
+
         Returns:
             statuses (list): a list of list for all of the task statuses.
         """
+        w = watch.Watch()
 
-        cmd1 = f'kubectl get pods -l task_label={task.pod_name} -o custom-columns=:.status.phase'
-        cmd2 = f"kubectl get pod -l task_label={task.pod_name} -o jsonpath="'{.items[*].status.containerStatuses}'""
-        try:
-            pod_status, _, _ = sh_callout(cmd1, shell=True, kube=self)
-            pod_status = pod_status.strip()
-            pod_containers, _, _ = sh_callout(cmd2, shell=True, munch=True, kube=self)
-        except SyntaxError:
-            return "Unknown"
+        def _watch():
 
-        if pod_status == 'Succeeded':
-            return "Completed"
+            try:
+                for event in w.stream(client.CoreV1Api().list_namespaced_pod,
+                                      'default', _request_timeout=90000000):
 
-        elif pod_status == 'Running':
-            return "Running"
+                    pod = event['object']
 
-        elif pod_status == 'Pending':
-            return "Pending"
+                    if pod and pod.status.phase in ['Pending', 'Running', 'Succeeded', 'Failed']:
 
-        elif pod_status in PFAILED_STATE:
-            # mostly MCPP mode
-            for container in pod_containers:
-                if container.get('name') == task.name:
-                    status = next(iter(container.get('state').keys()))
-                    if status == 'terminated':
-                        if container['state'][status]['exitCode'] == 0:
-                            return "Completed"
-                        else:
-                            return "Failed"
-        else:
-            return pod_status if pod_status else "Unknown"
+                        containers = self._process_container_statuses(pod)
 
-    # --------------------------------------------------------------------------
-    #
-    def collect_profiles(self):
+                        if containers:
+                            self.result_queue.put({'pod_id':pod.metadata.name,
+                                                   'pod_status': pod.status.phase,
+                                                   'containers': containers})
 
-        if not self.watch_profiles.is_alive():
-            self.watch_profiles.daemon = True
-            self.watch_profiles.start()
-
-            self.logger.trace(f'profilies collection started on {self.name}')
-
-
-    # --------------------------------------------------------------------------
-    #
-    def get_pod_status(self):
-
-        cmd = 'kubectl get pod --field-selector=status.phase=Succeeded -o json'
-        response = None
-
-        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
-
-        if response:
-            df = pd.DataFrame(columns=['Task_ID', 'Status', 'Start', 'Stop'])
-            # iterate on pods
-            i = 0
-            for pod in response['items']:
-                # get the status of each pod
-                phase = pod['status']['phase']
-
-                # iterate on containers
-                for container in pod['status']['containerStatuses']:
-                    c_name = container.get('name')
-                    for k, v in  container['state'].items():
-                        state = container.get('state', None)
-                        if state:
-                            for kk, vv in container['state'].items():
-                                start_time = convert_time(v.get('startedAt', 0.0))
-                                stop_time  = convert_time(v.get('finishedAt', 0.0))
-                                df.loc[i] = (c_name, (kk, v.get('reason', None)), start_time, stop_time)
-                                i +=1
-
-                        else:
-                            self.logger.trace('Pods did not finish yet or failed')
-
-            return df
-
-
-    # --------------------------------------------------------------------------
-    #
-    def get_pod_events(self):
-        
-        cmd = 'kubectl get events -A -o json' 
-
-        response, _, _ = sh_callout(cmd, shell=True, munch=True, kube=self)
-
-        df = pd.DataFrame(columns=['Task_ID', 'Reason', 'FirstT', 'LastT'])
-        if response:
-            id = 0
-            for it in response['items']:
-                field = it['involvedObject'].get('fieldPath', None)
-                if field:
-                    if 'spec.containers' in field:
-                        if 'ctask' in field:
-                            cid        = field.split('}')[0].split('{')[1]
-                            reason     = it.get('reason', None)
-                            reason_fts = convert_time(it.get('firstTimestamp', 0.0))
-                            reason_lts = convert_time(it.get('lastTimestamp', 0.0))
-                            df.loc[id] = (cid, reason, reason_fts, reason_lts)
-                            id +=1
-
-        return df
-
-
-    # --------------------------------------------------------------------------
-    #
-    def _profiles_collector(self, collect_every=3300):
-        """
-        Background Thread for Profiles Collection
-
-        This method should be started as a background thread.
-
-        AKS/EKS clusters do not permit modifying ttl-events, causing profiles
-        to be deleted from the cluster after > 1 hour, potentially replaced
-        by new ones (unless Azure/AWS monitoring is enabled, which incurs cost).
-
-        This function saves profile checkpoints as dataframes approximately
-        every 55 minutes, merging them at execution end.
-        https://github.com/Azure/AKS/issues/2140
-
-        Parameters:
-        ----------
-        None
-
-        Returns:
-        -------
-        None
-
-        Notes:
-        ------
-        - Operates within an internal loop for periodic collection.
-        - Intended for use as a background thread.
-        - Utilizes a stop_event to exit the loop and cease collection.
-
-        Example:
-        --------
-        # Assuming `self` is an instance of the class
-        collector_thread = threading.Thread(target=self._profiles_collector)
-        collector_thread.start()
-
-        # ...execute other tasks...
-
-        # When done, signal the thread to stop and wait for it to finish
-        self.stop_event.set()
-        collector_thread.join()
-        """
-        ids = 0
-
-        def collect(ids):
-            fname = self.sandbox + '/'+'check_profiles.{0}.csv'.format(str(ids).zfill(6))
-            
-            df1 = self.get_pod_status()
-            df2 = self.get_pod_events()
-            df = (pd.merge(df1, df2, on='Task_ID'))
-            df.to_csv(fname)
-    
-            self.logger.trace('checkpoint profiles saved to {0}'.format(fname))
-
-        # Iterate until the stop_event is triggered
-        while not self.stop_event.is_set():
-            for t in range(collect_every, 0, -1):
-                if t == 1:
-                    # Save a checkpoint every ~ 55 minutes
-                    collect(ids)
-
-                # Exit the loop if stop_event is true
-                if self.stop_event.is_set():
-                    break
-
+            except (urllib3.exceptions.ProtocolError, urllib3.exceptions.httplib_IncompleteRead) as e:
+                if self.terminate.is_set():
+                    self.logger.trace(f'watcher thread recieved stop event')
+                    w.stop()
                 else:
-                    time.sleep(SLEEP)
+                    raise e
 
-            ids +=1
-        # Save a checkpoint if the thread exits
-        collect(ids)
+        watcher = mt.Thread(target=_watch, daemon=True, name='KubeEventWatcher')
+        watcher.start()
+
+        self.logger.trace(f'watcher thread {watcher.ident} started on {self.name}')
 
 
     # --------------------------------------------------------------------------
     #
-    def get_pod_logs(self, task: Task, related_containers: bool = False,
-                     save: bool = False) -> str:
+    def _process_container_statuses(self, pod):
+
+        # get the pod containers names
+        containers = []
+
+        if not pod.status.container_statuses:
+            return containers
+
+        for cont in pod.status.container_statuses:
+            msg = {}
+
+            if not cont.name.startswith('ctask'):
+                continue
+
+            if cont.state.terminated:
+                if cont.state.terminated.exit_code:
+                    msg = {'id': cont.name,
+                           'status': 'Failed',
+                           'exception': cont.state.terminated.reason}
+                else:
+                    msg = {'id': cont.name,
+                           'status': 'Completed'}
+
+            elif cont.state.waiting:
+                msg = {'id': cont.name,
+                       'message': cont.state.waiting.message,
+                       'status': 'Pending',
+                       'reason': cont.state.waiting.reason}
+
+            elif cont.state.running:
+                msg = {'id': cont.name,
+                       'status': 'Running'}
+            else:
+                msg = {'id': cont.name,
+                       'status': cont.status.phase}
+
+            if msg:
+                containers.append(msg)
+
+
+        return containers
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_pod_logs(self, task: Task, save: bool = False) -> str:
         """Get the logs of a Kubernetes pod/container and return as a string.
 
         Parameters
@@ -737,9 +686,6 @@ class K8sCluster:
             The Task object or name of the task to get logs for
         save : bool, optional
             Whether to save the task logs to a file, by default False
-        related_containers: bool, optional
-            Whether to pull the associated containers logs of the
-            parent pod of the task container, by default False
         
         Returns
         -------
@@ -755,97 +701,26 @@ class K8sCluster:
         """
         if not isinstance(task, Task):
             raise Exception(f'pod/container task must be an instance of {Task}')
-        
-        # TODO: add another check if pod/container is PENDING OR RUNNING
+
+        logs = []
+        label = f"task_label={task.pod_name}"
+        watcher = watch.Watch()
 
         # some pods with third party tools like kubeflow or workflows
-        # can add suffix to the task name when they create the pod.
+        # can add suffix to the pod name when they create the pod.
         # so we need to get the pod name from the cluster based on the
         # pod name that is generated by Hydraa only. We use the task name
         # as an internal label of the pod/container (task) to get the logs.
 
-        logs = []
-        task_id = task.id
-        pod_name = task.pod_name
-        cmd = f'kubectl logs -l task_label='
+        _pods = client.CoreV1Api().list_namespaced_pod(namespace='default',
+                                                       label_selector=label)
+        _pod_name = _pods.items[0].metadata.name
 
-        # container task, then pull the logs of the container
-        if any([c in [task.type] for c in CONTAINER]):
-            if related_containers:
-                raise Exception('related containers is only supported'
-                                ' for pod tasks')
-            if hasattr(task, 'pod_name'):
-                cmd = cmd + f'{pod_name} -c {task.name}'
-                cmd+=f' --tail={MAX_POD_LOGS_LENGTH}'
-                out, err, ret = sh_callout(cmd, shell=True, kube=self)
-                logs.append(f'{task.name} logs:\n')
-                logs.append(out)
-            else:
-                raise Exception(f'{task.name} does not have a pod name')
-
-        # pod task, then the task name is the pod name
-        elif any([p in [task.type] for p in POD]) or not task.type:
-            # we pull all of the containers in the pod
-            if related_containers:
-                # get pods containers
-                _cmd = f"kubectl get pod {pod_name}"
-                _cmd +=" -o jsonpath='{.spec.containers[*].name}'"
-                out, err, ret = sh_callout(_cmd, shell=True, kube=self)
-                if not ret and out:
-                    # iterate on N containers and get logs
-                    containers = out.split(' ')
-                    if containers:
-                        for container in containers:
-                            # ignore background containers
-                            if not container.startswith('ctask'):
-                                continue
-                            _cmd = cmd
-                            _cmd = _cmd + f'{pod_name} -c {container}'
-                            _cmd+= f' --tail={MAX_POD_LOGS_LENGTH}'
-                            logs.append(f'{container} logs:\n')
-                            out, err, ret = sh_callout(_cmd, shell=True,
-                                                       kube=self)
-                            if not ret and out:
-                                logs.append(out)
-                            else:
-                                self.logger.error(f'failed to get {pod_name} logs: {err}')
-                                return
-                    else:
-                        self.logger.error(f'no related container(s) found for pod {pod_name}')
-                        return
-                # if no containers found in the pod then just use the pod name
-                elif not ret and not out:
-                    cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
-                    out, err, ret = sh_callout(cmd, shell=True, kube=self)
-                    if not ret and out:
-                        logs.append(f'{task.name} logs:\n')
-                        logs.append(out)
-                    else:
-                        self.logger.error(f'failed to get {pod_name} logs: {err}')
-                        return
-                # we have an error and we failed
-                else:
-                    self.logger.error(f'failed to get {pod_name} logs: {err}')
-                    return
-
-            # if related containers was not specified then we default to
-            # the first container in the pod or whatever logs we get.
-            else:
-                cmd = cmd + f'{pod_name} --tail={MAX_POD_LOGS_LENGTH}'
-                out, err, ret = sh_callout(cmd, shell=True, kube=self)
-                if not ret and out:
-                    logs.append(f'{task.name} logs:\n')
-                    logs.append(out)
-                else:
-                    self.logger.error(f'failed to get {pod_name} logs: {err}')
-                    return
-
-        # we failed for all cases
-        else:
-            raise Exception(f'Unknow task type {task.type}')
+        logs = watcher.stream(client.CoreV1Api().read_namespaced_pod_log,
+                              name=_pod_name, container=task.name, namespace='default')
 
         # check if we did get any logs
-        if logs and len(logs) > 1:
+        if logs:
             if save:
                 path = f'{self.sandbox}/{pod_name}.{task.name}.logs'
                 with open(path, 'w') as f:
@@ -854,7 +729,8 @@ class K8sCluster:
                 return path
             return '\n'.join(logs)
         else:
-            return None
+            self.logger.error(f'No logs were found for {task.name}')
+            return []
 
 
     # --------------------------------------------------------------------------
@@ -925,8 +801,8 @@ class K8sCluster:
         Dict[str, int]
             A dict with keys 'vcpus', 'memory', 'storage' indicating the 
             total allocatable amount of each resource in the cluster.
-
         """
+
         size = {'vcpus': 0, 'memory': 0, 'storage': 0}
         for vm in self.vms:
             vm_size = self.get_instance_resources(vm)
@@ -951,13 +827,14 @@ class K8sCluster:
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
-        # nothing to shutdown here besides closing
-        # the ssh channels and tunnels
+
+        self.terminate.set()
+
         if self.control_plane:
             self.control_plane.close()
-            if hasattr(self, '_tunnel'):
+            if hasattr(self, 'tunnel'):
                 if not self.control_plane.local:
-                    self._tunnel.stop()
+                    self.tunnel.stop()
 
 
 # --------------------------------------------------------------------------
@@ -1195,7 +1072,7 @@ class AKSCluster(K8sCluster):
     #
     def shutdown(self):
 
-        self.stop_event.set()
+        self.terminate.set()
         self._delete()
 
 
@@ -1429,8 +1306,7 @@ class EKSCluster(K8sCluster):
     #
     def _delete(self):
 
-        out, err, ret = sh_callout(f"eksctl get cluster {self.name}",
-                                   shell=True)
+        out, err, ret = sh_callout(f"eksctl get cluster {self.name}", shell=True)
         if not ret:
             print('deleteing EKS cluster: {0}'.format(self.name))
             cmd = f'eksctl delete cluster --name {self.name}'
@@ -1441,5 +1317,5 @@ class EKSCluster(K8sCluster):
     # --------------------------------------------------------------------------
     #
     def shutdown(self):
-        self.stop_event.set()
+        self.terminate.set()
         self._delete()
