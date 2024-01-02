@@ -57,7 +57,6 @@ BUSY = 'Busy'
 READY = 'Ready'
 LOCAL = 'local'
 MAX_PODS = 110
-MAX_POD_LOGS_LENGTH = 1000000
 
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
@@ -66,7 +65,6 @@ KUBE_CONTROL_HOSTS = os.getenv('KUBE_CONTROL_HOSTS', default=1)
 
 POD = ['pod', 'Pod']
 CONTAINER = ['container', 'Container']
-TASK_PREFIX = ['hydraa', 'ctask']
 
 
 # --------------------------------------------------------------------------
