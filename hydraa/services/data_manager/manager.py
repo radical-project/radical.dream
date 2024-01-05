@@ -14,6 +14,58 @@ else: RCLONE_PATH = shutil.which('rclone')
 # --------------------------------------------------------------------------
 #
 class DataManager:
+    """
+    DataManager: is a class that provides an interface to different data
+    management backends (we support RClone only for now). It provides a set
+    of methods that can be used to perform data management operations on the
+    backend.
+
+    The current data movement topology that we support is as follows:
+
+    --------------------              -----------------              --------------------
+    |                  |              |    Hydraa     |              |                  |
+    |    Data Source   | <---File---> |  Data Manager | <---File---> |    Data Target   |
+    |  HPC/Local/Cloud |              |               |              |  HPC/Local/Cloud |
+    --------------------              -----------------              --------------------
+
+
+    Future data movement topology that we will support is as follows:
+
+    --------------------             -----------------             --------------------
+    |                  |             |    Hydraa     |             |                  |
+    |    Data Source   |             |  Data Manager |             |    Data Target   |
+    |  HPC/Local/Cloud |             |               |             |  HPC/Local/Cloud |
+    --------------------             -----------------             --------------------
+             |                                |                               |
+             |                                |                               |
+             |<------------------------------CMD----------------------------->|
+             |                                |                               |
+    --------------------                      |                      --------------------
+    |     Cloud VM     |<-------------------Files------------------->|     Cloud VM     |
+    --------------------                                             --------------------
+
+    NOTE:
+    + Hydra Data Manager can be located on the same machine as the Data Source
+      or Data Target or on a different machine.
+
+    + Data Source and Data Target can be any of the following:
+      - Local File System
+      - SFTP File System
+      - Remote File System
+      - Cloud Storage (S3, azure, google drive, box, dropbox, s3, google cloud
+                       storage, LFS, NFS, etc.)
+
+    NOTE: to Setup RClone for the first time with OpenStack ObjectStore
+          (Swift) that uses S3api backend, you must:
+    1- create `openstack ec2 credentials`
+    2- check the creds. `openstack ec2 credentials list`
+    3- Where the values for aws_access_key_id and aws_secret_access_key
+       correspond to the aforementioned OpenStack fields access and secret,
+       respectively.
+
+    4- Make sure that there is no Region or LocationRestration entry in the
+       config file.
+    """
     def __init__(self, provider, remote):
         self.provider = provider
 
@@ -34,8 +86,8 @@ class DataManager:
             *args (str): Additional arguments for the RClone command.
 
         Raises:
-            RcloneException: If the RClone command execution returns a non-zero status.
-                The exception includes details about the error.
+            RcloneException: If the RClone command execution returns a non-zero
+                status. The exception includes details about the error.
 
         Returns:
             None
