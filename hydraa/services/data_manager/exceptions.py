@@ -7,8 +7,9 @@ class RcloneException(Exception):
     output - a dictionary from the call
     status - a status number
     """
-    def __init__(self, output, status):
+    def __init__(self, reason, output):
+        self.reason = reason
         self.output = output
-        self.status = status
-        message = f"Rclone command failed with status {status}: {output}"
+
+        message = f"rclone command failed: {reason}: {output}"
         super().__init__(message)
