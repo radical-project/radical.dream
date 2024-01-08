@@ -1,18 +1,18 @@
 
 from hydraa.cloud_vm import vm
 from hydraa.cloud_task.task import Task
-from hydraa import providers, services, JET2
+from hydraa import proxy, services, JET2
 
-from hydraa.services.data.volumes import PersistentVolumeClaim
-from hydraa.services.caas_manager.kubernetes.integrations.workflows import ContainerSetWorkflow
+from hydraa.services import CaasManager
+from hydraa.services.caas_manager.data_volumes import PersistentVolumeClaim
+from hydraa.services.caas_manager.kubernetes.operators import ContainerSetWorkflow
 
-provider_mgr = providers.proxy([JET2])
+provider_mgr = proxy([JET2])
 
 vm = vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='g3.medium',
                     image_id='Featured-Ubuntu20', min_count=2, max_count=2)
 
-caas_mgr = services.manager.CaasManager(provider_mgr, [vm], asynchronous=False)
-
+caas_mgr = CaasManager(provider_mgr, [vm], asynchronous=False)
 
 pvc = PersistentVolumeClaim(targeted_cluster=caas_mgr.Jet2Caas.cluster, accessModes='ReadWriteMany')
 

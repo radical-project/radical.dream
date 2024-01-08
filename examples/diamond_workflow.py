@@ -7,15 +7,17 @@
 #   D
 
 from hydraa.cloud_vm import vm
+from hydraa.services import CaasManager
 from hydraa.cloud_task.task import Task
-from hydraa import providers, services, JET2
+from hydraa import proxy, services, JET2
 
-provider_mgr = providers.proxy([JET2])
+
+provider_mgr = proxy([JET2])
 
 vms = [vm.OpenStackVM(launch_type='KVM', instance_id='m3.2xl', min_count=1, max_count=1),
        vm.OpenStackVM(launch_type='KVM', instance_id='m3.xl', min_count=2, max_count=2)]
 
-caas_mgr = services.manager.CaasManager(provider_mgr, vms, asynchronous=False)
+caas_mgr = CaasManager(provider_mgr, vms, asynchronous=False)
 
 
 def A():

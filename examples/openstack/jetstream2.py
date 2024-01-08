@@ -1,9 +1,10 @@
 from hydraa.cloud_vm import vm
+from hydraa.services import CaasManager
 from hydraa.cloud_task.task import Task
-from hydraa import providers, services, JET2
+from hydraa import JET2, proxy, services
 
 # before running this example, make sure you have a valid jetstream2 credential
-provider_mgr = providers.proxy([JET2])
+provider_mgr = proxy([JET2])
 
 # create a list of heterogeneous vms
 vms = [vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='m3.xl',
@@ -12,7 +13,7 @@ vms = [vm.OpenStackVM(provider=JET2, launch_type='KVM', flavor_id='m3.xl',
                       image_id='CentOS', min_count=2, max_count=2),]
 
 # start the Container as a Service manager
-caas_mgr = services.manager.CaasManager(provider_mgr, vms, asynchronous=False)
+caas_mgr = CaasManager(provider_mgr, vms, asynchronous=False)
 
 # create list of tasks
 tasks = []

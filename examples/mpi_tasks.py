@@ -13,10 +13,11 @@ $ python mpi_tasks.py
 
 from hydraa.cloud_vm import vm
 from hydraa.cloud_task.task import Task
-from hydraa import providers, services, AWS
-from hydraa.services.caas_manager.kubernetes.integrations.kubeflow import KubeflowMPILauncher
+from hydraa.services import CaasManager
+from hydraa import proxy, services, AWS
+from hydraa.services.caas_manager.kubernetes.operators import KubeflowMPILauncher
 
-provider_mgr = providers.proxy([AWS])
+provider_mgr = proxy([AWS])
 
 # set heterogeneous vms to start on the AWS EKS cluster
 vms = [vm.AwsVM(launch_type='EKS', instance_id='c5a.xlarge',
@@ -27,7 +28,7 @@ vms = [vm.AwsVM(launch_type='EKS', instance_id='c5a.xlarge',
 
 
 # create caas manager that manages the vms/AKS Cluster
-caas_mgr = services.manager.CaasManager(provider_mgr, vms, asynchronous=False)
+caas_mgr = CaasManager(provider_mgr, vms, asynchronous=False)
 
 # create single/multi-node mpi tasks
 mpi_tasks = []
