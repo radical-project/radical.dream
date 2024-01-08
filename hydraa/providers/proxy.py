@@ -8,11 +8,11 @@ from botocore.exceptions import InvalidConfigError
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource.resources import ResourceManagementClient
 
-AWS    = 'aws'
-CHI    = 'chameleon'
-JET2   = 'jetstream2'
-AZURE  = 'azure'
+AWS = 'aws'
+AZURE = 'azure'
+CHI = 'chameleon'
 GCLOUD = 'google'
+JET2 = 'jetstream2'
 LOCAL = 'local'
 
 
@@ -46,7 +46,9 @@ class proxy:
             else:
                 print('{0} provider not supported'.format(provider))
         
-        print('login to: {0} succeed'.format(self.loaded_providers))
+        if self.loaded_providers:
+            print('login to: {0} succeed'.format(self.loaded_providers))
+        
 
 
     def _verify_credentials(self, provider):
@@ -162,8 +164,3 @@ class proxy:
         
         if provider == LOCAL:
             return {}
-                
-
-    
-        
-        

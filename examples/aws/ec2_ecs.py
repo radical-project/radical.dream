@@ -1,13 +1,11 @@
-from hydraa.cloud_vm import vm
 from hydraa.services import CaasManager
-from hydraa.cloud_task.task import Task
-from hydraa import AWS, proxy, services
+from hydraa import proxy, AWS, Task, AwsVM
 
 provider_mgr = proxy([AWS])
 
-ec2vm = vm.AwsVM(launch_type='EC2', instance_id='t2.micro', min_count=1, max_count=1,
-                 image_id='ami-your-image-id', SubnetId='subnet-you-subnet-id',
-                 IamInstanceProfile={'Arn': 'arn:aws:iam::XXXXXXXX:instance-profile/ecsInstanceRole'})
+ec2vm = AwsVM(launch_type='EC2', instance_id='t2.micro', min_count=1, max_count=1,
+              image_id='ami-your-image-id', SubnetId='subnet-you-subnet-id',
+              IamInstanceProfile={'Arn': 'arn:aws:iam::XXXXXXXX:instance-profile/ecsInstanceRole'})
 
 caas_mgr = CaasManager(provider_mgr, [ec2vm], asynchronous=False)
 

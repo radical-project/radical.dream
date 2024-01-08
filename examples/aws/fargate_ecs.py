@@ -1,12 +1,9 @@
-from hydraa.cloud_vm import vm
 from hydraa.services import CaasManager
-from hydraa.cloud_task.task import Task
-from hydraa import AWS, proxy, services
+from hydraa import proxy, AWS, Task, AwsVM
 
 provider_mgr = proxy([AWS])
 
-
-fargate_vm = [vm.AwsVM(launch_type='FARGATE')]
+fargate_vm = [AwsVM(launch_type='FARGATE')]
 caas_mgr = CaasManager(provider_mgr, fargate_vm, asynchronous=False)
 
 # submit 10 tasks for each vm

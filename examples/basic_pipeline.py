@@ -5,15 +5,14 @@
 #         |
 #  post_process_train (X 1)
 
-from hydraa import proxy, AWS
-from hydraa.cloud_vm import vm
-from hydraa.cloud_task.task import Task
 from hydraa.services import CaasManager
+from hydraa import proxy, AZURE, Task, AzureVM
 
-provider_mgr = proxy([AWS])
 
-vms = [vm.AzureVM(launch_type='AKS', instance_id='Standard_A8m_v2', min_count=1, max_count=1),
-       vm.AzureVM(launch_type='AKS', instance_id='Standard_A4m_v2', min_count=2, max_count=2)]
+provider_mgr = proxy([AZURE])
+
+vms = [AzureVM(launch_type='AKS', instance_id='Standard_A8m_v2', min_count=1, max_count=1),
+       AzureVM(launch_type='AKS', instance_id='Standard_A4m_v2', min_count=2, max_count=2)]
 
 caas_mgr = CaasManager(provider_mgr, vms, asynchronous=False)
 
