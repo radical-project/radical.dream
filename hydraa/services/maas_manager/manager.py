@@ -1,13 +1,17 @@
 import os
+import csv
 import time
 import threading as mt
 from datetime import datetime, timedelta
 
-from hydraa.services.maas_manager.utils.misc import sh_callout
-from hydraa.services.maas_manager.utils.misc import download_files
-from hydraa.services.maas_manager.utils.misc import dump_multiple_yamls
-from hydraa.services.maas_manager.utils.misc import load_multiple_yamls
+from hydraa.services.caas_manager.utils.misc import sh_callout
+from hydraa.services.caas_manager.utils.misc import download_files
+from hydraa.services.caas_manager.utils.misc import dump_multiple_yamls
+from hydraa.services.caas_manager.utils.misc import load_multiple_yamls
 
+
+# --------------------------------------------------------------------------
+#
 class ResourceWatcher(mt.Thread):
 
 
@@ -32,20 +36,21 @@ class ResourceWatcher(mt.Thread):
         self._stop_event.set()
 
 
-
+# --------------------------------------------------------------------------
+#
 class KuberentesResourceWatcher(ResourceWatcher):
 
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, cluster, logger):
+    def __init__(self, cluster, logger, watch_pods=False):
 
         mt.Thread.__init__(self, name='KuberentesResourceWatcher')
         self.daemon = True
         self.logger = logger
         self.cluster = cluster
         self.terminate = mt.Event()
-        self.watcher_output_path = self.cluster.sandbox + '/kuberentes_watcher.csv'
+        self.watcher_output_path = self.cluster.sandbox + '/nodes_resources.csv'
 
 
     # --------------------------------------------------------------------------
@@ -81,6 +86,13 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         out, err, ret = sh_callout(f'kubectl apply -f {fpath}', shell=True,
                                    kube=self.cluster)
+        
+        if ret:
+            raise RuntimeError(f'Error starting metrics server: {err}')
+
+        # starts the pod resources watcher thread
+        if self.watch_pods:
+            self._watch_pods_resources()
 
 
     # --------------------------------------------------------------------------
@@ -93,17 +105,63 @@ class KuberentesResourceWatcher(ResourceWatcher):
         loc = os.path.join(os.path.dirname(__file__))
         kube_resource_watcher = os.path.join(loc, 'kuberentes_watcher.sh')
 
-        cmd ='chmod +x kuberentes_watcher.sh && '
-        cmd += f'./kuberentes_watcher.sh -fp {self.watcher_output_path} &'
+        cmd =f'chmod +x {kube_resource_watcher} && '
+        cmd += f'{kube_resource_watcher} -f {self.watcher_output_path} &'
 
-        out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster, munch=True)
+        out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
 
         if ret:
             raise RuntimeError(f'Internal Error from KuberentesResourceWatcher: {err}')
 
+        # FIXME: how to get the pid of the process started in the background?
+        # in order to kill it when the service is stopped
         self.watcher_pid = out
 
-        self.logger.info(f'KuberentesResourceWatcher started on {self.cluster.name}')
+        self.logger.info(f'Kuberentes Resource Watcher started on {self.cluster.name}')
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _watch_pods_resources(self):
+
+        v1 = client.CoreV1Api()
+        api = client.CustomObjectsApi()
+        config.load_kube_config(self.cluster.kube_config)
+
+        header = ['time', 'pod_name', 'container_name','cpu_usage_n', 'mem_usage_mb']
+
+        output_file = self.cluster.sandbox + '/pods_resources.csv'
+
+        writer = None
+        with open(output_file, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(header)
+
+        def watch(writer):
+            while not self.terminate.is_set():
+                for ns in ['default']:
+                    resource = api.list_namespaced_custom_object(namespace=ns,
+                                                                 plural="pods",
+                                                                 version="v1beta1",
+                                                                 group="metrics.k8s.io")
+                    for pod in resource["items"]:
+                        pod_name = pod['metadata']['name']
+                        if not pod_name.startswith('hydraa'):
+                            continue
+
+                        for idx, container in enumerate(pod['containers']):
+                            container_name = container['name']
+                            cpu_usage_n = container['usage']['cpu']
+                            mem_usage_mb = container['usage']['memory']
+
+                            write.writerow(time.time(), pod_name, container_name,
+                                           cpu_usage_n, mem_usage_mb)
+
+                time.sleep(0.5)
+
+        watcher = mt.Thread(target=watch, args=(writer,))
+        watcher.start()
+        self.logger.info('Kuberentes Pods Watcher started on {self.cluster.name}')
 
 
     # --------------------------------------------------------------------------

@@ -66,7 +66,8 @@ function kusage() {
 
         echo -e "$(date +%s),AVG,NA,NA,${avg_percent_cpu_req},${avg_percent_mem_req},${avg_percent_cpu_lim},${avg_percent_mem_lim},${avg_percent_cpu_usage},${avg_percent_mem_usage}" >> "$output_file"
 
-        sleep 10
+        # register the metrics every 2 seconds
+        sleep 2
 
     done
 
