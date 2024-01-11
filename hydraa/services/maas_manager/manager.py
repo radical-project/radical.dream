@@ -76,10 +76,10 @@ class KuberentesResourceWatcher(ResourceWatcher):
         for yaml in yamls:
             if yaml['kind'] == 'Deployment':
                 break
-        
+
         command = ['/metrics-server', '--kubelet-insecure-tls',
                    '--kubelet-preferred-address-types=InternalIP']
-        
+
         yaml['spec']['template']['spec']['containers'][0]['command'] = command
 
         dump_multiple_yamls(yamls, fpath)
@@ -149,7 +149,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
                         if not pod_name.startswith('hydraa'):
                             continue
 
-                        for idx, container in enumerate(pod['containers']):
+                        for container in pod['containers']:
                             container_name = container['name']
                             cpu_usage_n = container['usage']['cpu']
                             mem_usage_mb = container['usage']['memory']
@@ -161,7 +161,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         watcher = mt.Thread(target=watch, args=(writer,))
         watcher.start()
-        self.logger.info('Kuberentes Pods Watcher started on {self.cluster.name}')
+        self.logger.info(f'Kuberentes Pods Watcher started on {self.cluster.name}')
 
 
     # --------------------------------------------------------------------------
@@ -169,4 +169,5 @@ class KuberentesResourceWatcher(ResourceWatcher):
     def stop(self):
         cmd = f'kill -9 {self.watcher_pid}'
         sh_callout(cmd, shell=True)
+        self.terminate.set()
         self.stop()

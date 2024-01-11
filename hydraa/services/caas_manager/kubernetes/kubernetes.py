@@ -604,7 +604,7 @@ class K8sCluster:
 
             try:
                 for event in w.stream(client.CoreV1Api().list_namespaced_pod,
-                                      'default', _request_timeout=90000000):
+                                      'default', _request_timeout=900000):
 
                     pod = event['object']
 
