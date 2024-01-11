@@ -2,7 +2,8 @@ import os
 import csv
 import time
 import threading as mt
-from datetime import datetime, timedelta
+
+from kubernetes import client, config
 
 from hydraa.services.caas_manager.utils.misc import sh_callout
 from hydraa.services.caas_manager.utils.misc import download_files
