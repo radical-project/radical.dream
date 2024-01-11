@@ -43,13 +43,14 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
     # --------------------------------------------------------------------------
     #
-    def __init__(self, cluster, logger, watch_pods=False):
+    def __init__(self, cluster, logger, watch_pods_resources=False):
 
         mt.Thread.__init__(self, name='KuberentesResourceWatcher')
         self.daemon = True
         self.logger = logger
         self.cluster = cluster
         self.terminate = mt.Event()
+        self.watch_pods_resources = watch_pods_resources
         self.watcher_output_path = self.cluster.sandbox + '/nodes_resources.csv'
 
 
@@ -90,10 +91,6 @@ class KuberentesResourceWatcher(ResourceWatcher):
         if ret:
             raise RuntimeError(f'Error starting metrics server: {err}')
 
-        # starts the pod resources watcher thread
-        if self.watch_pods:
-            self._watch_pods_resources()
-
 
     # --------------------------------------------------------------------------
     #
@@ -118,6 +115,10 @@ class KuberentesResourceWatcher(ResourceWatcher):
         self.watcher_pid = out
 
         self.logger.info(f'Kuberentes Resource Watcher started on {self.cluster.name}')
+    
+        # starts the pod resources watcher thread
+        if self.watch_pods_resources:
+            self._watch_pods_resources()
 
 
     # --------------------------------------------------------------------------
