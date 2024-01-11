@@ -1,8 +1,8 @@
 import os
 
-from ..caas_manager.utils.misc import dump_yaml
-from ..caas_manager.utils.misc import sh_callout
-from ..caas_manager.utils.misc import load_multiple_yamls
+from ...caas_manager.utils.misc import dump_yaml
+from ...caas_manager.utils.misc import sh_callout
+from ...caas_manager.utils.misc import load_multiple_yamls
 
 PV = 'PersistentVolume'
 PVC = 'PersistentVolumeClaim'
@@ -32,8 +32,7 @@ class Volume:
     # --------------------------------------------------------------------------
     #
     def __init__(self, targeted_cluster, kind, accessModes,
-                 storageClassName='standard', name='hydraa',
-                size='1Gi'):
+                 storageClassName='standard', name='hydraa', size='1Gi'):
 
         self.kind = kind
         self.name = '{0}-{1}'.format(name, self.kind.lower())
@@ -57,7 +56,7 @@ class Volume:
 
         loc = os.path.join(os.path.dirname(__file__))
         loc += '/templates/volume-templates.yaml'
-        
+
         v_templates = load_multiple_yamls(loc)
 
         # we have multiple templates, so based on the 
@@ -208,10 +207,11 @@ class PersistentVolumeClaim(Volume):
         return pvc_file
 
 
+# --------------------------------------------------------------------------
+#
 class EphemeralVolume(Volume):
     def __init__(self, targeted_cluster, kind, accessModes,
-                 storageClassName='standard', name='hydraa',
-                 size='1Gi'):
+                 storageClassName='standard', name='hydraa', size='1Gi'):
         super().__init__(targeted_cluster, kind, accessModes,
                          storageClassName, name, size)
 

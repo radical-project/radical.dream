@@ -722,7 +722,7 @@ class K8sCluster:
         # check if we did get any logs
         if logs:
             if save:
-                path = f'{self.sandbox}/{pod_name}.{task.name}.logs'
+                path = f'{self.sandbox}/{task.pod_name}.{task.name}.logs'
                 with open(path, 'w') as f:
                     for log in logs:
                         f.write(log)

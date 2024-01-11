@@ -5,17 +5,16 @@
 #         |
 #  post_process_train (X 1)
 
+from hydraa.services import CaasManager
+from hydraa import proxy, AZURE, Task, AzureVM
 
-from hydraa.cloud_vm import vm
-from hydraa.cloud_task.task import Task
-from hydraa import providers, services, AWS
 
-provider_mgr = providers.proxy([AWS])
+provider_mgr = proxy([AZURE])
 
-vms = [vm.AzureVM(launch_type='AKS', instance_id='Standard_A8m_v2', min_count=1, max_count=1),
-       vm.AzureVM(launch_type='AKS', instance_id='Standard_A4m_v2', min_count=2, max_count=2)]
+vms = [AzureVM(launch_type='AKS', instance_id='Standard_A8m_v2', min_count=1, max_count=1),
+       AzureVM(launch_type='AKS', instance_id='Standard_A4m_v2', min_count=2, max_count=2)]
 
-caas_mgr = services.manager.CaasManager(provider_mgr, vms, asynchronous=False)
+caas_mgr = CaasManager(provider_mgr, vms, asynchronous=False)
 
 # define a task to train a tensorflow module
 def train_tf_module():
