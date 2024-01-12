@@ -102,25 +102,55 @@ class KuberentesResourceWatcher(ResourceWatcher):
         self._start_mterics_server()
         self.logger.info(f'Metrics server started on {self.cluster.name}')
 
-        loc = os.path.join(os.path.dirname(__file__))
-        kube_resource_watcher = os.path.join(loc, 'kuberentes_watcher.sh')
-
-        cmd =f'chmod +x {kube_resource_watcher} && '
-        cmd += f'nohup {kube_resource_watcher} -f '
-        cmd += f'{self.watcher_output_path} > /dev/null 2>&1 &'
-
-        out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
-
-        if ret:
-            raise RuntimeError(f'Internal Error from KuberentesResourceWatcher: {err}')
-
-        # FIXME: how to terminate the Resource Watcher as it is shell?
-
-        self.logger.info(f'Kuberentes Cluster Resource Watcher started on {self.cluster.name}')
+        self._watch_nodes_resources()
     
         # starts the pod resources watcher thread
         if self.watch_pods_resources:
             self._watch_pods_resources()
+
+
+    # --------------------------------------------------------------------------
+    #
+    def _watch_nodes_resources(self):
+        
+        v1 = client.CoreV1Api()
+        api = client.CustomObjectsApi()
+        config.load_kube_config(self.cluster.kube_config)  
+
+        header = ['TimeStamp', 'NodeName','CPUsCapacity', 'CPUsUsage(M)',
+                  'MemoryCapacity(Ki)', 'MemoryUsage(Ki)']
+
+        def _watch():
+
+            self.write_to_csv(header, self.watcher_output_path, single_row=True)
+
+            while not self.terminate.is_set():
+                rows_to_write = []
+                nodes = custom_api.list_cluster_custom_object(plural="nodes",
+                                                              version="v1beta1",
+                                                              group="metrics.k8s.io")
+                for node in nodes['items']:
+                    node_name = node['metadata']['name']
+                    cpu_usage = node['usage']['cpu']
+                    memory_usage = node['usage']['memory']
+
+                    node = v1.read_node_status(node_name)
+                    cpu_capacity = node.status.capacity['cpu']
+                    memory_capacity = node.status.capacity['memory']
+
+                    rows_to_write.append([time.time(), node_name, cpu_capacity,
+                                          cpu_usage, memory_capacity, memory_usage])
+
+                if rows_to_write:
+                    self.write_to_csv(rows_to_write, self.watcher_output_path)
+
+                time.sleep(2)
+
+        watcher = mt.Thread(target=_watch, name='NodesResourceWatcher', daemon=True)
+        watcher.start()
+
+        self.logger.info(f'nodes resource watcher thread started on {self.cluster.name}')
+
 
 
     # --------------------------------------------------------------------------
@@ -136,26 +166,9 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
-        def write_to_csv(rows_to_write, output_file, single_row=False):
-            """
-            writes the rows to the csv file
-
-            :param rows_to_write: list of rows (lists) to write
-            :param output_file: path to the output file
-            :param single_row: if True, writes a single row to the csv file
-
-            """
-            with open(output_file, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                if single_row:
-                    writer.writerow(rows_to_write)
-                else:
-                    writer.writerows(rows_to_write)
-
-
         def _watch():
 
-            write_to_csv(header, output_file, single_row=True)
+            self.write_to_csv(header, output_file, single_row=True)
 
             while not self.terminate.is_set():
                 rows_to_write = []
@@ -194,11 +207,31 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                   cpu_usage_n, mem_usage_mb])
 
                 if rows_to_write:
-                    write_to_csv(rows_to_write, output_file)
+                    self.write_to_csv(rows_to_write, output_file)
 
                 time.sleep(1)
 
         watcher = mt.Thread(target=_watch, name='PodsResourceWatcher', daemon=True)
         watcher.start()
 
-        self.logger.info(f'pods Resource Watcher thread started on {self.cluster.name}')
+        self.logger.info(f'pods resource watcher thread started on {self.cluster.name}')
+
+
+
+    # --------------------------------------------------------------------------
+    #
+    def write_to_csv(self, rows_to_write, output_file, single_row=False):
+        """
+        writes the rows to the csv file
+
+        :param rows_to_write: list of rows (lists) to write
+        :param output_file: path to the output file
+        :param single_row: if True, writes a single row to the csv file
+
+        """
+        with open(output_file, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            if single_row:
+                writer.writerow(rows_to_write)
+            else:
+                writer.writerows(rows_to_write)
