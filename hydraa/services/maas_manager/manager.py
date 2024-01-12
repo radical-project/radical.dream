@@ -115,7 +115,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
         # in order to kill it when the service is stopped
         self.watcher_pid = out
 
-        self.logger.info(f'Kuberentes Resource Watcher started on {self.cluster.name}')
+        self.logger.info(f'Kuberentes Cluster Resource Watcher started on {self.cluster.name}')
     
         # starts the pod resources watcher thread
         if self.watch_pods_resources:
@@ -134,13 +134,27 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
-        writer = None
-        with open(output_file, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(header)
+        def write_to_csv(rows_to_write, output_file):
+            """
+            writes the rows to the csv file
 
-        def watch(writer):
+            :param rows_to_write: list of rows (lists) to write
+            :param output_file: path to the output file
+
+            """
+            with open(output_file, 'a', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                if len(rows_to_write) == 1:
+                    writer.writerow(rows_to_write)
+                else:
+                    writer.writerows(rows_to_write)
+
+        def watch():
+
+            write_to_csv([header], output_file)
+
             while not self.terminate.is_set():
+                rows_to_write = []
                 for ns in ['default']:
                     resource = api.list_namespaced_custom_object(namespace=ns,
                                                                  plural="pods",
@@ -156,14 +170,17 @@ class KuberentesResourceWatcher(ResourceWatcher):
                             cpu_usage_n = container['usage']['cpu']
                             mem_usage_mb = container['usage']['memory']
 
-                            write.writerow(time.time(), pod_name, container_name,
-                                           cpu_usage_n, mem_usage_mb)
+                            rows_to_write.append([time.time(), pod_name, container_name,
+                                                  cpu_usage_n, mem_usage_mb])
 
-                time.sleep(0.5)
+                if rows_to_write:
+                    write_to_csv(rows_to_write, output_file)
 
-        watcher = mt.Thread(target=watch, args=(writer,))
+                time.sleep(1)
+
+        watcher = mt.Thread(target=watch)
         watcher.start()
-        self.logger.info(f'Kuberentes Pods Watcher started on {self.cluster.name}')
+        self.logger.info(f'Kuberentes Pods Resource Watcher started on {self.cluster.name}')
 
 
     # --------------------------------------------------------------------------
