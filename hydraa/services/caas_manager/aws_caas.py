@@ -10,6 +10,8 @@ import atexit
 import botocore
 import threading
 import itertools as iter
+
+from queue import Empty
 from datetime import datetime
 from collections import OrderedDict
 
@@ -912,16 +914,13 @@ class AwsCaas:
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
 
-                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
-
                         if not task:
                             raise RuntimeError(f'task {cont.name} does not exist, existing')
 
-                        if task.name in finshed:
+                        if task.name in finshed or not status:
                             continue
 
-                        if not status:
-                            continue
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if status == 'Completed':
                             if task.running():
@@ -964,7 +963,7 @@ class AwsCaas:
                             termination_msg = (0, AWS)
                             self.outgoing_q.put(termination_msg)
 
-            except queue.Empty:
+            except Empty:
                 time.sleep(0.1)
                 continue
 

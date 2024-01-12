@@ -130,11 +130,11 @@ class KuberentesResourceWatcher(ResourceWatcher):
         api = client.CustomObjectsApi()
         config.load_kube_config(self.cluster.kube_config)
 
-        header = ['time', 'pod_name', 'container_name','cpu_usage_n', 'mem_usage_mb']
+        header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsageN', 'MemoryUsageMB']
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
-        def write_to_csv(rows_to_write, output_file):
+        def write_to_csv(rows_to_write, output_file, single_row=False):
             """
             writes the rows to the csv file
 
@@ -144,14 +144,15 @@ class KuberentesResourceWatcher(ResourceWatcher):
             """
             with open(output_file, 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                if len(rows_to_write) == 1:
+                if single_row:
                     writer.writerow(rows_to_write)
                 else:
                     writer.writerows(rows_to_write)
 
+
         def watch():
 
-            write_to_csv([header], output_file)
+            write_to_csv([header], output_file, single_row=True)
 
             while not self.terminate.is_set():
                 rows_to_write = []
@@ -174,6 +175,8 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                   cpu_usage_n, mem_usage_mb])
 
                 if rows_to_write:
+                    if len(rows_to_write) == 1:
+                        rows_to_write = rows_to_write[0]
                     write_to_csv(rows_to_write, output_file)
 
                 time.sleep(1)

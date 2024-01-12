@@ -9,6 +9,7 @@ import atexit
 import datetime
 import threading
 
+from queue import Empty
 from collections import OrderedDict
 from azure.batch import BatchServiceClient
 from azure.identity import DefaultAzureCredential
@@ -485,16 +486,13 @@ class AzureCaas:
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
 
-                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
-
                         if not task:
                             raise RuntimeError(f'task {cont.name} does not exist, existing')
 
-                        if task.name in finshed:
+                        if task.name in finshed or not status:
                             continue
 
-                        if not status:
-                            continue
+                        msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if status == 'Completed':
                             if task.running():
@@ -537,7 +535,7 @@ class AzureCaas:
                             termination_msg = (0, AZURE)
                             self.outgoing_q.put(termination_msg)
 
-            except queue.Empty:
+            except Empty:
                 time.sleep(0.1)
                 continue
 
