@@ -72,6 +72,12 @@ class KuberentesResourceWatcher(ResourceWatcher):
     #
     def _start_mterics_server(self):
 
+        retry_count = 0
+        max_retries = 60
+        v1 = client.CoreV1Api()
+        api = client.CustomObjectsApi()
+        config.load_kube_config(self.cluster.kube_config)  
+
         file = 'https://github.com/kubernetes-sigs/metrics-server/'
         file+= 'releases/latest/download/components.yaml'
         fpath = download_files(urls=[file], destination=self.cluster.sandbox)[0]
@@ -92,7 +98,29 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                    kube=self.cluster)
 
         if ret:
-            raise RuntimeError(f'Error starting metrics server: {err}')
+            raise RuntimeError(f'Error installing or starting metrics server: {err}')
+
+        # wait for the metrics server to be ready
+        while True:
+            try:
+                _ = api.list_cluster_custom_object(plural="nodes",
+                                                   version="v1beta1",
+                                                   group="metrics.k8s.io")
+            except ApiException as e:
+                # https://github.com/kubernetes-client/python/issues/1173
+                if e.status == 503:
+                    if retry_count < max_retries:
+                        self.logger.warning('Metrics server not ready yet, retrying in 1s')
+                        time.sleep(1)
+                        retry_count += 1
+                        continue
+                    else:
+                        self.logger.error('Maximum retry count (60) reached. Metrics server not available.')
+                        raise
+                else:
+                    raise
+
+            break
 
 
     # --------------------------------------------------------------------------
@@ -126,9 +154,18 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
             while not self.terminate.is_set():
                 rows_to_write = []
-                nodes = custom_api.list_cluster_custom_object(plural="nodes",
-                                                              version="v1beta1",
-                                                              group="metrics.k8s.io")
+                try:
+                    nodes = api.list_cluster_custom_object(plural="nodes",
+                                                        version="v1beta1",
+                                                        group="metrics.k8s.io")
+
+                except urllib3.exceptions.MaxRetryError:
+                    if self.terminate.is_set():
+                        self.logger.trace(f'nodes resource watcher thread recieved stop event')
+                        break
+                    else:
+                        raise
+
                 for node in nodes['items']:
                     node_name = node['metadata']['name']
                     cpu_usage = node['usage']['cpu']
@@ -150,7 +187,6 @@ class KuberentesResourceWatcher(ResourceWatcher):
         watcher.start()
 
         self.logger.info(f'nodes resource watcher thread started on {self.cluster.name}')
-
 
 
     # --------------------------------------------------------------------------
@@ -179,19 +215,12 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                                      version="v1beta1",
                                                                      group="metrics.k8s.io")
 
-                    except (ApiException, urllib3.exceptions.MaxRetryError) as e:
-                        # https://github.com/kubernetes-client/python/issues/1173
-                        if isinstance(e, ApiException) and e.status == 503:
-                            self.logger.warning('Metrics server not available yet, retrying in 1s')
-                            time.sleep(1)
-                            continue
-
-                        elif self.terminate.is_set():
-                            self.logger.trace(f'Pods resource watcher thread recieved stop event')
+                    except urllib3.exceptions.MaxRetryError:
+                        if self.terminate.is_set():
+                            self.logger.trace(f'pods resource watcher thread recieved stop event')
                             break
-
                         else:
-                            raise e
+                            raise
 
                     for pod in resource["items"]:
                         pod_name = pod['metadata']['name']
