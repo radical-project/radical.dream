@@ -1,6 +1,7 @@
 import os
 import csv
 import time
+import urllib3
 import threading as mt
 
 from kubernetes import client, config
@@ -38,6 +39,7 @@ class ResourceWatcher(mt.Thread):
         self.terminate.set()
 
 
+
 # --------------------------------------------------------------------------
 #
 class KuberentesResourceWatcher(ResourceWatcher):
@@ -51,7 +53,6 @@ class KuberentesResourceWatcher(ResourceWatcher):
         self.daemon = True
         self.logger = logger
         self.cluster = cluster
-        self.terminate = mt.Event()
         self.watch_pods_resources = watch_pods_resources
         self.watcher_output_path = self.cluster.sandbox + '/nodes_resources.csv'
 
@@ -130,7 +131,8 @@ class KuberentesResourceWatcher(ResourceWatcher):
         api = client.CustomObjectsApi()
         config.load_kube_config(self.cluster.kube_config)
 
-        header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsage(M)', 'MemoryUsage(Ki)']
+        header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsage(M)',
+                  'MemoryUsage(Ki)']
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
@@ -140,6 +142,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
             :param rows_to_write: list of rows (lists) to write
             :param output_file: path to the output file
+            :param single_row: if True, writes a single row to the csv file
 
             """
             with open(output_file, 'a', newline='') as csvfile:
@@ -150,7 +153,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
                     writer.writerows(rows_to_write)
 
 
-        def watch():
+        def _watch():
 
             write_to_csv(header, output_file, single_row=True)
 
@@ -162,11 +165,18 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                                      plural="pods",
                                                                      version="v1beta1",
                                                                      group="metrics.k8s.io")
-                    except ApiException as e:
+
+                    except (ApiException, urllib3.exceptions.MaxRetryError) as e:
                         # https://github.com/kubernetes-client/python/issues/1173
-                        if e.status == 503:
-                            self.logger.warning('Metrics server not available yet, retrying...')
+                        if isinstance(e, ApiException) and e.status == 503:
+                            self.logger.warning('Metrics server not available yet, retrying in 1s')
+                            time.sleep(1)
                             continue
+
+                        elif self.terminate.is_set():
+                            self.logger.trace(f'Pods resource watcher thread recieved stop event')
+                            break
+
                         else:
                             raise e
 
@@ -188,12 +198,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
                 time.sleep(1)
 
-        watcher = mt.Thread(target=watch)
+        watcher = mt.Thread(target=_watch, name='PodsResourceWatcher', daemon=True)
         watcher.start()
-        self.logger.info(f'Kuberentes Pods Resource Watcher started on {self.cluster.name}')
 
-
-    # --------------------------------------------------------------------------
-    #
-    def stop(self):
-        self.stop()
+        self.logger.info(f'pods Resource Watcher thread started on {self.cluster.name}')

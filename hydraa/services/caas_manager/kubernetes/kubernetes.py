@@ -619,15 +619,15 @@ class K8sCluster:
 
             except (urllib3.exceptions.ProtocolError, urllib3.exceptions.httplib_IncompleteRead) as e:
                 if self.terminate.is_set():
-                    self.logger.trace(f'watcher thread recieved stop event')
+                    self.logger.trace(f'Pods events watcher thread recieved stop event')
                     w.stop()
                 else:
                     raise e
 
-        watcher = mt.Thread(target=_watch, daemon=True, name='KubeEventWatcher')
+        watcher = mt.Thread(target=_watch, daemon=True, name='PodsEventWatcher')
         watcher.start()
 
-        self.logger.trace(f'watcher thread {watcher.ident} started on {self.name}')
+        self.logger.trace(f'Pods events watcher thread {watcher.ident} started on {self.name}')
 
 
     # --------------------------------------------------------------------------
