@@ -21,7 +21,7 @@ do
 done
 
 
-echo -e "TimeStamp,NodeID,CPUsAllocatable,MemoryAllocatable,CPUsRequest,MemoryRequest,CPUsLimit,MemoryLimit,CPUsUsage,MemoryUsage" > "$output_file"
+echo -e "TimeStamp,NodeID,CPUsAllocatable(M),MemoryAllocatable(Ki),CPUsRequest(M),MemoryRequest(Ki),CPUsLimit(M),MemoryLimit(Ki),CPUsUsage(%),MemoryUsage(%)" > "$output_file"
 
 
 function kusage() {
@@ -43,7 +43,7 @@ function kusage() {
             local percent_mem_lim=$(echo $requests | awk '{print $5}')
             local percent_cpu_usage=$(kubectl top nodes | grep $node | awk '{print $3}' | rev | cut -c2- | rev)
             local percent_mem_usage=$(kubectl top nodes | grep $node | awk '{print $5}' | rev | cut -c2- | rev)
-            echo -e "$(date +%s),$node,${allocatable_cpu}m,${allocatable_mem}Ki,${percent_cpu_req},${percent_mem_req},${percent_cpu_lim},${percent_mem_lim},${percent_cpu_usage},${percent_mem_usage}" >> "$output_file"
+            echo -e "$(date +%s),$node,${allocatable_cpu},${allocatable_mem},${percent_cpu_req},${percent_mem_req},${percent_cpu_lim},${percent_mem_lim},${percent_cpu_usage},${percent_mem_usage}" >> "$output_file"
 
 
             node_count=$((node_count + 1))

@@ -4,6 +4,7 @@ import time
 import threading as mt
 
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from hydraa.services.caas_manager.utils.misc import sh_callout
 from hydraa.services.caas_manager.utils.misc import download_files
@@ -34,7 +35,7 @@ class ResourceWatcher(mt.Thread):
     # --------------------------------------------------------------------------
     #
     def stop(self):
-        self._stop_event.set()
+        self.terminate.set()
 
 
 # --------------------------------------------------------------------------
@@ -46,7 +47,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
     #
     def __init__(self, cluster, logger, watch_pods_resources=False):
 
-        mt.Thread.__init__(self, name='KuberentesResourceWatcher')
+        super().__init__('KuberentesResourceWatcher')
         self.daemon = True
         self.logger = logger
         self.cluster = cluster
@@ -88,7 +89,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         out, err, ret = sh_callout(f'kubectl apply -f {fpath}', shell=True,
                                    kube=self.cluster)
-        
+
         if ret:
             raise RuntimeError(f'Error starting metrics server: {err}')
 
@@ -104,16 +105,15 @@ class KuberentesResourceWatcher(ResourceWatcher):
         kube_resource_watcher = os.path.join(loc, 'kuberentes_watcher.sh')
 
         cmd =f'chmod +x {kube_resource_watcher} && '
-        cmd += f'{kube_resource_watcher} -f {self.watcher_output_path} &'
+        cmd += f'nohup {kube_resource_watcher} -f '
+        cmd += f'{self.watcher_output_path} > /dev/null 2>&1 &'
 
         out, err, ret = sh_callout(cmd, shell=True, kube=self.cluster)
 
         if ret:
             raise RuntimeError(f'Internal Error from KuberentesResourceWatcher: {err}')
 
-        # FIXME: how to get the pid of the process started in the background?
-        # in order to kill it when the service is stopped
-        self.watcher_pid = out
+        # FIXME: how to terminate the Resource Watcher as it is shell?
 
         self.logger.info(f'Kuberentes Cluster Resource Watcher started on {self.cluster.name}')
     
@@ -130,7 +130,7 @@ class KuberentesResourceWatcher(ResourceWatcher):
         api = client.CustomObjectsApi()
         config.load_kube_config(self.cluster.kube_config)
 
-        header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsageN', 'MemoryUsageMB']
+        header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsage(M)', 'MemoryUsage(Ki)']
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
@@ -152,15 +152,24 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         def watch():
 
-            write_to_csv([header], output_file, single_row=True)
+            write_to_csv(header, output_file, single_row=True)
 
             while not self.terminate.is_set():
                 rows_to_write = []
                 for ns in ['default']:
-                    resource = api.list_namespaced_custom_object(namespace=ns,
-                                                                 plural="pods",
-                                                                 version="v1beta1",
-                                                                 group="metrics.k8s.io")
+                    try:
+                        resource = api.list_namespaced_custom_object(namespace=ns,
+                                                                     plural="pods",
+                                                                     version="v1beta1",
+                                                                     group="metrics.k8s.io")
+                    except ApiException as e:
+                        # https://github.com/kubernetes-client/python/issues/1173
+                        if e.status == 503:
+                            self.logger.warning('Metrics server not available yet, retrying...')
+                            continue
+                        else:
+                            raise e
+
                     for pod in resource["items"]:
                         pod_name = pod['metadata']['name']
                         if not pod_name.startswith('hydraa'):
@@ -175,8 +184,6 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                   cpu_usage_n, mem_usage_mb])
 
                 if rows_to_write:
-                    if len(rows_to_write) == 1:
-                        rows_to_write = rows_to_write[0]
                     write_to_csv(rows_to_write, output_file)
 
                 time.sleep(1)
@@ -189,7 +196,4 @@ class KuberentesResourceWatcher(ResourceWatcher):
     # --------------------------------------------------------------------------
     #
     def stop(self):
-        cmd = f'kill -9 {self.watcher_pid}'
-        sh_callout(cmd, shell=True)
-        self.terminate.set()
         self.stop()
