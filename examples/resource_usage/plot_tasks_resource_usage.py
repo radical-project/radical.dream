@@ -2,7 +2,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-df = pd.read_csv('hydraa.sandbox/provider/pods_resources.csv')
+df = pd.read_csv('resource_usage_files/stress_ng_hydraa_pods.csv')
 
 # Convert CPUsUsage and MemoryUsage columns to numeric (remove 'n' and 'Ki' and convert to appropriate units)
 df['CPUsUsage(M)'] = pd.to_numeric(df['CPUsUsage(M)'].str.rstrip('n'), errors='coerce') / 1e6  # Convert nanoseconds to milliseconds
