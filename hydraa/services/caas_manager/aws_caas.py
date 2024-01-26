@@ -887,7 +887,7 @@ class AwsCaas:
         failed, done, running = 0, 0, 0
 
         if self.launch_type in EKS:
-            queue = self.cluster.return_queue
+            queue = self.cluster.result_queue
 
         else:
             # set the queue and start the ecs watcher thread

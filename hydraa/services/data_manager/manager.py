@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import threading
 
 from .exceptions import RcloneException
 from ..caas_manager.utils.misc import sh_callout
@@ -66,7 +67,9 @@ class DataManager:
     4- Make sure that there is no Region or LocationRestration entry in the
        config file.
     """
-    def __init__(self, provider, remote):
+    def __init__(self, provider, logger):
+        
+        self.logger = logger
         self.provider = provider
 
         if not RCLONE_PATH:
@@ -554,3 +557,15 @@ class DataManager:
             None
         """
         self._rclone_invoke('about', *args)
+
+
+    # --------------------------------------------------------------------------
+    #
+    def bcast(self, source, destinations: list):
+
+        for idx, d in enumrate(destinations):
+            t = threading.Thread(target=self.copy, args=(source, d,),
+                                 name=f'BcastThreadCopy-{idx}', daemon=True)
+            
+            t.start()
+            self.logger.info(f'bcast: broadcasting file {source} to {d}')

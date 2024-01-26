@@ -459,7 +459,7 @@ class AzureCaas:
         failed, done, running = 0, 0, 0
 
         if self.launch_type in AKS:
-            queue = self.cluster.return_queue
+            queue = self.cluster.result_queue
 
         else:
             # set the queue and start the ecs watcher thread
