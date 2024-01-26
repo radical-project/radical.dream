@@ -205,7 +205,7 @@ class K8sCluster:
         """
         head_node = self.vms[0]
 
-        worker_nodes = sum(v.MinCount for v in self.vms) - 1
+        worker_nodes = len(self.get_worker_nodes())
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
@@ -474,7 +474,7 @@ class K8sCluster:
     # --------------------------------------------------------------------------
     #
     def submit(self, ctasks: list=[], deployment_file: str=None) -> str:
-        
+
         """
         This function to coordiante the submission of list of tasks.
         to the cluster main node.
@@ -518,7 +518,6 @@ class K8sCluster:
 
         else:
             raise FileExistsError(f'failed to find {deployment_file}')
-            return None
 
 
     # --------------------------------------------------------------------------
@@ -1170,7 +1169,7 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        worker_nodes = len(self.get_worker_nodes())
+        worker_nodes = sum(v.MinCount for v in self.vms) - 1
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))

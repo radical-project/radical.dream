@@ -149,7 +149,6 @@ class AwsCaas:
             self._wait_clusters(self.ecs)
             for vm in self.vms:
                 self.create_ec2_instance(vm)
-
         
         # check if this is an EKS service
         if self.launch_type in EKS:
@@ -163,10 +162,12 @@ class AwsCaas:
         # call get work to pull tasks
         self._get_work()
 
+
     # --------------------------------------------------------------------------
     #
     def get_tasks(self):
         return list(self._tasks_book.values())
+
 
     # --------------------------------------------------------------------------
     #

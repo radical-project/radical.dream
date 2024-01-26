@@ -503,7 +503,7 @@ class ContainerSetWorkflow(Workflow):
         """
         wf_type = WORKFLOW_TYPE[1]
         super().__init__(name, wf_type, manager, volume)
-    
+
 
     # --------------------------------------------------------------------------
     #
@@ -519,7 +519,7 @@ class ContainerSetWorkflow(Workflow):
         wf_name = super()._create()
 
         self.cluster.profiler.prof('create_wf_start', uid=wf_name)
-    
+
         spec = self.argo_object['spec']
         # update the pod label with workflow name since
         # the entire workflow is a single pod we only set
