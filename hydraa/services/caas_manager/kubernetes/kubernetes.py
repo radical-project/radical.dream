@@ -205,7 +205,7 @@ class K8sCluster:
         """
         head_node = self.vms[0]
 
-        worker_nodes = len(self.get_worker_nodes())
+        worker_nodes = sum(v.MinCount for v in self.vms) - 1
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
@@ -913,7 +913,7 @@ class AKSCluster(K8sCluster):
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
 
-        worker_nodes = len(self.get_worker_nodes())
+        worker_nodes = sum(v.MinCount for v in self.vms) - 1
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
