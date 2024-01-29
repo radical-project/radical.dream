@@ -98,44 +98,44 @@ class Task(Future):
                  arn: Optional[str] = None,
                  type: Optional[str] = None,
                  port: Optional[int] = None,
-                 depends_on: List[str] = [],
                  ecs_launch_type: str = None,
                  state: Optional[str] = None,
                  volume: Optional[List] = None,
                  env_var: Optional[str] = None,
                  restart: Optional[bool] = None,
                  container_group_name: str = None,
-                 inputs: Optional[List[str]] = [],
-                 outputs: Optional[List[str]] = [],
+                 inputs: Optional[List[str]] = None,
+                 outputs: Optional[List[str]] = None,
+                 depends_on: Optional[List[str]] = None,
                  ecs_kwargs: dict = {'executionRoleArn': ''}):
 
 
         super().__init__()
 
-        self.id: int = id
-        self.cmd: str = cmd
-        self.name: str = name
-        self.tries: int = tries
-        self.image: str = image
-        self.run_id: str = run_id
-        self.vcpus: float = vcpus
-        self.memory: float = memory
-        self.args: List[str] = args
-        self.ip: Optional[str] = ip
-        self.provider: str = provider
-        self.arn: Optional[str] = arn
-        self.type: Optional[str] = type
-        self.port: Optional[int] = port
-        self.state: Optional[str] = state
-        self.ecs_kwargs: dict = ecs_kwargs
-        self.volume: Optional[List] = volume
-        self.env_var: Optional[str] = env_var
-        self.restart: Optional[bool] = restart
-        self.depends_on: List[str] = depends_on
-        self.inputs: Optional[List[str]] = inputs
-        self.outputs: Optional[List[str]] = outputs
-        self.ecs_launch_type: str = ecs_launch_type
-        self.container_group_name: str = container_group_name
+        self.id = id
+        self.ip = ip
+        self.cmd = cmd
+        self.arn = arn
+        self.args = args
+        self.type = type
+        self.port = port
+        self.name = name
+        self.tries = tries
+        self.image = image
+        self.vcpus = vcpus
+        self.state = state
+        self.run_id = run_id
+        self.volume = volume
+        self.memory = memory
+        self.env_var = env_var
+        self.restart = restart
+        self.provider = provider
+        self.ecs_kwargs = ecs_kwargs
+        self.inputs = inputs or []
+        self.outputs =  outputs or []
+        self.depends_on = depends_on or []
+        self.ecs_launch_type = ecs_launch_type
+        self.container_group_name = container_group_name
 
 
     # --------------------------------------------------------------------------
