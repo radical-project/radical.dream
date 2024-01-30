@@ -453,6 +453,8 @@ class Jet2Caas():
                         task = self._tasks_book.get(tid)
 
                         if not task:
+                            termination_msg = (3, JET2)
+                            self.outgoing_q.put(termination_msg)
                             raise RuntimeError(f'task {tid} does not exist, existing')
 
                         if task.name in finshed or not status:

@@ -530,6 +530,8 @@ class ChiCaas:
                         msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if not task:
+                            termination_msg = (3, CHI)
+                            self.outgoing_q.put(termination_msg)
                             raise RuntimeError(f'task {tid} does not exist, existing')
 
                         if task.name in finshed or not status:
