@@ -284,6 +284,9 @@ class K8sCluster:
 
         self.kube_config = self.configure(head_node)
 
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
         self.namespace = self.create_namespace()
 
         # start the watcher thread
@@ -338,8 +341,6 @@ class K8sCluster:
             # write the changes to the disk
             dump_yaml(kube_config, config_file, safe=False)
 
-        # set the kubeconfig in the kubernetes client
-        config.load_kube_config(config_file)
 
         return config_file
 
@@ -932,6 +933,12 @@ class AKSCluster(K8sCluster):
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
 
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
+        # start the watcher thread
+        self._watch_pods_statuses()
+
         self.status = READY
 
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -963,9 +970,12 @@ class AKSCluster(K8sCluster):
         cmd += '--name {0} '.format(self.name)
         cmd += '--file {0}'.format(config_file)
 
-        out, err, _ = sh_callout(cmd, shell=True)
+        out, err, ret = sh_callout(cmd, shell=True)
 
-        print(out, err)
+        if ret:
+            raise RuntimeError(f'Failed to setup Azure AKS Kube Config: {err}')
+
+        print(out)
 
         return config_file
 
@@ -1199,6 +1209,13 @@ class EKSCluster(K8sCluster):
                 self.add_node_group(vm)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
+        # start the watcher thread
+        self._watch_pods_statuses()
+
         self.status = READY
 
         print('{0} is in {1} state'.format(self.name, self.status))
