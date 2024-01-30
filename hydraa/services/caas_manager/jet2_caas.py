@@ -453,7 +453,7 @@ class Jet2Caas():
                         task = self._tasks_book.get(tid)
 
                         if not task:
-                            raise RuntimeError(f'task {cont.name} does not exist, existing')
+                            raise RuntimeError(f'task {tid} does not exist, existing')
 
                         if task.name in finshed or not status:
                             continue

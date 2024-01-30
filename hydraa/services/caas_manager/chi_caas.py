@@ -530,7 +530,7 @@ class ChiCaas:
                         msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if not task:
-                            raise RuntimeError(f'task {cont.name} does not exist, existing')
+                            raise RuntimeError(f'task {tid} does not exist, existing')
 
                         if task.name in finshed or not status:
                             continue
