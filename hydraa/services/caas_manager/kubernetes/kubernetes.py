@@ -36,6 +36,8 @@ from ....cloud_task.task import Task
 from ....cloud_vm.vm import LocalVM
 from ....cloud_vm.vm import OpenStackVM
 
+from kubernetes.client.exceptions import ApiException
+
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -600,11 +602,12 @@ class K8sCluster:
         """
         w = watch.Watch()
 
-        def _watch():
+        def _watch(resource_version=None):
 
             try:
                 for event in w.stream(client.CoreV1Api().list_namespaced_pod,
-                                      'default', _request_timeout=900000):
+                                      'default', _request_timeout=900000,
+                                       resource_version=resource_version):
 
                     pod = event['object']
 
@@ -617,9 +620,20 @@ class K8sCluster:
                                                    'pod_status': pod.status.phase,
                                                    'containers': containers})
 
+            # Resource versions must be treated as opaque. You must
+            # not assume resource versions are numeric or collatable.
+            # https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
+            except ApiException as e:
+                if e.status == 410: # resource too old
+                    self.logger.trace(f'pods events watcher died gracefully due to old resource'
+                                      ' version. Starting back the watcher')
+                    return _watch()
+                else:
+                    raise
+
             except (urllib3.exceptions.ProtocolError, urllib3.exceptions.httplib_IncompleteRead) as e:
                 if self.terminate.is_set():
-                    self.logger.trace(f'Pods events watcher thread recieved stop signal')
+                    self.logger.trace(f'pods events watcher thread recieved stop signal')
                     w.stop()
                 else:
                     raise e
