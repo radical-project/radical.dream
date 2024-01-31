@@ -147,9 +147,9 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         def _watch():
 
-            config.load_kube_config(self.cluster.kube_config)
             v1 = client.CoreV1Api()
             api = client.CustomObjectsApi()
+            config.load_kube_config(self.cluster.kube_config)
 
             self.write_to_csv(header, self.watcher_output_path, single_row=True)
 
@@ -204,9 +204,9 @@ class KuberentesResourceWatcher(ResourceWatcher):
 
         def _watch():
 
-            config.load_kube_config(self.cluster.kube_config)
             v1 = client.CoreV1Api()
             api = client.CustomObjectsApi()
+            config.load_kube_config(self.cluster.kube_config)
 
             self.write_to_csv(header, output_file, single_row=True)
 
