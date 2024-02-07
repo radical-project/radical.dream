@@ -609,6 +609,11 @@ class K8sCluster:
                                       'default', _request_timeout=900000,
                                        resource_version=resource_version):
 
+                    # make sure we stop if we got a termination signal
+                    if self.terminate.is_set():
+                        w.stop()
+                        break
+
                     pod = event['object']
 
                     if pod and pod.status.phase in ['Pending', 'Running', 'Succeeded', 'Failed']:
@@ -633,10 +638,12 @@ class K8sCluster:
 
             except (urllib3.exceptions.ProtocolError, urllib3.exceptions.httplib_IncompleteRead) as e:
                 if self.terminate.is_set():
-                    self.logger.trace(f'pods events watcher thread recieved stop signal')
                     w.stop()
                 else:
                     raise e
+            
+            self.logger.trace(f'pods events watcher thread recieved stop signal')
+
 
         watcher = mt.Thread(target=_watch, daemon=True, name='PodsEventWatcher')
         watcher.start()
@@ -743,7 +750,7 @@ class K8sCluster:
                 return path
             return '\n'.join(logs)
         else:
-            self.logger.error(f'No logs were found for {task.name}')
+            print(f'No logs were found for {task.name}')
             return []
 
 
@@ -836,7 +843,7 @@ class K8sCluster:
     #
     def recover(self):
         raise NotImplementedError
-
+    
 
     # --------------------------------------------------------------------------
     #
@@ -1338,7 +1345,7 @@ class EKSCluster(K8sCluster):
 
         out, err, ret = sh_callout(f"eksctl get cluster {self.name}", shell=True)
         if not ret:
-            print('deleteing EKS cluster: {0}'.format(self.name))
+            print('deleteing EKS cluster: {0} with no wait'.format(self.name))
             cmd = f'eksctl delete cluster --name {self.name}'
             out, err, _ = sh_callout(cmd, shell=True)
             print(out, err)
