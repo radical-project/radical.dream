@@ -36,6 +36,8 @@ from ....cloud_task.task import Task
 from ....cloud_vm.vm import LocalVM
 from ....cloud_vm.vm import OpenStackVM
 
+from kubernetes.client.exceptions import ApiException
+
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
@@ -284,6 +286,9 @@ class K8sCluster:
 
         self.kube_config = self.configure(head_node)
 
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
         self.namespace = self.create_namespace()
 
         # start the watcher thread
@@ -338,8 +343,6 @@ class K8sCluster:
             # write the changes to the disk
             dump_yaml(kube_config, config_file, safe=False)
 
-        # set the kubeconfig in the kubernetes client
-        config.load_kube_config(config_file)
 
         return config_file
 
@@ -474,7 +477,7 @@ class K8sCluster:
     # --------------------------------------------------------------------------
     #
     def submit(self, ctasks: list=[], deployment_file: str=None) -> str:
-        
+
         """
         This function to coordiante the submission of list of tasks.
         to the cluster main node.
@@ -518,7 +521,6 @@ class K8sCluster:
 
         else:
             raise FileExistsError(f'failed to find {deployment_file}')
-            return None
 
 
     # --------------------------------------------------------------------------
@@ -600,11 +602,17 @@ class K8sCluster:
         """
         w = watch.Watch()
 
-        def _watch():
+        def _watch(resource_version=None):
 
             try:
                 for event in w.stream(client.CoreV1Api().list_namespaced_pod,
-                                      'default', _request_timeout=900000):
+                                      'default', _request_timeout=900000,
+                                       resource_version=resource_version):
+
+                    # make sure we stop if we got a termination signal
+                    if self.terminate.is_set():
+                        w.stop()
+                        break
 
                     pod = event['object']
 
@@ -617,17 +625,30 @@ class K8sCluster:
                                                    'pod_status': pod.status.phase,
                                                    'containers': containers})
 
+            # Resource versions must be treated as opaque. You must
+            # not assume resource versions are numeric or collatable.
+            # https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
+            except ApiException as e:
+                if e.status == 410: # resource too old
+                    self.logger.trace(f'pods events watcher died gracefully due to old resource'
+                                      ' version. Starting back the watcher')
+                    return _watch()
+                else:
+                    raise
+
             except (urllib3.exceptions.ProtocolError, urllib3.exceptions.httplib_IncompleteRead) as e:
                 if self.terminate.is_set():
-                    self.logger.trace(f'Pods events watcher thread recieved stop event')
                     w.stop()
                 else:
                     raise e
+            
+            self.logger.trace(f'pods events watcher thread recieved stop signal')
+
 
         watcher = mt.Thread(target=_watch, daemon=True, name='PodsEventWatcher')
         watcher.start()
 
-        self.logger.trace(f'Pods events watcher thread {watcher.ident} started on {self.name}')
+        self.logger.trace(f'pods events watcher thread {watcher.ident} started on {self.name}')
 
 
     # --------------------------------------------------------------------------
@@ -729,7 +750,7 @@ class K8sCluster:
                 return path
             return '\n'.join(logs)
         else:
-            self.logger.error(f'No logs were found for {task.name}')
+            print(f'No logs were found for {task.name}')
             return []
 
 
@@ -822,7 +843,7 @@ class K8sCluster:
     #
     def recover(self):
         raise NotImplementedError
-
+    
 
     # --------------------------------------------------------------------------
     #
@@ -913,7 +934,7 @@ class AKSCluster(K8sCluster):
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
 
-        worker_nodes = len(self.get_worker_nodes())
+        worker_nodes = sum(v.MinCount for v in self.vms) - 1
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
@@ -932,6 +953,12 @@ class AKSCluster(K8sCluster):
         self.profiler.prof('configure_start', uid=self.id)
         self.kube_config = self.configure()
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
+        # start the watcher thread
+        self._watch_pods_statuses()
 
         self.status = READY
 
@@ -964,9 +991,12 @@ class AKSCluster(K8sCluster):
         cmd += '--name {0} '.format(self.name)
         cmd += '--file {0}'.format(config_file)
 
-        out, err, _ = sh_callout(cmd, shell=True)
+        out, err, ret = sh_callout(cmd, shell=True)
 
-        print(out, err)
+        if ret:
+            raise RuntimeError(f'Failed to setup Azure AKS Kube Config: {err}')
+
+        print(out)
 
         return config_file
 
@@ -1170,7 +1200,7 @@ class EKSCluster(K8sCluster):
         varied_vms = any(vm.InstanceID != first_vm.InstanceID for vm in \
                          self.vms[1:])
 
-        worker_nodes = len(self.get_worker_nodes())
+        worker_nodes = sum(v.MinCount for v in self.vms) - 1
         print('building {0} with x [{1}] worker nodes, [{2}] control plane node(s),'
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
@@ -1200,6 +1230,13 @@ class EKSCluster(K8sCluster):
                 self.add_node_group(vm)
 
         self.profiler.prof('bootstrap_stop', uid=self.id)
+
+        # set the kubeconfig in the kubernetes client
+        config.load_kube_config(self.kube_config)
+
+        # start the watcher thread
+        self._watch_pods_statuses()
+
         self.status = READY
 
         print('{0} is in {1} state'.format(self.name, self.status))
@@ -1308,7 +1345,7 @@ class EKSCluster(K8sCluster):
 
         out, err, ret = sh_callout(f"eksctl get cluster {self.name}", shell=True)
         if not ret:
-            print('deleteing EKS cluster: {0}'.format(self.name))
+            print('deleteing EKS cluster: {0} with no wait'.format(self.name))
             cmd = f'eksctl delete cluster --name {self.name}'
             out, err, _ = sh_callout(cmd, shell=True)
             print(out, err)

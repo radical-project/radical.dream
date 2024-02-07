@@ -28,7 +28,8 @@ PROVIDER_TO_CLASS = {
 
 TERM_SIGNALS = {0: "Auto-terminate was set, terminating.",
                 1: "No more tasks to process, terminating.",
-                2: "User terminations requested, terminating."}
+                2: "User terminations requested, terminating.",
+                3: "Internal failure is detected, terminating."}
 
 TIMEOUT = 0.1
 

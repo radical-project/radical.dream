@@ -110,7 +110,8 @@ class KuberentesResourceWatcher(ResourceWatcher):
                 # https://github.com/kubernetes-client/python/issues/1173
                 if e.status == 503:
                     if retry_count < max_retries:
-                        self.logger.warning('Metrics server not ready yet, retrying in 1s')
+                        ttd = max_retries - retry_count # time to die
+                        self.logger.warning(f'Metrics server not ready yet, retrying for {ttd}s')
                         time.sleep(1)
                         retry_count += 1
                         continue
@@ -140,15 +141,15 @@ class KuberentesResourceWatcher(ResourceWatcher):
     # --------------------------------------------------------------------------
     #
     def _watch_nodes_resources(self):
-        
-        v1 = client.CoreV1Api()
-        api = client.CustomObjectsApi()
-        config.load_kube_config(self.cluster.kube_config)  
 
         header = ['TimeStamp', 'NodeName','CPUsCapacity', 'CPUsUsage(M)',
                   'MemoryCapacity(Ki)', 'MemoryUsage(Ki)']
 
         def _watch():
+
+            v1 = client.CoreV1Api()
+            api = client.CustomObjectsApi()
+            config.load_kube_config(self.cluster.kube_config)
 
             self.write_to_csv(header, self.watcher_output_path, single_row=True)
 
@@ -156,12 +157,15 @@ class KuberentesResourceWatcher(ResourceWatcher):
                 rows_to_write = []
                 try:
                     nodes = api.list_cluster_custom_object(plural="nodes",
-                                                        version="v1beta1",
-                                                        group="metrics.k8s.io")
+                                                           version="v1beta1",
+                                                           group="metrics.k8s.io")
 
-                except urllib3.exceptions.MaxRetryError:
+                except (ApiException, urllib3.exceptions.MaxRetryError) as e:
                     if self.terminate.is_set():
-                        self.logger.trace(f'nodes resource watcher thread recieved stop event')
+                        if isinstance(e, ApiException) and e.status == 503:
+                            self.logger.trace("nodes resource watcher thread received service unavailable event")
+                        elif isinstance(e, urllib3.exceptions.MaxRetryError):
+                            self.logger.trace("nodes resource watcher thread received stop event")
                         break
                     else:
                         raise
@@ -193,16 +197,16 @@ class KuberentesResourceWatcher(ResourceWatcher):
     #
     def _watch_pods_resources(self):
 
-        v1 = client.CoreV1Api()
-        api = client.CustomObjectsApi()
-        config.load_kube_config(self.cluster.kube_config)
-
         header = ['TimeStamp', 'PodName', 'ContainerName','CPUsUsage(M)',
                   'MemoryUsage(Ki)']
 
         output_file = self.cluster.sandbox + '/pods_resources.csv'
 
         def _watch():
+
+            v1 = client.CoreV1Api()
+            api = client.CustomObjectsApi()
+            config.load_kube_config(self.cluster.kube_config)
 
             self.write_to_csv(header, output_file, single_row=True)
 
@@ -215,9 +219,12 @@ class KuberentesResourceWatcher(ResourceWatcher):
                                                                      version="v1beta1",
                                                                      group="metrics.k8s.io")
 
-                    except urllib3.exceptions.MaxRetryError:
+                    except (ApiException, urllib3.exceptions.MaxRetryError) as e:
                         if self.terminate.is_set():
-                            self.logger.trace(f'pods resource watcher thread recieved stop event')
+                            if isinstance(e, ApiException) and e.status == 503:
+                                self.logger.trace("pods resource watcher thread received service unavailable event")
+                            elif isinstance(e, urllib3.exceptions.MaxRetryError):
+                                self.logger.trace("pods resource watcher thread received stop event")
                             break
                         else:
                             raise

@@ -149,7 +149,6 @@ class AwsCaas:
             self._wait_clusters(self.ecs)
             for vm in self.vms:
                 self.create_ec2_instance(vm)
-
         
         # check if this is an EKS service
         if self.launch_type in EKS:
@@ -163,10 +162,12 @@ class AwsCaas:
         # call get work to pull tasks
         self._get_work()
 
+
     # --------------------------------------------------------------------------
     #
     def get_tasks(self):
         return list(self._tasks_book.values())
+
 
     # --------------------------------------------------------------------------
     #
@@ -887,7 +888,7 @@ class AwsCaas:
         failed, done, running = 0, 0, 0
 
         if self.launch_type in EKS:
-            queue = self.cluster.return_queue
+            queue = self.cluster.result_queue
 
         else:
             # set the queue and start the ecs watcher thread
@@ -899,7 +900,7 @@ class AwsCaas:
             try:
                 # pull a message from the cluster queue
                 if not queue.empty():
-                    _msg = queue.get(block=True, timeout=1)
+                    _msg = queue.get(block=True, timeout=10)
 
                     if _msg:
                         parent_pod = _msg.get('pod_id')
@@ -914,8 +915,10 @@ class AwsCaas:
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
 
+                        # FIXME: This should never happen only in local mode
+                        # as we do not clean up the namespace after terminating
                         if not task:
-                            raise RuntimeError(f'task {cont.name} does not exist, existing')
+                            continue
 
                         if task.name in finshed or not status:
                             continue

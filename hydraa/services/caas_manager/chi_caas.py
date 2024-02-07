@@ -512,7 +512,7 @@ class ChiCaas:
             try:
                 # pull a message from the cluster queue
                 if not queue.empty():
-                    _msg = queue.get(block=True, timeout=1)
+                    _msg = queue.get(block=True, timeout=10)
 
                     if _msg:
                         parent_pod = _msg.get('pod_id')
@@ -529,8 +529,10 @@ class ChiCaas:
 
                         msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
+                        # FIXME: This should never happen only in local mode
+                        # as we do not clean up the namespace after terminating
                         if not task:
-                            raise RuntimeError(f'task {cont.name} does not exist, existing')
+                            continue
 
                         if task.name in finshed or not status:
                             continue

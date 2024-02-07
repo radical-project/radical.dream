@@ -459,7 +459,7 @@ class AzureCaas:
         failed, done, running = 0, 0, 0
 
         if self.launch_type in AKS:
-            queue = self.cluster.return_queue
+            queue = self.cluster.result_queue
 
         else:
             # set the queue and start the ecs watcher thread
@@ -471,7 +471,7 @@ class AzureCaas:
             try:
                 # pull a message from the cluster queue
                 if not queue.empty():
-                    _msg = queue.get(block=True, timeout=1)
+                    _msg = queue.get(block=True, timeout=10)
 
                     if _msg:
                         parent_pod = _msg.get('pod_id')
@@ -486,8 +486,10 @@ class AzureCaas:
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
 
+                        # FIXME: This should never happen only in local mode
+                        # as we do not clean up the namespace after terminating
                         if not task:
-                            raise RuntimeError(f'task {cont.name} does not exist, existing')
+                            continue
 
                         if task.name in finshed or not status:
                             continue
