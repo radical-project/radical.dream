@@ -529,6 +529,8 @@ class ChiCaas:
 
                         msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
+                        # FIXME: This should never happen only in local mode
+                        # as we do not clean up the namespace after terminating
                         if not task:
                             continue
 

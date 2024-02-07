@@ -452,6 +452,8 @@ class Jet2Caas():
                         status = cont.get('status')
                         task = self._tasks_book.get(tid)
 
+                        # FIXME: This should never happen only in local mode
+                        # as we do not clean up the namespace after terminating
                         if not task:
                             continue
 
