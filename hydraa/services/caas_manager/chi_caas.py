@@ -512,7 +512,7 @@ class ChiCaas:
             try:
                 # pull a message from the cluster queue
                 if not queue.empty():
-                    _msg = queue.get(block=True, timeout=1)
+                    _msg = queue.get(block=True, timeout=10)
 
                     if _msg:
                         parent_pod = _msg.get('pod_id')
@@ -530,9 +530,7 @@ class ChiCaas:
                         msg = f'Task: "{task.name}" from pod "{parent_pod}" is in state: "{status}"'
 
                         if not task:
-                            termination_msg = (3, CHI)
-                            self.outgoing_q.put(termination_msg)
-                            raise RuntimeError(f'task {tid} does not exist, existing')
+                            continue
 
                         if task.name in finshed or not status:
                             continue
