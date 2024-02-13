@@ -207,8 +207,11 @@ class CaasManager:
                 if not isinstance(task, Task):
                     raise ValueError(f'Function must return object of type {Task}')
 
-                task.provider = provider
+                if not task.provider:
+                    task.provider = provider
+
                 self.submit(task)
+                
                 return task
 
             return wrapper
