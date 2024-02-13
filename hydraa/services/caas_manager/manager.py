@@ -211,7 +211,7 @@ class CaasManager:
                     task.provider = provider
 
                 self.submit(task)
-                
+
                 return task
 
             return wrapper
@@ -223,7 +223,7 @@ class CaasManager:
     def submit(self, tasks):
         """
         This is our base submit method. This method allows the submission of tasks
-        to registered CaaS managers. If a single task is provided, it is converted
+        to a registered CaaS managers. If a single task is provided, it is converted
         to a list for consistency. The method iterates through the provided tasks,
         determines the associated manager based on the task's provider, and submits
         the task to the manager's input queue.
