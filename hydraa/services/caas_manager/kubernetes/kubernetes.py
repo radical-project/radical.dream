@@ -55,10 +55,11 @@ PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
                 'CreateContainerConfigError','RunContainerError',
                 'OOMKilled','ErrImagePull','Evicted']
 SLEEP = 2
-BUSY = 'Busy'
-READY = 'Ready'
+IDLE = 'Idle'
 LOCAL = 'local'
 MAX_PODS = 110
+RUNNING = 'Running'
+BUILDING = 'Building'
 
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
@@ -121,7 +122,7 @@ class K8sCluster:
         self.vms = vms
         self.id = run_id
         self.logger = log
-        self.status = None
+        self.status = IDLE
         self.pod_counter = 0
         self.sandbox = sandbox
         self.kube_config = None
@@ -175,7 +176,7 @@ class K8sCluster:
         by performing the following steps:
 
         1. Determine the number of worker nodes and print cluster details.
-        2. Set the status of the cluster to 'BUSY'.
+        2. Set the status of the cluster to 'BUILDING'.
         3. Add hosts (IP and name) to each node.
         4. Adjust the timeout value if specified in the configuration.
         5. Set up the local mode if the provider is 'LOCAL'.
@@ -212,7 +213,7 @@ class K8sCluster:
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
 
-        self.status = BUSY
+        self.status = BUILDING
         self.add_nodes_properity()
 
         if KUBE_TIMEOUT:
@@ -294,7 +295,8 @@ class K8sCluster:
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
+
         print('{0} is in {1} state'.format(self.name, self.status))
 
 
@@ -930,6 +932,8 @@ class AKSCluster(K8sCluster):
         cmd += f'--node-count {first_vm.MinCount} '
         cmd += f'--generate-ssh-keys --location {first_vm.Region}'
 
+        self.status = BUILDING
+
         if KUBE_VERSION:
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
@@ -960,7 +964,7 @@ class AKSCluster(K8sCluster):
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
 
         print('{0} is in {1} state'.format(self.name, self.status))
 
@@ -1214,6 +1218,8 @@ class EKSCluster(K8sCluster):
         cmd += f'--nodes-max {first_vm.MaxCount} '
         cmd += f'--kubeconfig {self.kube_config}'
 
+        self.status = BUILDING
+
         if KUBE_VERSION:
             version = KUBE_VERSION
             cmd += f' --version {version}'
@@ -1237,7 +1243,7 @@ class EKSCluster(K8sCluster):
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
 
         print('{0} is in {1} state'.format(self.name, self.status))
 

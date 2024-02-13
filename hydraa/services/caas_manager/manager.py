@@ -4,6 +4,8 @@ import queue
 import threading as mt
 import radical.utils as ru
 
+from hydraa import Task
+
 from hydraa.providers.proxy import proxy
 from hydraa.services.caas_manager.utils import misc
 from hydraa.services.caas_manager.chi_caas import ChiCaas
@@ -188,15 +190,40 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
+    def __call__(self, provider=None):
+        """
+        Decorator function to invoke the submit function of CaasManager with
+        additional arguments.
+
+        Parameters
+        ----------
+        provider : str
+            The provider for the tasks.
+        """
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                task = func(*args, **kwargs)
+
+                if not isinstance(task, Task):
+                    raise ValueError(f'Function must return object of type {Task}')
+
+                task.provider = provider
+                self.submit(task)
+                return task
+
+            return wrapper
+
+        return decorator
+
+    # --------------------------------------------------------------------------
+    #
     def submit(self, tasks):
         """
-        Submit tasks to Container as a Service (CaaS) managers.
-
-        This method allows the submission of tasks to registered CaaS managers.
-        If a single task is provided, it is converted to a list for consistency.
-        The method iterates through the provided tasks, determines the associated
-        manager based on the task's provider, and submits the task to the manager's
-        input queue.
+        This is our base submit method. This method allows the submission of tasks
+        to registered CaaS managers. If a single task is provided, it is converted
+        to a list for consistency. The method iterates through the provided tasks,
+        determines the associated manager based on the task's provider, and submits
+        the task to the manager's input queue.
 
         Parameters:
         - tasks (list or object): A list of tasks or a single task to be submitted.
