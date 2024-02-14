@@ -500,7 +500,7 @@ class K8sCluster:
 
 
         # this should never happen, but make sure we have a deployment_file
-        assert deployment_file is not None, "not deployment file found"
+        assert deployment_file is not None, "no deployment file found"
 
         def _apply_from_single_file(deployment_file):
                 from kubernetes import utils
