@@ -16,6 +16,7 @@ from typing import Dict
 from typing import Tuple
 
 from kubernetes import watch
+from kubernetes import utils
 from kubernetes import client
 from kubernetes import config
 
@@ -503,7 +504,6 @@ class K8sCluster:
         assert deployment_file is not None, "no deployment file found"
 
         def _apply_from_single_file(deployment_file):
-                from kubernetes import utils
                 utils.create_from_yaml(client.ApiClient(),
                                        yaml_file=deployment_file)
 
