@@ -255,19 +255,22 @@ class CaasManager:
             raise RuntimeError('No CaaS managers found to submit to.')
 
         tasks_counter = 0
+
         for task in tasks:
             task._verify()
             task_provider = task.provider.lower()
+            
             if self._registered_managers.get(task_provider, None):
                 manager = self._registered_managers.get(task_provider)
             else:
                 manager = next(iter(self._registered_managers.values()))
                 self.log.warning('no manager found for this task, submitting to a any manager')
 
+            # now put the task in the corresponding sub-manager queue
             manager['in_q'].put(task)
             tasks_counter += 1
 
-        print(f'{tasks_counter} tasks are submitted')
+        print(f'{tasks_counter} task(s) has been submitted')
 
 
     # --------------------------------------------------------------------------

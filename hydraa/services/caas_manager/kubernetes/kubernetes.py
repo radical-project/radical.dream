@@ -411,20 +411,20 @@ class K8sCluster:
     #
     def generate_pods(self, ctasks) -> Tuple[str, list, list]: 
         """
-        This function generates a deployment_file (pods) from a set of 
-        scheduled tasks.
+        This function partions the recieved tasks into a:
+        - single container per pod (scpp)
+        - multiple containers per pod(pods)
+        
+        from a set of tasks.
 
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
-        
-        Returns:
-            deployment_file (str) : path for the deployment file.
-        """
-        scpp = [] # single container per pod
-        mcpp = [] # multiple containers per pod
 
-        deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
-                                                            unique_id())
+        Returns:
+            mcpp or scpp: single or multi container pods object
+        """
+        scpp = []
+        mcpp = []
 
         for ctask in ctasks:
             # Single Container Per Pod (SCPP)
@@ -450,7 +450,7 @@ class K8sCluster:
                 pod = build_pod(batch, str(self.pod_counter).zfill(6))
                 _mcpp.append(pod)
 
-            dump_multiple_yamls(_mcpp, deployment_file)
+            return _mcpp
 
         if scpp:
             _scpp = []
@@ -459,9 +459,7 @@ class K8sCluster:
                 pod = build_pod([task], str(self.pod_counter).zfill(6))
                 _scpp.append(pod)
 
-            dump_multiple_yamls(_scpp, deployment_file)
-
-        return deployment_file
+            return _scpp
 
 
     # --------------------------------------------------------------------------
@@ -480,37 +478,43 @@ class K8sCluster:
         Returns:
             deployment_file (str) : path for the deployment file.
         """
-        if not ctasks and not deployment_file:
-            self.logger.error('at least deployment or tasks must be specified')
-            return None
 
-        if deployment_file and ctasks:
-            self.logger.error('can not submit both deployment and tasks')
-            return None
+        if not ctasks and not deployment_file:
+            raise Exception('at least deployment or tasks must be specified')
+
+        if ctasks and deployment_file:
+            raise Exception('can not submit both deployment and tasks')
 
         if ctasks:
+            deployment_file = '{0}/hydraa_pods_{1}_{2}.yaml'.format(self.sandbox,
+                                                                    len(ctasks),
+                                                                    unique_id())
+
             self.profiler.prof('generate_pods_start', uid=self.id)
-            deployment_file = self.generate_pods(ctasks)
+            
+            pods = self.generate_pods(ctasks)
+
+            dump_multiple_yamls(pods, deployment_file)
+
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if os.path.exists(deployment_file):
-            cmd = f'nohup kubectl apply -f {deployment_file} >> {self.sandbox}'
-            cmd += '/apply_output.log 2>&1 </dev/null &'
 
-            out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        # this should never happen, but make sure we have a deployment_file
+        assert deployment_file is not None, "not deployment file found"
 
-            if ret:
-                self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
+        def _apply_from_single_file(deployment_file):
+                from kubernetes import utils
+                utils.create_from_yaml(client.ApiClient(),
+                                       yaml_file=deployment_file)
 
-            # FIXME: this should be a message to the controller manager
-            else:
-                fname = deployment_file.split('/')[-1]
-                self.logger.info('deployment {0} is submitted to {1}'.format(fname, self.name))
+        submit = mt.Thread(target=_apply_from_single_file, args=(deployment_file, ))
 
-            return deployment_file
-
+        try:
+            submit.start()
+        except Exception as e:
+            self.logger.error(f'failed to submit to cluster: {e}')
         else:
-            raise FileExistsError(f'failed to find {deployment_file}')
+            return deployment_file
 
 
     # --------------------------------------------------------------------------
