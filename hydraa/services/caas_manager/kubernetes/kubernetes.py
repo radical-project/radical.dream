@@ -725,9 +725,8 @@ class K8sCluster:
         if not isinstance(task, Task):
             raise Exception(f'pod/container task must be an instance of {Task}')
 
-        logs = []
+        logs = None
         label = f"task_label={task.pod_name}"
-        watcher = watch.Watch()
 
         # some pods with third party tools like kubeflow or workflows
         # can add suffix to the pod name when they create the pod.
@@ -739,8 +738,12 @@ class K8sCluster:
                                                        label_selector=label)
         _pod_name = _pods.items[0].metadata.name
 
-        logs = watcher.stream(client.CoreV1Api().read_namespaced_pod_log,
-                              name=_pod_name, container=task.name, namespace='default')
+        try:
+            logs = client.CoreV1Api().read_namespaced_pod_log(name=_pod_name,
+                                                              container=task.name,
+                                                              namespace='default',)
+        except ApiException as e:
+            print("Exception when calling CoreV1Api->read_namespaced_pod_log: %s\n" % e)
 
         # check if we did get any logs
         if logs:
@@ -750,10 +753,10 @@ class K8sCluster:
                     for log in logs:
                         f.write(log)
                 return path
-            return '\n'.join(logs)
+            return logs
         else:
             print(f'No logs were found for {task.name}')
-            return []
+            return None
 
 
     # --------------------------------------------------------------------------
