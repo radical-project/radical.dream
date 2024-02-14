@@ -411,7 +411,7 @@ class K8sCluster:
     #
     def generate_pods(self, ctasks) -> Tuple[str, list, list]: 
         """
-        This function partions the recieved tasks into a:
+        This function partions the received tasks into a:
         - single container per pod (scpp)
         - multiple containers per pod(pods)
         
