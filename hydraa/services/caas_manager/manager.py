@@ -101,9 +101,10 @@ class CaasManager:
         self._terminate = mt.Event()
         self._registered_managers = {}
         self.sandbox = misc.create_sandbox(_id)
-        self.log = misc.logger(path=f'{self.sandbox}/caas_manager.log')
+        self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
         providers = len(self._proxy.loaded_providers)
+
         print(f'session sandbox is created: {self.sandbox} with [{providers}] providers')
 
         for provider in self._proxy.loaded_providers:
@@ -113,7 +114,7 @@ class CaasManager:
                 caas_class = PROVIDER_TO_CLASS[provider]
                 caas_instance = caas_class(self.sandbox, _id, cred, vmx,
                                            asynchronous, auto_terminate,
-                                           self.log, self.prof)
+                                           self.logger, self.prof)
 
                 self._registered_managers[provider] = {'class' : caas_instance,
                                                        'run_id': caas_instance.run_id,
@@ -177,7 +178,7 @@ class CaasManager:
 
                     # Report message
                     elif isinstance(msg, str):
-                        self.log.info(f'{manager_name} reported: {msg}')
+                        self.logger.info(f'{manager_name} reported: {msg}')
 
                     # Unexpected message
                     else:
@@ -264,7 +265,7 @@ class CaasManager:
                 manager = self._registered_managers.get(task_provider)
             else:
                 manager = next(iter(self._registered_managers.values()))
-                self.log.warning('no manager found for this task, submitting to a any manager')
+                self.logger.warning('no manager found for this task, submitting to a any manager')
 
             # now put the task in the corresponding sub-manager queue
             manager['in_q'].put(task)
