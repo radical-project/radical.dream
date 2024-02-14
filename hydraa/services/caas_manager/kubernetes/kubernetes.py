@@ -41,19 +41,7 @@ from kubernetes.client.exceptions import ApiException
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-CFAILED_STATE = ['Error', 'StartError','OOMKilled',
-                'ContainerCannotRun','DeadlineExceeded',
-                'CrashLoopBackOff', 'ImagePullBackOff',
-                'RunContainerError','ImageInspectError']
 
-CRUNNING_STATE = ['ContainerCreating', 'Started', 'Running']
-CCOMPLETED_STATE = ['Completed', 'completed']
-
-PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
-                'Error', 'CrashLoopBackOff',
-                'ImagePullBackOff', 'InvalidImageName',
-                'CreateContainerConfigError','RunContainerError',
-                'OOMKilled','ErrImagePull','Evicted']
 SLEEP = 2
 IDLE = 'Idle'
 LOCAL = 'local'
@@ -131,7 +119,7 @@ class K8sCluster:
         self.size = self.get_cluster_allocatable_size()
         self.nodes = sum([vm.MinCount for vm in self.vms])
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
-        self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
+        self.name = 'k8s-cluster-{0}-{1}'.format(self.provider, run_id)
 
         self.terminate = mt.Event()
 
@@ -517,7 +505,7 @@ class K8sCluster:
             # FIXME: this should be a message to the controller manager
             else:
                 fname = deployment_file.split('/')[-1]
-                print('deployment {0} is submitted to {1}'.format(fname, self.name))
+                self.logger.info('deployment {0} is submitted to {1}'.format(fname, self.name))
 
             return deployment_file
 
