@@ -577,7 +577,7 @@ class ChiCaas:
 
                     if len(finshed) == len(self._tasks_book):
                         if self.auto_terminate:
-                            termination_msg = (0, JET2)
+                            termination_msg = (0, CHI)
                             self.outgoing_q.put(termination_msg)
 
             except Empty:
