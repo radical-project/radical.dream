@@ -7,7 +7,6 @@ import atexit
 import shutil
 import urllib3
 
-import pandas as pd
 import threading as mt
 import radical.utils as ru
 
@@ -16,6 +15,7 @@ from typing import Dict
 from typing import Tuple
 
 from kubernetes import watch
+from kubernetes import utils
 from kubernetes import client
 from kubernetes import config
 
@@ -41,24 +41,14 @@ from kubernetes.client.exceptions import ApiException
 
 __author__ = 'Aymen Alsaadi <aymen.alsaadi@rutgers.edu>'
 
-CFAILED_STATE = ['Error', 'StartError','OOMKilled',
-                'ContainerCannotRun','DeadlineExceeded',
-                'CrashLoopBackOff', 'ImagePullBackOff',
-                'RunContainerError','ImageInspectError']
 
-CRUNNING_STATE = ['ContainerCreating', 'Started', 'Running']
-CCOMPLETED_STATE = ['Completed', 'completed']
-
-PFAILED_STATE = ['Failed', 'OutOfCPU','OutOfMemory',
-                'Error', 'CrashLoopBackOff',
-                'ImagePullBackOff', 'InvalidImageName',
-                'CreateContainerConfigError','RunContainerError',
-                'OOMKilled','ErrImagePull','Evicted']
 SLEEP = 2
-BUSY = 'Busy'
-READY = 'Ready'
+IDLE = 'Idle'
 LOCAL = 'local'
 MAX_PODS = 110
+JOINING = 'Joining'
+RUNNING = 'Running'
+BUILDING = 'Building'
 
 KUBECTL = shutil.which('kubectl')
 KUBE_VERSION = os.getenv('KUBE_VERSION')
@@ -121,7 +111,7 @@ class K8sCluster:
         self.vms = vms
         self.id = run_id
         self.logger = log
-        self.status = None
+        self.status = IDLE
         self.pod_counter = 0
         self.sandbox = sandbox
         self.kube_config = None
@@ -130,7 +120,7 @@ class K8sCluster:
         self.size = self.get_cluster_allocatable_size()
         self.nodes = sum([vm.MinCount for vm in self.vms])
         self.profiler = ru.Profiler(name=__name__, path=self.sandbox)
-        self.name = 'cluster-{0}-{1}'.format(self.provider, run_id)
+        self.name = 'k8s-cluster-{0}-{1}'.format(self.provider, run_id)
 
         self.terminate = mt.Event()
 
@@ -175,7 +165,7 @@ class K8sCluster:
         by performing the following steps:
 
         1. Determine the number of worker nodes and print cluster details.
-        2. Set the status of the cluster to 'BUSY'.
+        2. Set the status of the cluster to 'BUILDING'.
         3. Add hosts (IP and name) to each node.
         4. Adjust the timeout value if specified in the configuration.
         5. Set up the local mode if the provider is 'LOCAL'.
@@ -212,7 +202,7 @@ class K8sCluster:
               ' total of [{3}] nodes'.format(self.name, worker_nodes, KUBE_CONTROL_HOSTS,
                                              self.nodes))
 
-        self.status = BUSY
+        self.status = BUILDING
         self.add_nodes_properity()
 
         if KUBE_TIMEOUT:
@@ -230,6 +220,8 @@ class K8sCluster:
                 # make sure kubectl is installed
                 if not KUBECTL:
                     raise RuntimeError('Kubectl is required to join a Kuberentes cluster')
+                
+                self.status = JOINING
 
             # create a new local cluster
             elif head_node.LaunchType == 'create':
@@ -243,7 +235,7 @@ class K8sCluster:
                     local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup {boostrapper_path} '
                     local_bootstrap_cmd += '/dev/null < /dev/null &'
 
-                    out, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
+                    _, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
                     if ret:
                         raise RuntimeError(f'failed to create a local Kuberentes cluster: {err}')
 
@@ -273,8 +265,8 @@ class K8sCluster:
             bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
             bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
             bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                    self.control_plane.user,
-                                                                    remote_key_path)
+                                                                     self.control_plane.user,
+                                                                     remote_key_path)
             bootstrap_cmd += '/dev/null < /dev/null &'
 
             # start the bootstraping as a background process.
@@ -294,7 +286,8 @@ class K8sCluster:
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
+
         print('{0} is in {1} state'.format(self.name, self.status))
 
 
@@ -421,20 +414,20 @@ class K8sCluster:
     #
     def generate_pods(self, ctasks) -> Tuple[str, list, list]: 
         """
-        This function generates a deployment_file (pods) from a set of 
-        scheduled tasks.
+        This function partions the received tasks into a:
+        - single container per pod (scpp)
+        - multiple containers per pod(pods)
+        
+        from a set of tasks.
 
         Parameters:
             ctasks (list): a batch of tasks (HYDRAA.Task)
-        
-        Returns:
-            deployment_file (str) : path for the deployment file.
-        """
-        scpp = [] # single container per pod
-        mcpp = [] # multiple containers per pod
 
-        deployment_file = '{0}/hydraa_pods_{1}.yaml'.format(self.sandbox,
-                                                            unique_id())
+        Returns:
+            mcpp or scpp: single or multi container pods object
+        """
+        scpp = []
+        mcpp = []
 
         for ctask in ctasks:
             # Single Container Per Pod (SCPP)
@@ -460,7 +453,7 @@ class K8sCluster:
                 pod = build_pod(batch, str(self.pod_counter).zfill(6))
                 _mcpp.append(pod)
 
-            dump_multiple_yamls(_mcpp, deployment_file)
+            return _mcpp
 
         if scpp:
             _scpp = []
@@ -469,9 +462,7 @@ class K8sCluster:
                 pod = build_pod([task], str(self.pod_counter).zfill(6))
                 _scpp.append(pod)
 
-            dump_multiple_yamls(_scpp, deployment_file)
-
-        return deployment_file
+            return _scpp
 
 
     # --------------------------------------------------------------------------
@@ -490,37 +481,42 @@ class K8sCluster:
         Returns:
             deployment_file (str) : path for the deployment file.
         """
-        if not ctasks and not deployment_file:
-            self.logger.error('at least deployment or tasks must be specified')
-            return None
 
-        if deployment_file and ctasks:
-            self.logger.error('can not submit both deployment and tasks')
-            return None
+        if not ctasks and not deployment_file:
+            raise Exception('at least deployment or tasks must be specified')
+
+        if ctasks and deployment_file:
+            raise Exception('can not submit both deployment and tasks')
 
         if ctasks:
+            deployment_file = '{0}/hydraa_pods_{1}_{2}.yaml'.format(self.sandbox,
+                                                                    len(ctasks),
+                                                                    unique_id())
+
             self.profiler.prof('generate_pods_start', uid=self.id)
-            deployment_file = self.generate_pods(ctasks)
+            
+            pods = self.generate_pods(ctasks)
+
+            dump_multiple_yamls(pods, deployment_file)
+
             self.profiler.prof('generate_pods_stop', uid=self.id)
 
-        if os.path.exists(deployment_file):
-            cmd = f'nohup kubectl apply -f {deployment_file} >> {self.sandbox}'
-            cmd += '/apply_output.log 2>&1 </dev/null &'
 
-            out, err, ret = sh_callout(cmd, shell=True, kube=self)
+        # this should never happen, but make sure we have a deployment_file
+        assert deployment_file is not None, "no deployment file found"
 
-            if ret:
-                self.logger.error(f'failed to submit {deployment_file} to {self.name}: {err}')
+        def _apply_from_single_file(deployment_file):
+                utils.create_from_yaml(client.ApiClient(),
+                                       yaml_file=deployment_file)
 
-            # FIXME: this should be a message to the controller manager
-            else:
-                fname = deployment_file.split('/')[-1]
-                print('deployment {0} is submitted to {1}'.format(fname, self.name))
+        submit = mt.Thread(target=_apply_from_single_file, args=(deployment_file, ))
 
-            return deployment_file
-
+        try:
+            submit.start()
+        except Exception as e:
+            self.logger.error(f'failed to submit to cluster: {e}')
         else:
-            raise FileExistsError(f'failed to find {deployment_file}')
+            return deployment_file
 
 
     # --------------------------------------------------------------------------
@@ -723,9 +719,8 @@ class K8sCluster:
         if not isinstance(task, Task):
             raise Exception(f'pod/container task must be an instance of {Task}')
 
-        logs = []
+        logs = None
         label = f"task_label={task.pod_name}"
-        watcher = watch.Watch()
 
         # some pods with third party tools like kubeflow or workflows
         # can add suffix to the pod name when they create the pod.
@@ -737,8 +732,12 @@ class K8sCluster:
                                                        label_selector=label)
         _pod_name = _pods.items[0].metadata.name
 
-        logs = watcher.stream(client.CoreV1Api().read_namespaced_pod_log,
-                              name=_pod_name, container=task.name, namespace='default')
+        try:
+            logs = client.CoreV1Api().read_namespaced_pod_log(name=_pod_name,
+                                                              container=task.name,
+                                                              namespace='default',)
+        except ApiException as e:
+            print("Exception when calling CoreV1Api->read_namespaced_pod_log: %s\n" % e)
 
         # check if we did get any logs
         if logs:
@@ -748,10 +747,10 @@ class K8sCluster:
                     for log in logs:
                         f.write(log)
                 return path
-            return '\n'.join(logs)
+            return logs
         else:
             print(f'No logs were found for {task.name}')
-            return []
+            return None
 
 
     # --------------------------------------------------------------------------
@@ -930,6 +929,8 @@ class AKSCluster(K8sCluster):
         cmd += f'--node-count {first_vm.MinCount} '
         cmd += f'--generate-ssh-keys --location {first_vm.Region}'
 
+        self.status = BUILDING
+
         if KUBE_VERSION:
             version = KUBE_VERSION
             cmd += f' --kubernetes-version {version}'
@@ -960,7 +961,7 @@ class AKSCluster(K8sCluster):
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
 
         print('{0} is in {1} state'.format(self.name, self.status))
 
@@ -1214,6 +1215,8 @@ class EKSCluster(K8sCluster):
         cmd += f'--nodes-max {first_vm.MaxCount} '
         cmd += f'--kubeconfig {self.kube_config}'
 
+        self.status = BUILDING
+
         if KUBE_VERSION:
             version = KUBE_VERSION
             cmd += f' --version {version}'
@@ -1237,7 +1240,7 @@ class EKSCluster(K8sCluster):
         # start the watcher thread
         self._watch_pods_statuses()
 
-        self.status = READY
+        self.status = RUNNING
 
         print('{0} is in {1} state'.format(self.name, self.status))
 

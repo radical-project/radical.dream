@@ -4,6 +4,9 @@ import queue
 import threading as mt
 import radical.utils as ru
 
+from hydraa import Task
+from typing import Callable
+
 from hydraa.providers.proxy import proxy
 from hydraa.services.caas_manager.utils import misc
 from hydraa.services.caas_manager.chi_caas import ChiCaas
@@ -99,9 +102,10 @@ class CaasManager:
         self._terminate = mt.Event()
         self._registered_managers = {}
         self.sandbox = misc.create_sandbox(_id)
-        self.log = misc.logger(path=f'{self.sandbox}/caas_manager.log')
+        self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
         providers = len(self._proxy.loaded_providers)
+
         print(f'session sandbox is created: {self.sandbox} with [{providers}] providers')
 
         for provider in self._proxy.loaded_providers:
@@ -111,7 +115,7 @@ class CaasManager:
                 caas_class = PROVIDER_TO_CLASS[provider]
                 caas_instance = caas_class(self.sandbox, _id, cred, vmx,
                                            asynchronous, auto_terminate,
-                                           self.log, self.prof)
+                                           self.logger, self.prof)
 
                 self._registered_managers[provider] = {'class' : caas_instance,
                                                        'run_id': caas_instance.run_id,
@@ -175,7 +179,7 @@ class CaasManager:
 
                     # Report message
                     elif isinstance(msg, str):
-                        self.log.info(f'{manager_name} reported: {msg}')
+                        self.logger.info(f'{manager_name} reported: {msg}')
 
                     # Unexpected message
                     else:
@@ -188,15 +192,45 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
+    def __call__(self, func: Callable=None, provider=None) -> Callable:
+        """
+        Decorator function to invoke the submit function of CaasManager with
+        additional arguments.
+
+        Parameters
+        ----------
+        provider : str
+            The provider for the tasks.
+        """
+
+        if func is None:
+            return lambda f: self.__call__(f, provider)
+
+        def wrapper(*args, **kwargs):
+            task = func(*args, **kwargs)
+
+            if not isinstance(task, Task):
+                raise ValueError(f'function must return object of type {Task}')
+
+            if not task.provider:
+                task.provider = provider
+
+            self.submit(task)
+
+            return task
+
+        return wrapper
+
+
+    # --------------------------------------------------------------------------
+    #
     def submit(self, tasks):
         """
-        Submit tasks to Container as a Service (CaaS) managers.
-
-        This method allows the submission of tasks to registered CaaS managers.
-        If a single task is provided, it is converted to a list for consistency.
-        The method iterates through the provided tasks, determines the associated
-        manager based on the task's provider, and submits the task to the manager's
-        input queue.
+        This is our base submit method. This method allows the submission of tasks
+        to a registered CaaS managers. If a single task is provided, it is converted
+        to a list for consistency. The method iterates through the provided tasks,
+        determines the associated manager based on the task's provider, and submits
+        the task to the manager's input queue.
 
         Parameters:
         - tasks (list or object): A list of tasks or a single task to be submitted.
@@ -225,19 +259,22 @@ class CaasManager:
             raise RuntimeError('No CaaS managers found to submit to.')
 
         tasks_counter = 0
+
         for task in tasks:
             task._verify()
             task_provider = task.provider.lower()
+            
             if self._registered_managers.get(task_provider, None):
                 manager = self._registered_managers.get(task_provider)
             else:
                 manager = next(iter(self._registered_managers.values()))
-                self.log.warning('no manager found for this task, submitting to a any manager')
+                self.logger.warning('no manager found for this task, submitting to a any manager')
 
+            # now put the task in the corresponding sub-manager queue
             manager['in_q'].put(task)
             tasks_counter += 1
 
-        print(f'{tasks_counter} tasks are submitted')
+        print(f'{tasks_counter} task(s) has been submitted')
 
 
     # --------------------------------------------------------------------------
