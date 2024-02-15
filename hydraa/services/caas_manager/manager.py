@@ -5,6 +5,7 @@ import threading as mt
 import radical.utils as ru
 
 from hydraa import Task
+from typing import Callable
 
 from hydraa.providers.proxy import proxy
 from hydraa.services.caas_manager.utils import misc
@@ -191,7 +192,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __call__(self, provider=None):
+    def __call__(self, func: Callable=None, provider=None) -> Callable:
         """
         Decorator function to invoke the submit function of CaasManager with
         additional arguments.
@@ -201,23 +202,25 @@ class CaasManager:
         provider : str
             The provider for the tasks.
         """
-        def decorator(func):
-            def wrapper(*args, **kwargs):
-                task = func(*args, **kwargs)
 
-                if not isinstance(task, Task):
-                    raise ValueError(f'Function must return object of type {Task}')
+        if func is None:
+            return lambda f: self.__call__(f, provider)
 
-                if not task.provider:
-                    task.provider = provider
+        def wrapper(*args, **kwargs):
+            task = func(*args, **kwargs)
 
-                self.submit(task)
+            if not isinstance(task, Task):
+                raise ValueError(f'function must return object of type {Task}')
 
-                return task
+            if not task.provider:
+                task.provider = provider
 
-            return wrapper
+            self.submit(task)
 
-        return decorator
+            return task
+
+        return wrapper
+
 
     # --------------------------------------------------------------------------
     #

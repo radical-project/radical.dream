@@ -1,13 +1,13 @@
 from hydraa.services import CaasManager
-from hydraa import proxy, vm, Task, LOCAL
+from hydraa import proxy, LocalVM, Task, LOCAL
 
 provider_mgr = proxy([LOCAL])
 
-vm = vm.LocalVM(launch_type='join')
+vm = LocalVM(launch_type='join')
 
 caas_mgr = CaasManager(provider_mgr, [vm], asynchronous=False, auto_terminate=True)
 
-@caas_mgr(provider=LOCAL)
+@caas_mgr
 def multiply(x, y):
     task = Task(memory=128, vcpus=2,
                 provider=LOCAL, image='python:3.9.18-slim-bullseye',

@@ -158,3 +158,4 @@ class LocalVM(OpenStackVM):
 
         self.Servers = []
         self.VmName = f'LocalVM-{uuid.uuid4()}'
+        self.KubeConfigPath = KubeConfigPath
