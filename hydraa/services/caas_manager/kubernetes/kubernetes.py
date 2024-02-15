@@ -7,7 +7,6 @@ import atexit
 import shutil
 import urllib3
 
-import pandas as pd
 import threading as mt
 import radical.utils as ru
 
@@ -47,6 +46,7 @@ SLEEP = 2
 IDLE = 'Idle'
 LOCAL = 'local'
 MAX_PODS = 110
+JOINING = 'Joining'
 RUNNING = 'Running'
 BUILDING = 'Building'
 
@@ -220,6 +220,8 @@ class K8sCluster:
                 # make sure kubectl is installed
                 if not KUBECTL:
                     raise RuntimeError('Kubectl is required to join a Kuberentes cluster')
+                
+                self.status = JOINING
 
             # create a new local cluster
             elif head_node.LaunchType == 'create':
@@ -233,7 +235,7 @@ class K8sCluster:
                     local_bootstrap_cmd = f'chmod +x {boostrapper_path} && nohup {boostrapper_path} '
                     local_bootstrap_cmd += '/dev/null < /dev/null &'
 
-                    out, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
+                    _, err, ret = sh_callout(local_bootstrap_cmd, shell=True)
                     if ret:
                         raise RuntimeError(f'failed to create a local Kuberentes cluster: {err}')
 
@@ -263,8 +265,8 @@ class K8sCluster:
             bootstrap_cmd = 'chmod +x bootstrap_kubernetes.sh;'
             bootstrap_cmd += 'nohup ./bootstrap_kubernetes.sh '
             bootstrap_cmd += '-m "{0}" -u "{1}" -k "{2}" >& '.format(nodes_map,
-                                                                    self.control_plane.user,
-                                                                    remote_key_path)
+                                                                     self.control_plane.user,
+                                                                     remote_key_path)
             bootstrap_cmd += '/dev/null < /dev/null &'
 
             # start the bootstraping as a background process.
