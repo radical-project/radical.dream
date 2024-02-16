@@ -96,12 +96,22 @@ class CaasManager:
             Indicates whether the manager should terminate automatically.
         """
 
-        _id = str(uuid.uuid4())
+        
+        self.vms = vms
+        self.sandbox = None
         self.prof = ru.Profiler
         self._proxy = proxy_mgr
         self._terminate = mt.Event()
         self._registered_managers = {}
-        self.sandbox = misc.create_sandbox(_id)
+        self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
+
+
+    # --------------------------------------------------------------------------
+    #
+    def start(self, sandbox, _id):
+
+        self.sandbox = sandbox
         self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
         providers = len(self._proxy.loaded_providers)
@@ -111,10 +121,10 @@ class CaasManager:
         for provider in self._proxy.loaded_providers:
             if provider in PROVIDER_TO_CLASS:
                 cred = self._proxy._load_credentials(provider)
-                vmx = [v for v in vms if v.Provider == provider]
+                vmx = [v for v in self.vms if v.Provider == provider]
                 caas_class = PROVIDER_TO_CLASS[provider]
                 caas_instance = caas_class(self.sandbox, _id, cred, vmx,
-                                           asynchronous, auto_terminate,
+                                           self.asynchronous, self.auto_terminate,
                                            self.logger, self.prof)
 
                 self._registered_managers[provider] = {'class' : caas_instance,
