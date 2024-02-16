@@ -3,7 +3,7 @@ from hydraa.services.caas_manager.utils import misc
 
 _id = str(uuid.uuid4())
 
-class service_manager():
+class ServiceManager():
     def __init__(self, managers) -> None:
 
         self.managers = managers
