@@ -48,12 +48,13 @@ class RadicalPilot:
             self.session = rp.Session(cfg={'base':self.sandbox})
             self.pmgr = rp.PilotManager(session=self.session)
             self.tmgr = rp.TaskManager(session=self.session)
+            
+            self.pdesc.verify()
             self.pilot = self.pmgr.submit_pilots(self.pdesc)
 
-            self.pilot.verify()
 
             # Register the pilot in a TaskManager object.
-            self.register_callback(self.callbacks)
+            self.tmgr.register_callback(self.callbacks)
             self.tmgr.add_pilots(self.pilot)
 
             print('HighPerformance manager is in Ready state')
