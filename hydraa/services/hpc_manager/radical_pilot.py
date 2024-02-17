@@ -56,7 +56,7 @@ class RadicalPilot:
             self.pilot = self.pmgr.submit_pilots(self.pdesc)
             self.tmgr.add_pilots(self.pilot)
 
-            print('HighPerformance manager is in Ready state')
+            print('High Performance manager is in Ready state')
 
         rp_thread = mt.Thread(target=start_rp)
         rp_thread.start()

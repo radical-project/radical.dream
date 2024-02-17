@@ -36,6 +36,9 @@ TERM_SIGNALS = {0: "Auto-terminate was set, terminating.",
 
 TIMEOUT = 0.1
 
+_id = str(uuid.uuid4())
+
+
 # --------------------------------------------------------------------------
 #
 class CaasManager:
@@ -109,7 +112,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def start(self, sandbox, _id):
+    def start(self, sandbox):
 
         self.sandbox = sandbox
         self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
@@ -134,7 +137,7 @@ class CaasManager:
                 setattr(self, caas_class.__name__, caas_instance)
 
             self._get_result = mt.Thread(target=self._get_results,
-                                         name="CaaSManagerResult",
+                                         name=f"{provider}-CaaSManagerResult",
                                          args=(self._registered_managers[provider],))
             self._get_result.daemon = True
             self._get_result.start()
