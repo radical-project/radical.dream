@@ -34,7 +34,7 @@ class RadicalPilot:
             task_fut.cancel()
         
         elif state == rp.FAILED:
-            task.set_exception(Exception(task.stderr))
+            task_fut.set_exception(Exception(task.stderr))
 
 
     def start(self, sandbox):
