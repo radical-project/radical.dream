@@ -20,7 +20,7 @@ class RadicalPilot:
         self.tasks_book = OrderedDict()
 
 
-    def callbacks(self, task, state):
+    def task_state_cb(self, task, state):
 
         task_fut = self.tasks_book[task.uid]
 
@@ -50,11 +50,10 @@ class RadicalPilot:
             self.tmgr = rp.TaskManager(session=self.session)
             
             self.pdesc.verify()
-            self.pilot = self.pmgr.submit_pilots(self.pdesc)
-
 
             # Register the pilot in a TaskManager object.
-            self.tmgr.register_callback(self.callbacks)
+            self.tmgr.register_callback(self.task_state_cb)
+            self.pilot = self.pmgr.submit_pilots(self.pdesc)
             self.tmgr.add_pilots(self.pilot)
 
             print('HighPerformance manager is in Ready state')
@@ -68,15 +67,16 @@ class RadicalPilot:
         if not isinstance(task, Task):
             raise Exception(f'task must be of type {Task}')
 
+        task._verify()
 
         td = rp.TaskDescription()
 
         td.ranks = task.vcpus
-        td.uid = self.task_id
+        td.uid = task.id = self.task_id
         td.executable = task.cmd
         td.mem_per_rank = task.memory
         td.arguments = task.arguments
-        td.name = 'task-{0}'.format(self.task_id)
+        td.name = task.name = 'task-{0}'.format(self.task_id)
 
         # make sure we set extra task args if we pass it via
         # hydraa task object
@@ -88,9 +88,9 @@ class RadicalPilot:
 
         self.tmgr.submit_tasks(td)
 
-        self.task_id += 1
+        self.tasks_book[str(self.task_id)] = task
 
-        self.tasks_book[self.task_id] = task
+        self.task_id += 1
 
         return task
 
