@@ -3,6 +3,7 @@ import uuid
 import radical.pilot as rp
 
 from hydraa import Task
+from typing import Callable
 from collections import OrderedDict
 
 RP = 'radical.pilot'
@@ -34,7 +35,10 @@ class HPCManager:
         self.sandbox  = None
         self.run_id = str(uuid.uuid4())
         self.tasks_book = OrderedDict()
-        self.pdesc = rp.PilotDescription(pilot_description)
+        if not isinstance(pilot_description, dict):
+            raise ValueError(f'Expected type dict, got type {type(pilot_description)}')
+
+        self.pdesc = rp.PilotDescription(from_dict=pilot_description)
 
 
     # --------------------------------------------------------------------------
@@ -94,6 +98,38 @@ class HPCManager:
 
     # --------------------------------------------------------------------------
     #
+    def __call__(self, func: Callable=None, provider='hpc') -> Callable:
+        """
+        Decorator function to invoke the submit function of HPCManager with
+        additional arguments.
+
+        Parameters
+        ----------
+        provider : str
+            The provider for the tasks.
+        """
+
+        if func is None:
+            return lambda f: self.__call__(f, provider)
+
+        def wrapper(*args, **kwargs):
+            task = func(*args, **kwargs)
+
+            if not isinstance(task, Task):
+                raise ValueError(f'function must return object of type {Task}')
+
+            if not task.provider:
+                task.provider = 'hpc'
+
+            self.submit(task)
+
+            return task
+
+        return wrapper
+
+
+    # --------------------------------------------------------------------------
+    #
     def submit(self, tasks: Task):
         """
         Submits tasks to the HPC Manager.
@@ -112,6 +148,7 @@ class HPCManager:
             if not isinstance(task, Task):
                 raise Exception(f'task must be of type {Task}')
 
+            task.image = 'void'
             task._verify()
 
             td = rp.TaskDescription()
@@ -131,7 +168,7 @@ class HPCManager:
 
             td.verify()
 
-            to_submit.append(task)
+            to_submit.append(td)
 
             self.tasks_book[str(self.task_id)] = task
 
