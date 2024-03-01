@@ -65,11 +65,15 @@ class HPCManager:
         
         elif state == rp.FAILED:
             task_fut.set_exception(Exception(task.stderr))
+        
+        msg = f'Task: "{task.name}" is in state: "{state}"'
+
+        self.logger.info(msg)
 
 
     # --------------------------------------------------------------------------
     #
-    def start(self, sandbox):
+    def start(self, sandbox, logger, profiler):
         """
         Starts the RADICAL-Pilot HPC Manager.
 
@@ -79,6 +83,8 @@ class HPCManager:
 
         print('starting RADICAL-Pilot HPC Mananger')
 
+        self.porf = profiler
+        self.logger = logger
         self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
         os.mkdir(self.sandbox, 0o777)
 

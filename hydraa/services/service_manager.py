@@ -1,4 +1,5 @@
 import uuid
+import radical.utils as ru
 from hydraa.services.caas_manager.utils import misc
 
 _id = str(uuid.uuid4())
@@ -10,13 +11,15 @@ class ServiceManager():
             managers = [managers]
 
         self.managers = managers
+        self.profiler = ru.Profiler
         self.sandbox  = misc.create_sandbox(_id)
+        self.logger = misc.logger(path=f'{self.sandbox}/service_manager.log')
 
 
     def start_services(self):
         for service_manager in self.managers:
-            service_manager.start(self.sandbox)
-    
+            service_manager.start(self.sandbox, self.logger, self.profiler)
+
 
     def shutdown_services(self):
         for manager in self.managers:
