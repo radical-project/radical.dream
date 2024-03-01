@@ -1,6 +1,5 @@
 import os
 import uuid
-import threading as mt
 import radical.pilot as rp
 
 from hydraa import Task
@@ -23,7 +22,7 @@ class HPCManager:
         tasks_book (collections.OrderedDict): An ordered dictionary to store tasks.
     """
 
-    def __init__(self, pilot_description: rp.PilotDescription) -> None:
+    def __init__(self, pilot_description) -> None:
         """
         Initializes the HPCManager with the provided PilotDescription.
 
@@ -33,9 +32,9 @@ class HPCManager:
 
         self.task_id = 0
         self.sandbox  = None
-        self.pdesc = pilot_description
         self.run_id = str(uuid.uuid4())
         self.tasks_book = OrderedDict()
+        self.pdesc = rp.PilotDescription(pilot_description)
 
 
     # --------------------------------------------------------------------------
@@ -82,7 +81,7 @@ class HPCManager:
         self.session = rp.Session(cfg={'base':self.sandbox})
         self.pmgr = rp.PilotManager(session=self.session)
         self.tmgr = rp.TaskManager(session=self.session)
-        
+
         self.pdesc.verify()
 
         # Register the pilot in a TaskManager object.
