@@ -9,8 +9,24 @@ from collections import OrderedDict
 RP = 'radical.pilot'
 
 class HPCManager:
+    """
+    A class to manage High-Performance Computing (HPC) resources using RADICAL-Pilot.
+
+    Attributes:
+        task_id (int): An integer representing the ID of the task.
+        sandbox (str): A string representing the directory path for sandbox creation.
+        pdesc (radical.pilot.PilotDescription): A PilotDescription object describing the pilot.
+        run_id (str): A string representing the unique ID for the current run.
+        tasks_book (collections.OrderedDict): An ordered dictionary to store tasks.
+    """
 
     def __init__(self, pilot_description: rp.PilotDescription) -> None:
+        """
+        Initializes the HPCManager with the provided PilotDescription.
+
+        Args:
+            pilot_description (radical.pilot.PilotDescription): A description of the pilot.
+        """
 
         self.task_id = 0
         self.sandbox  = None
@@ -20,6 +36,13 @@ class HPCManager:
 
 
     def task_state_cb(self, task, state):
+        """
+        Callback function to handle task state changes.
+
+        Args:
+            task (radical.pilot.Task): The task object.
+            state (str): The state of the task.
+        """
 
         task_fut = self.tasks_book[task.uid]
 
@@ -37,6 +60,12 @@ class HPCManager:
 
 
     def start(self, sandbox):
+        """
+        Starts the RADICAL-Pilot HPC Manager.
+
+        Args:
+            sandbox (str): The directory path for creating the sandbox.
+        """
 
         print('starting RADICAL-Pilot HPC Mananger')
 
@@ -62,6 +91,12 @@ class HPCManager:
 
 
     def submit(self, tasks: Task):
+        """
+        Submits tasks to the HPC Manager.
+
+        Args:
+            tasks (Task or list[Task]): A single Task object or a list of Task objects to be submitted.
+        """
 
         to_submit = []
 
@@ -105,5 +140,5 @@ class HPCManager:
 
 
     def shutdown(self):
-
+        """Shuts down the HPC Manager."""
         self.session.close(download=True)
