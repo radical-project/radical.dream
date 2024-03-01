@@ -112,11 +112,10 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def start(self, sandbox, logger, profiler):
+    def start(self, sandbox):
 
-        self.porf = profiler
-        self.logger = logger
         self.sandbox = sandbox
+        self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
         providers = len(self._proxy.loaded_providers)
 

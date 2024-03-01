@@ -18,7 +18,7 @@ class ServiceManager():
 
     def start_services(self):
         for service_manager in self.managers:
-            service_manager.start(self.sandbox, self.logger, self.profiler)
+            service_manager.start(self.sandbox)
 
 
     def shutdown_services(self):

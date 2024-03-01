@@ -5,6 +5,7 @@ import radical.pilot as rp
 from hydraa import Task
 from typing import Callable
 from collections import OrderedDict
+from hydraa.services.caas_manager.utils import misc
 
 RP = 'radical.pilot'
 
@@ -73,7 +74,7 @@ class HPCManager:
 
     # --------------------------------------------------------------------------
     #
-    def start(self, sandbox, logger, profiler):
+    def start(self, sandbox):
         """
         Starts the RADICAL-Pilot HPC Manager.
 
@@ -83,9 +84,9 @@ class HPCManager:
 
         print('starting RADICAL-Pilot HPC Mananger')
 
-        self.porf = profiler
-        self.logger = logger
-        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
+        self.sandbox = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
+        self.logger = misc.logger(path=f'{self.sandbox}/hpc_manager.log')
+
         os.mkdir(self.sandbox, 0o777)
 
         self.session = rp.Session(cfg={'base':self.sandbox})
