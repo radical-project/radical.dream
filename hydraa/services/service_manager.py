@@ -19,5 +19,5 @@ class ServiceManager():
     
 
     def shutdown_services(self):
-        for service_manager in self.managers:
-            service_manager.shutdown()
+        for manager in self.managers:
+            manager.shutdown()

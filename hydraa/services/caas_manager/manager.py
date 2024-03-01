@@ -205,7 +205,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __call__(self, func: Callable=None, provider=None) -> Callable:
+    def __call__(self, func: Callable=None, provider='') -> Callable:
         """
         Decorator function to invoke the submit function of CaasManager with
         additional arguments.

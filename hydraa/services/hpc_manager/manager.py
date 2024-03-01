@@ -2,14 +2,13 @@ import os
 import uuid
 import threading as mt
 import radical.pilot as rp
-import radical.utils as ru 
 
 from hydraa import Task
 from collections import OrderedDict
 
 RP = 'radical.pilot'
 
-class RadicalPilot:
+class HPCManager:
 
     def __init__(self, pilot_description: rp.PilotDescription) -> None:
 
@@ -39,7 +38,7 @@ class RadicalPilot:
 
     def start(self, sandbox):
 
-        print('starting HighPerformance Mananger with Radical.Pilot backend')
+        print('starting RADICAL-Pilot HPC Mananger')
 
         def start_rp():
             self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
@@ -56,43 +55,53 @@ class RadicalPilot:
             self.pilot = self.pmgr.submit_pilots(self.pdesc)
             self.tmgr.add_pilots(self.pilot)
 
-            print('High Performance manager is in Ready state')
+            print('RADICAL-Pilot HPC Mananger is in Ready state')
 
         rp_thread = mt.Thread(target=start_rp)
         rp_thread.start()
 
 
-    def submit(self, task: Task):
+    def submit(self, tasks: Task):
 
-        if not isinstance(task, Task):
-            raise Exception(f'task must be of type {Task}')
+        to_submit = []
 
-        task._verify()
+        if not isinstance(tasks, list):
+            tasks = [tasks]
 
-        td = rp.TaskDescription()
+        for task in tasks:
+        
+            if not isinstance(task, Task):
+                raise Exception(f'task must be of type {Task}')
 
-        td.ranks = task.vcpus
-        td.uid = task.id = self.task_id
-        td.executable = task.cmd
-        td.mem_per_rank = task.memory
-        td.arguments = task.arguments
-        td.name = task.name = 'task-{0}'.format(self.task_id)
+            task._verify()
 
-        # make sure we set extra task args if we pass it via
-        # hydraa task object
-        for k, v in task.__dict__.items():
-            if k in td.as_dict():
-                td[k] = v
+            td = rp.TaskDescription()
 
-        td.verify()
+            td.ranks = task.vcpus
+            td.uid = task.id = self.task_id
+            td.executable = task.cmd
+            td.mem_per_rank = task.memory
+            td.arguments = task.args
+            td.name = task.name = 'task-{0}'.format(self.task_id)
 
-        self.tmgr.submit_tasks(td)
+            # make sure we set extra task args if we pass it via
+            # hydraa task object
+            for k, v in task.__dict__.items():
+                if k in td.as_dict():
+                    td[k] = v
 
-        self.tasks_book[str(self.task_id)] = task
+            td.verify()
 
-        self.task_id += 1
+            to_submit.append(task)
 
-        return task
+            self.tasks_book[str(self.task_id)] = task
+
+            self.task_id += 1
+
+        self.tmgr.submit_tasks(to_submit)
+
+        print(f'{self.task_id} task(s) has been submitted')
+
 
 
     def shutdown(self):
