@@ -90,7 +90,7 @@ class HPCManager:
         self.pilot = self.pmgr.submit_pilots(self.pdesc)
         self.tmgr.add_pilots(self.pilot)
 
-        print('RADICAL-Pilot HPC Mananger is in Ready state')
+        print('RADICAL-Pilot HPC Mananger is in Running state')
 
 
     # --------------------------------------------------------------------------
