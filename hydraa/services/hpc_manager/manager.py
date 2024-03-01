@@ -8,6 +8,9 @@ from collections import OrderedDict
 
 RP = 'radical.pilot'
 
+
+# --------------------------------------------------------------------------
+#
 class HPCManager:
     """
     A class to manage High-Performance Computing (HPC) resources using RADICAL-Pilot.
@@ -35,6 +38,8 @@ class HPCManager:
         self.tasks_book = OrderedDict()
 
 
+    # --------------------------------------------------------------------------
+    #
     def task_state_cb(self, task, state):
         """
         Callback function to handle task state changes.
@@ -59,6 +64,8 @@ class HPCManager:
             task_fut.set_exception(Exception(task.stderr))
 
 
+    # --------------------------------------------------------------------------
+    #
     def start(self, sandbox):
         """
         Starts the RADICAL-Pilot HPC Manager.
@@ -69,27 +76,25 @@ class HPCManager:
 
         print('starting RADICAL-Pilot HPC Mananger')
 
-        def start_rp():
-            self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
-            os.mkdir(self.sandbox, 0o777)
+        self.sandbox  = '{0}/{1}.{2}'.format(sandbox, RP, self.run_id)
+        os.mkdir(self.sandbox, 0o777)
 
-            self.session = rp.Session(cfg={'base':self.sandbox})
-            self.pmgr = rp.PilotManager(session=self.session)
-            self.tmgr = rp.TaskManager(session=self.session)
-            
-            self.pdesc.verify()
+        self.session = rp.Session(cfg={'base':self.sandbox})
+        self.pmgr = rp.PilotManager(session=self.session)
+        self.tmgr = rp.TaskManager(session=self.session)
+        
+        self.pdesc.verify()
 
-            # Register the pilot in a TaskManager object.
-            self.tmgr.register_callback(self.task_state_cb)
-            self.pilot = self.pmgr.submit_pilots(self.pdesc)
-            self.tmgr.add_pilots(self.pilot)
+        # Register the pilot in a TaskManager object.
+        self.tmgr.register_callback(self.task_state_cb)
+        self.pilot = self.pmgr.submit_pilots(self.pdesc)
+        self.tmgr.add_pilots(self.pilot)
 
-            print('RADICAL-Pilot HPC Mananger is in Ready state')
-
-        rp_thread = mt.Thread(target=start_rp)
-        rp_thread.start()
+        print('RADICAL-Pilot HPC Mananger is in Ready state')
 
 
+    # --------------------------------------------------------------------------
+    #
     def submit(self, tasks: Task):
         """
         Submits tasks to the HPC Manager.
@@ -138,7 +143,8 @@ class HPCManager:
         print(f'{self.task_id} task(s) has been submitted')
 
 
-
+    # --------------------------------------------------------------------------
+    #
     def shutdown(self):
         """Shuts down the HPC Manager."""
         self.session.close(download=True)
