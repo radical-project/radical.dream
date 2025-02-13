@@ -36,6 +36,9 @@ TERM_SIGNALS = {0: "Auto-terminate was set, terminating.",
 
 TIMEOUT = 0.1
 
+_id = str(uuid.uuid4())
+
+
 # --------------------------------------------------------------------------
 #
 class CaasManager:
@@ -96,12 +99,22 @@ class CaasManager:
             Indicates whether the manager should terminate automatically.
         """
 
-        _id = str(uuid.uuid4())
+        
+        self.vms = vms
+        self.sandbox = None
         self.prof = ru.Profiler
         self._proxy = proxy_mgr
         self._terminate = mt.Event()
         self._registered_managers = {}
-        self.sandbox = misc.create_sandbox(_id)
+        self.asynchronous = asynchronous
+        self.auto_terminate = auto_terminate
+
+
+    # --------------------------------------------------------------------------
+    #
+    def start(self, sandbox):
+
+        self.sandbox = sandbox
         self.logger = misc.logger(path=f'{self.sandbox}/caas_manager.log')
 
         providers = len(self._proxy.loaded_providers)
@@ -111,10 +124,10 @@ class CaasManager:
         for provider in self._proxy.loaded_providers:
             if provider in PROVIDER_TO_CLASS:
                 cred = self._proxy._load_credentials(provider)
-                vmx = [v for v in vms if v.Provider == provider]
+                vmx = [v for v in self.vms if v.Provider == provider]
                 caas_class = PROVIDER_TO_CLASS[provider]
                 caas_instance = caas_class(self.sandbox, _id, cred, vmx,
-                                           asynchronous, auto_terminate,
+                                           self.asynchronous, self.auto_terminate,
                                            self.logger, self.prof)
 
                 self._registered_managers[provider] = {'class' : caas_instance,
@@ -124,7 +137,7 @@ class CaasManager:
                 setattr(self, caas_class.__name__, caas_instance)
 
             self._get_result = mt.Thread(target=self._get_results,
-                                         name="CaaSManagerResult",
+                                         name=f"{provider}-CaaSManagerResult",
                                          args=(self._registered_managers[provider],))
             self._get_result.daemon = True
             self._get_result.start()
@@ -192,7 +205,7 @@ class CaasManager:
 
     # --------------------------------------------------------------------------
     #
-    def __call__(self, func: Callable=None, provider=None) -> Callable:
+    def __call__(self, func: Callable=None, provider='') -> Callable:
         """
         Decorator function to invoke the submit function of CaasManager with
         additional arguments.
