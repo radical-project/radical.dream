@@ -1,4 +1,4 @@
-from hydraa.services import CaasManager
+from hydraa.services import CaasManager, ServiceManager
 from hydraa import proxy, AWS, Task, AwsVM
 
 provider_mgr = proxy([AWS])
@@ -8,6 +8,9 @@ ec2vm = AwsVM(launch_type='EC2', instance_id='t2.micro', min_count=1, max_count=
               IamInstanceProfile={'Arn': 'arn:aws:iam::XXXXXXXX:instance-profile/ecsInstanceRole'})
 
 caas_mgr = CaasManager(provider_mgr, [ec2vm], asynchronous=False)
+
+service_mgr = ServiceManager([caas_mgr])
+service_mgr.start_services()
 
 tasks = []
 for i in range(10):

@@ -1,4 +1,4 @@
-from hydraa.services import CaasManager
+from hydraa.services import CaasManager, ServiceManager
 from hydraa import proxy, LocalVM, Task, LOCAL
 
 provider_mgr = proxy([LOCAL])
@@ -7,6 +7,9 @@ provider_mgr = proxy([LOCAL])
 vm = LocalVM(launch_type='create')
 
 caas_mgr = CaasManager(provider_mgr, [vm], asynchronous=False, auto_terminate=True)
+
+service_mgr = ServiceManager([caas_mgr])
+service_mgr.start_services()
 
 @caas_mgr
 def multiply(x, y):
