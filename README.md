@@ -1,7 +1,7 @@
 
-# Hydraa: Multi-Cloud Container Orchestration (Project Dream)
+# Hydraa: Multi-Resource Task Orchestration (Project Dream)
 
-Hydraa is a core component of **Project Dream**, providing seamless and concurrent execution of Heterogeious computional tasks such as containers, executables and Python functions across **multiple cloud providers** (both inter- and cross-provider), **HPC machines** and **clusters**.  
+Hydraa is a core component of **Project Dream**, providing seamless and concurrent execution of heterogeneous computational tasks such as containers, executables, and Python functions across **multiple cloud providers** (both inter- and cross-provider), **HPC machines** and **clusters**.  
 
 ---
 
